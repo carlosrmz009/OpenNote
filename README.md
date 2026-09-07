@@ -3,4 +3,4 @@
 "glover" =Ↄ
 
 # OpenNote
-Automatic piano fingering software combining various conceptual research work.
+Automatic piano fingering software combining various conceptual research papers.
