@@ -127,6 +127,28 @@ fn main() {
         println!("  {name:>28}  {x:>9.2}  {y:>9.2}  {:>+9.2}", y - x);
     }
 
+    // Where the biggest single rule's charges actually come from, note by note. A rule
+    // that fires a little on almost every note is a different thing from one that fires
+    // hard on a few, and only the second is telling the search anything.
+    if let Some((worst_rule, _)) = per_rule(&free).first().copied() {
+        println!("
+  {worst_rule:?}, note by note, in the model's own fingering:");
+        let mut hits = 0;
+        let mut total = 0.0f32;
+        for e in &free.explanations {
+            let amount: f32 = e.rules.iter().filter(|(r, _)| *r == worst_rule).map(|(_, v)| *v).sum();
+            if amount > 0.0 {
+                hits += 1;
+                total += amount;
+            }
+        }
+        println!(
+            "    charged on {hits} of {} notes, {total:.2} in total, {:.2} each on average",
+            free.explanations.len(),
+            if hits > 0 { total / hits as f32 } else { 0.0 }
+        );
+    }
+
     // Which notes of the taught fingering are charged as unplayable, and what the
     // finger before them was. If these are all thumb crossings, the rule is firing on
     // a movement rather than on a hand shape.
