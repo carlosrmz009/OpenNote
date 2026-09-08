@@ -461,3 +461,24 @@ fn no_finger_plays_two_different_notes_in_a_row() {
         }
     }
 }
+
+#[test]
+fn a_minor_scale_is_not_fingered_as_its_relative_major() {
+    // Pitch content cannot tell A natural minor from C major: they are the same seven
+    // notes, and a key detector reading notes alone answers C every time. Read off as
+    // C major by chromatic degree, a two-octave run from A lands finger 3 on the top A,
+    // where every method book gives 5.
+    //
+    // What settles it is that the run begins and ends on A. A scale is telling you what
+    // key it is in, and that is worth more than its spelling.
+    let pitches: Vec<u8> = vec![69, 71, 72, 74, 76, 77, 79, 81, 83, 84, 86, 88, 89, 91, 93];
+    let score = melody(&pitches, Hand::Right, 0.25);
+    let chosen = fingering(&score, &FingeringOptions::default());
+    assert_eq!(
+        *chosen.last().expect("a fingering"),
+        5,
+        "the top of a two-octave minor scale takes the little finger, not {:?}",
+        chosen
+    );
+    assert_eq!(chosen[0], 1, "and the bottom takes the thumb: {chosen:?}");
+}

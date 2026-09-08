@@ -232,6 +232,31 @@ pub fn key_of(pitches: &[u8]) -> Option<u8> {
 /// scale. Chromatic stretches and arpeggios are deliberately not scales: they have
 /// their own conventions, and guessing at them would be worse than leaving them to
 /// the ergonomic model.
+/// Whether a run announces a tonic of its own, and it is not the one its notes imply.
+///
+/// [`key_of`] can only read pitch content, and pitch content cannot tell a minor scale
+/// from its relative major: A natural minor and C major are the same seven notes. Asked
+/// about a run of white keys it answers C, every time.
+///
+/// A run that begins and ends on the same note is telling you what key it is in, and it
+/// is worth more than the content. Two octaves from A to A is an A scale whatever its
+/// notes happen to spell, and the C major pattern read off by chromatic degree gives it
+/// finger 3 on the top A where every method book gives 5 — a fingering nobody plays.
+///
+/// The minor and modal patterns are not in [`MAJOR_SCALES`], so there is nothing right
+/// to substitute. Declining to answer leaves the passage to the rules and the hand
+/// model, which is an honest fingering rather than a confidently wrong one.
+///
+/// Deliberately narrow: a *fragment* that neither begins nor ends on the same note says
+/// nothing about its key, and goes on taking the pattern of the key its notes imply,
+/// which is the right reading of a passage in that key.
+fn anchored_elsewhere(notes: &[u8], tonic: u8) -> bool {
+    match (notes.first(), notes.last()) {
+        (Some(first), Some(last)) => first % 12 == last % 12 && first % 12 != tonic,
+        _ => false,
+    }
+}
+
 pub fn find_scale_runs(pitches: &[Option<u8>]) -> Vec<ScaleRun> {
     let mut runs = Vec::new();
     let mut index = 0;
@@ -262,7 +287,12 @@ pub fn find_scale_runs(pitches: &[Option<u8>]) -> Vec<ScaleRun> {
         if length >= MIN_SCALE_RUN {
             let notes: Vec<u8> = pitches[index..end].iter().flatten().copied().collect();
             if let Some(tonic) = key_of(&notes) {
-                runs.push(ScaleRun { start: index, length, tonic });
+                if anchored_elsewhere(&notes, tonic) {
+                    // A scale in some other key than the one its notes suggest. Say
+                    // nothing rather than say the wrong thing.
+                } else {
+                    runs.push(ScaleRun { start: index, length, tonic });
+                }
             }
         }
         index = if length > 1 { end } else { index + 1 };
