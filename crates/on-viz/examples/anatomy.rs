@@ -33,6 +33,11 @@ use on_viz::timeline::Timeline;
 /// on the key, it is in it.
 const THROUGH_THE_KEYS_MM: f32 = 12.0;
 
+/// How long after a key goes down a finger may still arrive and count as having played
+/// it, in seconds. A rolled chord is the reason there is any window at all; it wants a
+/// little more than the roll itself.
+const LATE_ARRIVAL: f64 = 0.12;
+
 fn main() -> anyhow::Result<()> {
     let Some(path) = std::env::args().nth(1) else {
         eprintln!("usage: anatomy <midi>");
@@ -63,6 +68,8 @@ fn main() -> anyhow::Result<()> {
     let mut other_hand_busy = 0usize;
     let mut buried: Vec<String> = Vec::new();
     let mut through_but_reached = 0usize;
+    let mut struck_unplayed = 0usize;
+    let mut silent_strikes: Vec<String> = Vec::new();
 
     for hand in Hand::ALL {
         let model = BiomechModel::new(options.profile.clone(), hand, options.biomech);
@@ -152,6 +159,42 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+
+        // Notes struck with nothing on them.
+        //
+        // Asked of the note rather than of one grip, because a chord too wide to hold
+        // is rolled: the hand reaches the upper notes a moment after their keys go
+        // down, and the finger that arrives late is still the finger that played them.
+        // Asking each grip whether it covers everything struck at its own instant
+        // counts every rolled chord as a fault, and — worse — stops asking about the
+        // notes it hands to the later grip at all.
+        for note in &timeline.notes {
+            if note.hand != hand || note.finger.is_none() {
+                continue;
+            }
+            let played = timeline.hand_grips(hand).iter().any(|event| {
+                event.time >= note.start - 1e-6
+                    && event.time <= note.start + LATE_ARRIVAL
+                    && event.grip.keys.iter().any(|(midi, _)| *midi == note.midi)
+            });
+            if !played {
+                struck_unplayed += 1;
+                if silent_strikes.len() < 8 {
+                    let at = timeline
+                        .hand_grips(hand)
+                        .iter()
+                        .rfind(|e| e.time <= note.start + 1e-6)
+                        .map(|e| shape_of(&e.grip))
+                        .unwrap_or_else(|| "nothing".into());
+                    silent_strikes.push(format!(
+                        "  {:.2}s {hand:?} strikes {}={} with no finger; hand is holding {at}",
+                        note.start,
+                        note.midi,
+                        note.finger.expect("checked above").number(),
+                    ));
+                }
+            }
+        }
     }
 
     println!("{path}");
@@ -159,6 +202,10 @@ fn main() -> anyhow::Result<()> {
     println!("  ...where a finger never reaches its key: {missed}  (worst {worst_miss:.1} mm)");
     println!("  ...where a joint is outside its range:   {out_of_range}  (worst {worst_violation:.1}°)");
     println!("  ...where the hand is through the keys:   {through}  (deepest {deepest:.1} mm)");
+    println!("  notes struck with no finger on them:     {struck_unplayed}");
+    for line in &silent_strikes {
+        println!("{line}");
+    }
     println!("  notes still sounding under a hand:       {still_sounding}");
     println!("  ...that the hand had to let go of:       {let_go}");
     println!("      of those, with the other hand busy:  {other_hand_busy}");
@@ -176,6 +223,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A grip written out as `note=finger` pairs, low note first.
+fn shape_of(grip: &Grip) -> String {
+    let mut keys = grip.keys.clone();
+    keys.sort_by_key(|(midi, _)| *midi);
+    keys.iter()
+        .map(|(m, f)| format!("{m}={}", f.number()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The finger numbers of a grip, low note first.

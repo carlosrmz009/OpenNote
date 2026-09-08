@@ -165,6 +165,36 @@ const MAX_NOTE_LIGHTS: usize = 10;
 /// is going.
 const KEY_GLOW: f32 = 5.2;
 
+/// How far a black key travels when it is played.
+///
+/// Less than a white key's [`KEY_DIP`], and not as a matter of feel. The black keys are
+/// boxes standing exactly `BLACK_KEY_HEIGHT` proud of the white ones, and that is the
+/// same ten millimetres a key dips — so a black key pressed all the way put its top
+/// face precisely in the plane of the white key tops. To a camera looking straight down
+/// at it that is two coplanar surfaces, and the depth buffer picked between them
+/// arbitrarily: the black key turned into a white stripe at the exact moment it was
+/// played, which is a rather conspicuous time to disappear.
+///
+/// Leaving it a few millimetres proud settles that, and is what a real black key does
+/// as well — its top stays above its neighbours through the whole of its travel.
+const BLACK_KEY_DIP: f32 = BLACK_KEY_HEIGHT - 3.0;
+
+/// The glow of a played black key.
+///
+/// Far lower, and not as a matter of taste. A white key shows the hand's colour twice
+/// over: its lit surface takes the tint, and the emissive term on top of that pushes it
+/// into the bloom. A black key has no lit surface to speak of — its texture is nearly
+/// black, so whatever the base colour is multiplied by comes back as nothing — and the
+/// emissive is all there is. Given the white key's figure it lands several times past
+/// full scale with no colour underneath it, and the tonemapper does what it does with
+/// any such value: returns white. The key vanished into a white rectangle at exactly
+/// the moment it was played.
+///
+/// Just above one keeps it a colour rather than a clipped one, while still giving the
+/// bloom something to find. It reads as brightly lit because it is surrounded by black
+/// lacquer, which is contrast a white key never has.
+const BLACK_KEY_GLOW: f32 = 1.45;
+
 /// How much light a spark gives off. Well past full scale, so the bloom pass has
 /// something to bloom.
 /// Kept low enough that a mote stays the colour of the note that threw it.
@@ -1499,7 +1529,9 @@ fn press_keys(
         //
         // What sells the press is the colour and the shadow, not the millimetre or two
         // of travel, so the travel can be honest.
-        transform.translation = key.rest - Vec3::new(0.0, 0.0, depth * KEY_DIP);
+        let black = is_black(key.midi);
+        let dip = if black { BLACK_KEY_DIP } else { KEY_DIP };
+        transform.translation = key.rest - Vec3::new(0.0, 0.0, depth * dip);
 
         // Tinting the material rather than swapping it keeps the painted highlight,
         // so a held key glows rather than becoming a flat coloured rectangle. The
@@ -1511,8 +1543,9 @@ fn press_keys(
             match states.hand_on(key.midi) {
                 Some(hand) => {
                     let tint = note_colours.0[hand as usize];
+                    let glow = if black { BLACK_KEY_GLOW } else { KEY_GLOW };
                     material.base_color = mix(Color::WHITE, tint, depth);
-                    material.emissive = tint.to_linear() * (depth * KEY_GLOW);
+                    material.emissive = tint.to_linear() * (depth * glow);
                 }
                 None => {
                     material.base_color = Color::WHITE;

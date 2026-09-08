@@ -260,57 +260,73 @@ impl Timeline {
 
             // What the hand lets go of first: whatever it has been holding longest.
             //
-            // When everything left was struck together there is nothing older to give
-            // up, and the shape is a chord too wide to hold — a bass note under a
-            // spread the hand cannot cover. A pianist plays it and catches it with the
-            // pedal, and what goes is the note the hand is stretching hardest to keep,
-            // which is whichever end of the shape is further from the middle of it. The
-            // alternative is to keep drawing a hand nobody could make.
+            // Only ever something older. A note struck at this instant is one the hand
+            // is playing right now, and taking a finger off it lights a key with
+            // nothing on it — which is precisely the fault this is supposed to prevent.
+            // When there is nothing older left to give up, the shape is a chord wider
+            // than the hand, and the answer to that is to roll it rather than to drop
+            // part of it on the floor.
             let drop_one = |held: &mut Vec<(&TimelineNote, Finger)>| {
                 if held.len() < 2 {
                     return false;
                 }
-                let oldest = held
+                let Some(at) = held
                     .iter()
                     .enumerate()
                     .filter(|(_, (note, _))| note.start < time - 1e-6)
                     .min_by(|a, b| a.1 .0.start.total_cmp(&b.1 .0.start))
-                    .map(|(at, _)| at);
-                let at = oldest.unwrap_or_else(|| {
-                    let low = held.first().expect("not empty").0.midi;
-                    let high = held.last().expect("not empty").0.midi;
-                    let middle = f32::from(low) / 2.0 + f32::from(high) / 2.0;
-                    let reaches_further = |at: usize| (f32::from(held[at].0.midi) - middle).abs();
-                    if reaches_further(0) >= reaches_further(held.len() - 1) {
-                        0
-                    } else {
-                        held.len() - 1
-                    }
-                });
+                    .map(|(at, _)| at)
+                else {
+                    return false;
+                };
                 held.remove(at);
                 true
             };
 
             held.sort_by_key(|(note, _)| note.midi);
-            while held.len() > 1 {
-                if holdable(&held) || !drop_one(&mut held) {
-                    break;
-                }
-            }
-            // And then the hand itself has the last word. The table is a chart of what
+
+            // The hand itself has the last word on a shape. The table is a chart of what
             // pairs of fingers can span and it does not know what the rest of the hand
             // is doing at the time; the model solves the whole posture and can say that
             // a shape every pair of which is fine is still one the hand cannot get into.
-            // It is asked last because it is an inverse-kinematics solve and the table
+            // It is asked second because it is an inverse-kinematics solve and the table
             // has already thrown out everything obviously too wide, so by the time it is
             // asked it nearly always says yes and says it quickly.
-            while held.len() > 1 {
-                let shape = Grip::new(
-                    held.iter().map(|(note, finger)| (note.midi, *finger)).collect(),
-                );
-                if model.grip_outcome(&shape).reachable || !drop_one(&mut held) {
-                    break;
+            let makeable = |held: &[(&TimelineNote, Finger)]| {
+                holdable(held) && {
+                    let shape = Grip::new(
+                        held.iter().map(|(note, finger)| (note.midi, *finger)).collect(),
+                    );
+                    model.grip_outcome(&shape).reachable
                 }
+            };
+
+            // First let go of anything older the hand cannot keep. That is the cheap
+            // answer and usually the right one: the key is already down, and under the
+            // pedal it goes on sounding after the finger leaves.
+            while held.len() > 1 && !makeable(&held) && drop_one(&mut held) {}
+
+            // What is left is a chord struck at this instant, and if the hand still
+            // cannot make the shape then the chord is simply wider than the hand. That
+            // is not a fingering that went wrong — it is a chord that has to be rolled,
+            // and rolling it is what a pianist does: strike the bottom, let the pedal
+            // keep it, carry the hand up to the rest.
+            //
+            // Peeling the lowest notes off into a grip of their own says exactly that,
+            // and it is the only answer that leaves every struck note with a finger on
+            // it. Dropping one instead lit a key that nothing was touching, which is
+            // the thing anybody watching notices first.
+            let mut rolled: Vec<(&TimelineNote, Finger)> = Vec::new();
+            while held.len() > 1 && !makeable(&held) {
+                rolled.push(held.remove(0));
+            }
+
+            // The bottom of a rolled chord goes down first, on the beat, and the hand
+            // arrives at the rest of it a moment later.
+            let mut grip_time = time;
+            if !rolled.is_empty() {
+                events.push(grip_event(&rolled, time, time));
+                grip_time = time + ROLL_SECONDS;
             }
 
             let struck: Vec<(Finger, u8)> = held
@@ -325,7 +341,7 @@ impl Timeline {
             let release = held.iter().fold(time, |latest, (note, _)| latest.max(note.end));
             let mut grip = Grip::new(keys);
             grip.keys.sort_by_key(|(midi, _)| *midi);
-            events.push(GripEvent { time, release, grip, struck });
+            events.push(GripEvent { time: grip_time, release, grip, struck });
         }
         events
     }
@@ -420,6 +436,30 @@ impl KeyStates {
     }
 }
 
+/// How long after the bottom of a rolled chord the rest of it arrives, in seconds.
+///
+/// A roll, not an arpeggio: fast enough to read as one chord rather than as separate
+/// notes, slow enough that the hand is visibly somewhere else by the time it gets
+/// there. Pianists roll a wide chord in about this long.
+const ROLL_SECONDS: f64 = 0.075;
+
+/// Assemble one grip from the notes a hand has down.
+fn grip_event(
+    notes: &[(&TimelineNote, Finger)],
+    time: f64,
+    struck_at: f64,
+) -> GripEvent {
+    let struck: Vec<(Finger, u8)> = notes
+        .iter()
+        .filter(|(note, _)| (note.start - struck_at).abs() < 1e-6)
+        .map(|(note, finger)| (*finger, note.velocity))
+        .collect();
+    let mut grip = Grip::new(notes.iter().map(|(note, finger)| (note.midi, *finger)).collect());
+    grip.keys.sort_by_key(|(midi, _)| *midi);
+    let release = notes.iter().fold(time, |latest, (note, _)| latest.max(note.end));
+    GripEvent { time, release, grip, struck }
+}
+
 /// How long before a strike a finger starts to lift, in seconds.
 ///
 /// Short. It is a preparation, not a wind-up, and a run of quick notes has less time
@@ -428,14 +468,22 @@ const STRIKE_LIFT_SECONDS: f64 = 0.16;
 
 /// How far the knuckle extends to lift the finger, in degrees, for the softest note
 /// and for the hardest.
-const STRIKE_LIFT_DEG: (f32, f32) = (5.0, 17.0);
+///
+/// Small. What has to read at a glance is *that* the finger came off the key and went
+/// back down, not how far it went: a couple of degrees is already several millimetres
+/// at the fingertip, and the eye is reading the tip. Taken up to the seventeen degrees
+/// this first used, the knuckle straightens far enough that the finger stops looking
+/// like a finger — it reads as long and loose, and the hand appears to flail at the
+/// keyboard rather than play it.
+const STRIKE_LIFT_DEG: (f32, f32) = (2.5, 9.0);
 
 /// How far through the window the finger is at the top of its lift, softest to hardest.
 ///
-/// A quiet note rises and settles in about the same time. A loud one is taken up almost
-/// the whole window and then dropped, which is what makes it look struck rather than
-/// placed.
-const STRIKE_PEAK: (f32, f32) = (0.5, 0.82);
+/// A quiet note rises and settles in about the same time. A loud one is taken up most
+/// of the window and then dropped, which is what makes it look struck rather than
+/// placed — but not so late that the fall becomes a snap, which is the other half of
+/// looking exaggerated.
+const STRIKE_PEAK: (f32, f32) = (0.5, 0.72);
 
 /// Poses one hand over time by interpolating between the postures the fingering
 /// implies.
@@ -579,8 +627,10 @@ impl HandAnimator {
             };
             let lift = height.to_radians() * shape.clamp(0.0, 1.0);
 
-            // Extending the knuckle lifts the tip; a little at the middle joint keeps
-            // the finger curled rather than straightening it out as it rises.
+            // Extending the knuckle lifts the tip; the middle joint curls back by half
+            // as much again, which is what keeps the finger looking like a finger. A
+            // knuckle that extends on its own straightens the whole digit as it rises,
+            // and a straightened finger is the thing that reads as lanky.
             match finger {
                 Finger::Thumb => {
                     pose.q[dof::THUMB_MCP_FLEX] -= lift;
@@ -589,7 +639,7 @@ impl HandAnimator {
                 other => {
                     let base = dof::finger(other.index() - 1);
                     pose.q[base + dof::MCP_FLEX] -= lift;
-                    pose.q[base + dof::PIP_FLEX] += lift * 0.35;
+                    pose.q[base + dof::PIP_FLEX] += lift * 0.5;
                 }
             }
         }
@@ -1168,5 +1218,87 @@ mod tests {
             loud_height > quiet_height + 1.0,
             "the loud note should still be up at {at}: loud {loud_height}, quiet {quiet_height}"
         );
+    }
+
+    #[test]
+    fn a_chord_wider_than_the_hand_is_rolled_rather_than_dropped() {
+        // A minor tenth in the left hand with a note in the middle of it. No fingering
+        // of that is pairwise holdable — whichever pair takes the outside, the middle
+        // note is a twelfth from one of them — so the shape has to come apart somehow.
+        // It comes apart in time, the way a pianist takes it: the bottom, then the
+        // rest. What it must not do is come apart in space, leaving a struck key with
+        // no finger anywhere near it.
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[
+            (45, 0, 4 * q, Hand::Left),
+            (57, 0, q, Hand::Left),
+            (60, 0, q, Hand::Left),
+        ]);
+        let fingerings = pinned(&[
+            (0, Finger::Little),
+            (1, Finger::Index),
+            (2, Finger::Thumb),
+        ]);
+        let timeline = Timeline::build(&score, &fingerings);
+        let grips = timeline.hand_grips(Hand::Left);
+
+        for note in timeline.notes.iter().filter(|n| n.hand == Hand::Left) {
+            assert!(
+                grips.iter().any(|event| {
+                    event.time >= note.start - 1e-6
+                        && event.time <= note.start + 0.12
+                        && event.grip.keys.iter().any(|(midi, _)| *midi == note.midi)
+                }),
+                "{} was struck with no finger on it; grips were {:?}",
+                note.midi,
+                grips
+                    .iter()
+                    .map(|e| (e.time, e.grip.keys.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // And it really did roll: the bottom on the beat, the rest just after.
+        assert!(grips.len() >= 2, "expected a roll, got {} grip(s)", grips.len());
+        assert!(
+            grips[0].grip.keys.iter().any(|(midi, _)| *midi == 45),
+            "the bottom of the chord goes down first"
+        );
+        assert!(
+            grips[1].time > grips[0].time,
+            "the rest of it arrives afterwards"
+        );
+    }
+
+    #[test]
+    fn a_hand_never_takes_a_finger_off_a_note_it_is_striking() {
+        // The general form of the same fault. Whatever the shape, and whatever the hand
+        // has to give up to make it, the thing it gives up is never the note it is in
+        // the act of playing.
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[
+            // A bass note held under a figure that walks away from it.
+            (28, 0, 8 * q, Hand::Left),
+            (40, 0, 8 * q, Hand::Left),
+            (52, 4 * q, q, Hand::Left),
+        ]);
+        let fingerings = pinned(&[
+            (0, Finger::Little),
+            (1, Finger::Thumb),
+            (2, Finger::Thumb),
+        ]);
+        let timeline = Timeline::build(&score, &fingerings);
+        let grips = timeline.hand_grips(Hand::Left);
+        for note in timeline.notes.iter().filter(|n| n.hand == Hand::Left) {
+            assert!(
+                grips.iter().any(|event| {
+                    event.time >= note.start - 1e-6
+                        && event.time <= note.start + 0.12
+                        && event.grip.keys.iter().any(|(midi, _)| *midi == note.midi)
+                }),
+                "{} was struck with no finger on it",
+                note.midi
+            );
+        }
     }
 }
