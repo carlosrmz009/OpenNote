@@ -340,7 +340,13 @@ fn build_rows(
         rows.push(Row { residual: k * (req.idle_clearance - height), grad });
     }
 
-    strain_residuals(&req.weights, &posture.pose, scratch);
+    // The wrist's neutral moves with the arm, and the arm moves with the wrist, so
+    // strictly this is a function of the pose being solved for. It is taken as fixed
+    // within one linearisation: the bearing changes by a fraction of a degree over the
+    // millimetres a single step moves the wrist, and the solver iterates.
+    // ponytail: frozen within a step, revisit if the wrist ever moves far in one.
+    let wrist_neutral = sk.wrist_neutral(&posture.pose);
+    strain_residuals(&req.weights, &posture.pose, wrist_neutral, scratch);
     for r in scratch.iter() {
         rows.push(Row {
             residual: r.value,

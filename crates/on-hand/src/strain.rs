@@ -147,16 +147,33 @@ impl Strain {
 
 /// Normalised distance of a joint from its resting angle.
 #[inline]
-fn deviation(i: usize, q: f32) -> f32 {
-    (q - LIMITS[i].neutral) / LIMITS[i].range()
+fn deviation(i: usize, q: f32, wrist_neutral: f32) -> f32 {
+    (settled(i, q, wrist_neutral) - LIMITS[i].neutral) / LIMITS[i].range()
+}
+
+/// A joint angle measured against the neutral that actually applies to it.
+///
+/// Every joint but one is measured against a fixed neutral written into [`LIMITS`].
+/// Wrist deviation is the exception, because radial and ulnar deviation are angles
+/// between the hand and the *forearm*: where the forearm is pointing moves the whole
+/// window, and a hand held square to the keys out at the end of the keyboard is at the
+/// end of its range rather than at the middle of it.
+#[inline]
+fn settled(i: usize, q: f32, wrist_neutral: f32) -> f32 {
+    if i == dof::WRIST_DEVIATION {
+        q - wrist_neutral
+    } else {
+        q
+    }
 }
 
 /// How far into the forbidden margin near a joint limit a value has strayed,
 /// normalised to the joint's range. Zero in the comfortable interior.
 #[inline]
-fn barrier(i: usize, q: f32) -> f32 {
+fn barrier(i: usize, q: f32, wrist_neutral: f32) -> f32 {
     let l = &LIMITS[i];
     let range = l.range();
+    let q = settled(i, q, wrist_neutral);
     let head = (l.max - q) / range;
     let tail = (q - l.min) / range;
     let slack = head.min(tail);
@@ -186,9 +203,10 @@ fn finger_direction(pose: &HandPose, slot: usize) -> f32 {
 pub fn strain_breakdown(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> Strain {
     let pose = &posture.pose;
     let mut s = Strain::default();
+    let wrist_neutral = sk.wrist_neutral(pose);
 
     for i in dof::WRIST_DEVIATION..DOF {
-        let d = deviation(i, pose.q[i]);
+        let d = deviation(i, pose.q[i], wrist_neutral);
         let term = d * d;
         if i <= dof::WRIST_PRONATION {
             s.wrist_deviation += w.wrist_deviation * term;
@@ -197,7 +215,7 @@ pub fn strain_breakdown(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> 
         } else {
             s.joint_deviation += w.joint_deviation * term;
         }
-        let b = barrier(i, pose.q[i]);
+        let b = barrier(i, pose.q[i], wrist_neutral);
         s.limit_barrier += w.limit_barrier * b * b;
     }
 
@@ -218,7 +236,6 @@ pub fn strain_breakdown(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> 
     let dy = (wrist.y - COMFORTABLE_WRIST_Y) / CARRIAGE_SCALE;
     s.carriage = w.carriage * (dz * dz + dy * dy);
 
-    let _ = sk;
     s
 }
 
@@ -250,7 +267,12 @@ const NO_GRAD: (usize, f32) = (0, 0.0);
 /// The squared sum of these residuals equals [`strain`] up to the carriage term,
 /// which is supplied separately because it depends on wrist translation rather than
 /// joint angles.
-pub fn strain_residuals(w: &StrainWeights, pose: &HandPose, out: &mut Vec<StrainResidual>) {
+pub fn strain_residuals(
+    w: &StrainWeights,
+    pose: &HandPose,
+    wrist_neutral: f32,
+    out: &mut Vec<StrainResidual>,
+) {
     out.clear();
 
     for i in dof::WRIST_DEVIATION..DOF {
@@ -263,16 +285,17 @@ pub fn strain_residuals(w: &StrainWeights, pose: &HandPose, out: &mut Vec<Strain
         };
         let k = weight.sqrt() / LIMITS[i].range();
         out.push(StrainResidual {
-            value: k * (pose.q[i] - LIMITS[i].neutral),
+            value: k * (settled(i, pose.q[i], wrist_neutral) - LIMITS[i].neutral),
             grad: [(i, k), NO_GRAD, NO_GRAD, NO_GRAD],
         });
 
-        let b = barrier(i, pose.q[i]);
+        let b = barrier(i, pose.q[i], wrist_neutral);
         if b > 0.0 {
             // Sub-gradient of the barrier: it pushes back toward whichever limit is
             // being crowded.
             let range = LIMITS[i].range();
-            let toward_max = (LIMITS[i].max - pose.q[i]) < (pose.q[i] - LIMITS[i].min);
+            let settled = settled(i, pose.q[i], wrist_neutral);
+            let toward_max = (LIMITS[i].max - settled) < (settled - LIMITS[i].min);
             let slope = if toward_max { 1.0 } else { -1.0 } / (BARRIER_MARGIN * range);
             let k = w.limit_barrier.sqrt();
             out.push(StrainResidual {
@@ -340,8 +363,10 @@ pub fn worst_finger(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> Opti
                 .iter()
                 .map(|o| {
                     let i = b + o;
-                    let d = deviation(i, pose.q[i]);
-                    d * d + barrier(i, pose.q[i])
+                    // Finger joints only, never the wrist, so the wrist's
+                    // neutral does not arise.
+                    let d = deviation(i, pose.q[i], 0.0);
+                    d * d + barrier(i, pose.q[i], 0.0)
                 })
                 .sum();
             (f, cost)
@@ -362,11 +387,18 @@ mod tests {
         Skeleton::new(HandProfile::default(), Hand::Right)
     }
 
+    /// Where this hand's own shoulder is, along the keyboard. In front of it the
+    /// forearm points straight down the keys, which is the one place a hand square to
+    /// them is also a straight wrist.
+    fn home_x(sk: &Skeleton) -> f32 {
+        sk.torso().shoulder(sk.hand(), 0.0).x
+    }
+
     #[test]
     fn the_resting_hand_is_the_most_comfortable_one() {
         let sk = sk();
         let w = StrainWeights::default();
-        let rest = sk.rest_pose(Vec3::new(400.0, COMFORTABLE_WRIST_Y, COMFORTABLE_WRIST_Z));
+        let rest = sk.rest_pose(Vec3::new(home_x(&sk), COMFORTABLE_WRIST_Y, COMFORTABLE_WRIST_Z));
         let base = strain(&sk, &sk.forward(&rest), &w);
         assert!(base < 1e-3, "rest posture should cost nothing, got {base}");
 
@@ -376,6 +408,43 @@ mod tests {
             let cost = strain(&sk, &sk.forward(&bent), &w);
             assert!(cost > base, "bending dof {i} should cost more than rest");
         }
+    }
+
+    #[test]
+    fn the_same_posture_costs_more_the_further_it_is_from_its_own_shoulder() {
+        // The point of giving the hand an arm. Held square to the keys, a hand is at a
+        // straight wrist only in front of its own shoulder; anywhere else the forearm
+        // arrives at an angle and the wrist has to make up the difference. A model that
+        // charges deviation from a fixed zero says the whole keyboard is alike, which
+        // is the one thing every pianist knows to be false.
+        let sk = sk();
+        let w = StrainWeights::default();
+        let at = |x: f32| {
+            let pose = sk.rest_pose(Vec3::new(x, COMFORTABLE_WRIST_Y, COMFORTABLE_WRIST_Z));
+            strain(&sk, &sk.forward(&pose), &w)
+        };
+        let home = home_x(&sk);
+        let here = at(home);
+        let across = at(home - 500.0);
+        assert!(
+            across > here + 0.05,
+            "reaching across the body should cost more: {across} against {here}"
+        );
+
+        // And the left hand is the mirror of it, which is what makes a note at the
+        // bottom of the keyboard the left hand's to play.
+        let left = Skeleton::new(HandProfile::default(), Hand::Left);
+        let left_at = |x: f32| {
+            let pose = left.rest_pose(Vec3::new(x, COMFORTABLE_WRIST_Y, COMFORTABLE_WRIST_Z));
+            strain(&left, &left.forward(&pose), &w)
+        };
+        let low = home_x(&left) - 300.0;
+        assert!(
+            left_at(low) < at(low),
+            "the left hand should be the comfortable one down there: {} against {}",
+            left_at(low),
+            at(low)
+        );
     }
 
     #[test]
@@ -439,8 +508,10 @@ mod tests {
         }
         sk.clamp(&mut p);
 
+        // The same neutral `strain` will use internally: the two are only equal if
+        // they measure the wrist against the same place.
         let mut res = Vec::new();
-        strain_residuals(&w, &p, &mut res);
+        strain_residuals(&w, &p, sk.wrist_neutral(&p), &mut res);
         let mut sum: f32 = res.iter().map(|r| r.value * r.value).sum();
         sum += carriage_residuals(&w, &p).iter().map(|r| r.value * r.value).sum::<f32>();
 
@@ -460,8 +531,11 @@ mod tests {
             *q += L[i].range() * 0.07;
         }
 
+        // A non-zero wrist neutral, so the shifted path is the one under test, held
+        // fixed across the perturbations exactly as the solver holds it.
+        let wrist_neutral = 0.15;
         let mut res = Vec::new();
-        strain_residuals(&w, &p, &mut res);
+        strain_residuals(&w, &p, wrist_neutral, &mut res);
         let h = 1e-5;
         for (n, r) in res.iter().enumerate() {
             for (dof_index, analytic) in r.grad {
@@ -473,8 +547,8 @@ mod tests {
                 let mut minus = p;
                 minus.q[dof_index] -= h;
                 let (mut rp, mut rm) = (Vec::new(), Vec::new());
-                strain_residuals(&w, &plus, &mut rp);
-                strain_residuals(&w, &minus, &mut rm);
+                strain_residuals(&w, &plus, wrist_neutral, &mut rp);
+                strain_residuals(&w, &minus, wrist_neutral, &mut rm);
                 // Skip if the barrier turned on or off across the step and changed
                 // the residual count.
                 if rp.len() != res.len() || rm.len() != res.len() {

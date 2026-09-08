@@ -35,6 +35,7 @@ use std::f32::consts::PI;
 use glam::{Quat, Vec3};
 
 use crate::profile::HandProfile;
+use crate::torso::Torso;
 use crate::{Finger, Hand};
 
 /// Ratio by which the DIP joint follows the PIP joint.
@@ -295,6 +296,18 @@ impl Posture {
     }
 }
 
+
+/// The middle of an eighty-eight key keyboard, in millimetres from the left edge.
+///
+/// Where the player sits. Derived from the key geometry rather than written down, so
+/// the two cannot drift apart.
+fn keyboard_centre_x() -> f32 {
+    let keyboard = crate::keyboard::Keyboard::new();
+    (keyboard.centre_x(crate::keyboard::MIDI_LOWEST)
+        + keyboard.centre_x(crate::keyboard::MIDI_HIGHEST))
+        / 2.0
+}
+
 /// A hand's kinematics: a [`HandProfile`] bound to a left or right chirality.
 #[derive(Debug, Clone)]
 pub struct Skeleton {
@@ -303,13 +316,56 @@ pub struct Skeleton {
     /// `+1` for the right hand, `-1` for the left. Multiplies every quantity whose
     /// sign is defined relative to the palm.
     sign: f32,
+    /// The player this hand belongs to, which is what decides which way the forearm
+    /// points and therefore where the wrist's neutral is. See [`Self::wrist_neutral`].
+    torso: Torso,
 }
 
 impl Skeleton {
     /// Bind a hand profile to a chirality.
     pub fn new(profile: HandProfile, hand: Hand) -> Self {
         let sign = hand.sign();
-        Self { profile, hand, sign }
+        let torso = Torso::new(&profile, keyboard_centre_x());
+        Self { profile, hand, sign, torso }
+    }
+
+    /// The player this hand hangs from.
+    pub fn torso(&self) -> &Torso {
+        &self.torso
+    }
+
+    /// Where the wrist's deviation sits when the hand is doing nothing to it, given
+    /// where the arm is coming from.
+    ///
+    /// Radial and ulnar deviation are angles between the hand and the *forearm*, not
+    /// between the hand and the keyboard. That distinction does nothing at all when the
+    /// wrist is directly in front of its own shoulder, which is why it went unnoticed:
+    /// there the forearm already points along the keys and a hand square to them is a
+    /// straight wrist. Away from that spot the forearm comes in at an angle — a right
+    /// hand down at the bottom of the keyboard is reaching right across the player —
+    /// and holding the hand square to the keys is then a real ulnar deviation of thirty
+    /// degrees or so, which is the whole of the joint's range.
+    ///
+    /// Charging deviation from a fixed zero says a hand is equally comfortable
+    /// everywhere along the keyboard, which is the one thing every pianist knows to be
+    /// false. Charging it from here is what finally makes [`Torso`] worth having: until
+    /// now the player it describes was drawn but never consulted.
+    ///
+    /// Returned in the same units and sign as `q[dof::WRIST_DEVIATION]`, so it can be
+    /// subtracted from it directly.
+    pub fn wrist_neutral(&self, pose: &HandPose) -> f32 {
+        let wrist = pose.wrist_position();
+        let lean = self.torso.lean_for(self.hand, wrist);
+        let shoulder = self.torso.shoulder(self.hand, lean);
+        let along = wrist - shoulder;
+        // The forearm's bearing in the plane of the keyboard, measured from straight
+        // away from the player. `y` runs towards the player, so the forearm reaches out
+        // along +y and this is well conditioned.
+        let bearing = along.x.atan2(along.y.max(1.0));
+        // Measured, not derived: turning the hand by one radian of deviation swings its
+        // long axis by one radian the other way, and the other way again for the other
+        // hand. See the `yawprobe` example.
+        -self.sign * bearing
     }
 
     /// The anthropometry this skeleton was built from.
@@ -346,8 +402,15 @@ impl Skeleton {
 
     /// Clamp every angular degree of freedom into its anatomical range.
     pub fn clamp(&self, pose: &mut HandPose) {
+        // The wrist's window travels with the forearm: what the joint can do is
+        // measured from wherever the arm is pointing, not from the keyboard.
+        let wrist_neutral = self.wrist_neutral(pose);
         for i in dof::WRIST_DEVIATION..DOF {
-            pose.q[i] = LIMITS[i].clamp(pose.q[i]);
+            pose.q[i] = if i == dof::WRIST_DEVIATION {
+                LIMITS[i].clamp(pose.q[i] - wrist_neutral) + wrist_neutral
+            } else {
+                LIMITS[i].clamp(pose.q[i])
+            };
         }
     }
 
