@@ -18,7 +18,20 @@ use std::collections::HashMap;
 use on_hand::{Finger, Hand};
 
 /// Bonus for a note that takes the finger the standard fingering gives it.
-pub const SCALE_BONUS: f32 = 0.9;
+///
+/// This was 0.9 for a long time, on the reasoning that the major-scale conventions
+/// settle something the ergonomic model finds nearly indifferent and so need only a
+/// nudge. The `scalebench` example says otherwise: at 0.9 the engine still disagreed
+/// with the books on Eb, Gb and Ab in the right hand, which are exactly the scales
+/// where the model has an opinion of its own — the flat keys, where the thumb has to
+/// be kept off the black notes and the model would rather not bother.
+///
+/// Measured the same way [`CHROMATIC_BONUS`] was: run it up until the answer stops
+/// changing. Everything agrees from about 5.4, and nothing above that moves. This sits
+/// above that with the same margin the chromatic bonus keeps, and still far below the
+/// penalty for a shape the hand cannot make, so the convention can win an argument
+/// without ever making the hand do something impossible.
+pub const SCALE_BONUS: f32 = 7.5;
 
 /// Bonus for a note of a chromatic run that takes the standard finger.
 ///

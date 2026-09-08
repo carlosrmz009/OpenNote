@@ -391,9 +391,16 @@ fn solve_score(
                     if events.is_empty() {
                         return None;
                     }
+                    // The comfortable span, not the forced one. `max_prac` is what a
+                    // hand can be made to reach for an instant, with everything else
+                    // it is doing subordinated to getting there; it is not a shape a
+                    // hand sits in while its other fingers go on playing. Holding is
+                    // the second thing, so it is measured by the second number — and
+                    // the two are far enough apart to matter, fourteen semitones
+                    // against sixteen for a medium hand.
                     let reach = options.span_model.table().0[Finger::Thumb.index()]
                         [Finger::Little.index()]
-                    .max_prac;
+                    .max_comf;
                     hold_sustained(&mut events, score, reach);
                     let mut solver = HandSolver::new(hand, options, prior, agreement);
                     solver.find_scales(&events);
@@ -517,10 +524,10 @@ const SUBSTITUTION_COST: f32 = 800.0;
 /// pianist has already given to the pedal.
 fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
     // When each note stops sounding, by the event it was struck at.
-    let mut sounding: Vec<(NoteId, u8, f64)> = Vec::new();
+    let mut sounding: Vec<Sounding> = Vec::new();
     for index in 0..events.len() {
         let now = events[index].onset_seconds;
-        sounding.retain(|(_, _, until)| *until > now + 1e-6);
+        sounding.retain(|s| s.until > now + 1e-6);
 
         let struck: Vec<(NoteId, u8)> = events[index]
             .ids
@@ -528,14 +535,34 @@ fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
             .zip(&events[index].notes)
             .map(|(id, midi)| (*id, *midi))
             .collect();
+        let (struck_low, struck_high) = struck
+            .iter()
+            .fold((u8::MAX, u8::MIN), |(lo, hi), (_, m)| (lo.min(*m), hi.max(*m)));
+
+        // A finger cannot follow the hand. Once the hand has ranged further, since it
+        // struck a note, than it can span in one shape, that note is not under a finger
+        // any more — it has been given to the pedal and the hand has gone somewhere
+        // else.
+        //
+        // Asking that of the note's whole history rather than only of this event is the
+        // point. A bass octave under a broken chord passes the pairwise test at every
+        // step — the octave is within reach, and so is the reach from its top note up
+        // to the arpeggio — while no single hand shape satisfies both at once. Held on
+        // that way, the octave came out fingered 5-3, which is not a shape a hand makes,
+        // and the note under finger 5 was then drawn with nothing on it at all.
+        sounding.retain(|s| i32::from(s.high.max(struck_high) - s.low.min(struck_low)) <= reach);
+        for s in &mut sounding {
+            s.low = s.low.min(struck_low);
+            s.high = s.high.max(struck_high);
+        }
 
         // Everything still down that this event does not strike again, newest first:
         // the oldest are the first a hand lets go of.
         let mut held: Vec<(NoteId, u8)> = sounding
             .iter()
             .rev()
-            .filter(|(id, _, _)| !struck.iter().any(|(other, _)| other == id))
-            .map(|(id, midi, _)| (*id, *midi))
+            .filter(|s| !struck.iter().any(|(other, _)| *other == s.id))
+            .map(|s| (s.id, s.midi))
             .collect();
 
         // Only what the hand could still be holding, taken newest first and stopping
@@ -580,9 +607,28 @@ fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
         }
 
         for (id, midi) in struck {
-            sounding.push((id, midi, score.release_seconds(id)));
+            sounding.push(Sounding {
+                id,
+                midi,
+                until: score.release_seconds(id),
+                low: struck_low,
+                high: struck_high,
+            });
         }
     }
+}
+
+/// A note still sounding, and how far the hand has ranged since striking it.
+struct Sounding {
+    id: NoteId,
+    midi: u8,
+    /// When it stops sounding.
+    until: f64,
+    /// The lowest and highest note the hand has struck since — and including — the
+    /// event that struck this one. A finger stays on the note only while that fits in
+    /// one hand.
+    low: u8,
+    high: u8,
 }
 
 /// Searches one hand's part.
