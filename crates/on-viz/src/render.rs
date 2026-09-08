@@ -568,6 +568,12 @@ impl Plugin for VisualizerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Transport>()
             .init_resource::<ViewportInset>()
+            // Every system that draws a note reads this, so the plugin guarantees it
+            // rather than trusting each entry point to remember. `init_resource` leaves
+            // an already-inserted one alone, so a caller that has colours from the
+            // command line still wins — it just no longer has to, on pain of the window
+            // panicking on the first frame.
+            .init_resource::<NoteColours>()
             .add_plugins(crate::hands::HandsPlugin)
             .add_systems(
                 Startup,
@@ -1836,8 +1842,13 @@ pub fn run(
 
     let assets = performance.assets_root.clone();
     let audio = Audio::open(&performance.timeline, performance.soundfont.clone());
+    // Read before `settings` is handed to the session, and inserted here rather than
+    // left to the plugin's default: `play` takes `--left-colour` and `--right-colour`
+    // like everything else, and defaulting would accept the flags and ignore them.
+    let note_colours = NoteColours(settings.note_colours);
     App::new()
         .add_plugins(default_plugins(&format!("OpenNote — {title}"), &assets))
+        .insert_resource(note_colours)
         .insert_resource(performance)
         .insert_resource(audio)
         .insert_resource(crate::ui::Session::new(settings, path))
