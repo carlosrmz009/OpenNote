@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/on-score",
+    "crates/on-hand",
+    "crates/on-fingering",
+    "crates/on-audio",
+    "crates/on-train",
+    "crates/on-engrave",
+    "crates/on-viz",
+    "crates/on-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/carlos/opennote"
+
+[workspace.dependencies]
+on-score = { path = "crates/on-score" }
+on-hand = { path = "crates/on-hand" }
+on-fingering = { path = "crates/on-fingering" }
+on-audio = { path = "crates/on-audio", default-features = false }
+on-train = { path = "crates/on-train" }
+on-engrave = { path = "crates/on-engrave" }
+on-viz = { path = "crates/on-viz", default-features = false }
+
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+glam = "0.32"
+midly = "0.5"
+musicxml = "1.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Fast builds for dependencies even in debug; the math crates are unusable otherwise.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,37 @@
+[package]
+name = "on-viz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Overhead orthographic visualizer: flat Synthesia keyboard and falling notes with 3D articulated hands."
+
+[dependencies]
+# Bevy's default features, rather than a hand-picked subset. Trimming them saves
+# build time but silently drops reflection registrations that the glTF scene spawner
+# needs, and the failure mode is a panic naming a type rather than a missing feature.
+bevy = { version = "0.19", optional = true }
+on-hand.workspace = true
+on-score.workspace = true
+on-fingering.workspace = true
+on-audio = { workspace = true, default-features = false }
+anyhow.workspace = true
+# For reading the glove's cloth off disk. Bevy pulls this in anyway; naming it here is
+# what lets the glove be painted synchronously, while the hand mesh is being prepared,
+# rather than waiting on the asset server for two textures nothing else ever draws.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+glam.workspace = true
+serde.workspace = true
+tracing.workspace = true
+# The menu bar. egui is immediate-mode, which suits a menu that has to reflect
+# whatever score happens to be loaded without a second copy of that state.
+bevy_egui = { version = "0.42", optional = true }
+# The native "open file" dialog, so importing a score is the gesture people already
+# know rather than a path typed into a box.
+rfd = { version = "0.17", optional = true }
+
+[features]
+# The rendering half needs a GPU stack; the timeline half does not. Keeping them
+# separable means the animation logic can be tested in a second rather than after a
+# full graphics build.
+default = ["render"]
+render = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:image", "on-audio/playback"]

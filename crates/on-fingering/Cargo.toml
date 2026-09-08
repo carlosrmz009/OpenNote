@@ -1,0 +1,17 @@
+[package]
+name = "on-fingering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Piano fingering solver: ergonomic rules, biomechanical cost, Viterbi search and a trainable prior."
+
+[dependencies]
+on-hand.workspace = true
+on-score.workspace = true
+anyhow.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true

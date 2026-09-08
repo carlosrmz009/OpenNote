@@ -1,0 +1,20 @@
+/target
+**/*.rs.bk
+
+# Training data is licensed to the person who downloaded it (PIG is academic-use only)
+# and is never redistributed from this repo.
+/corpus/*
+!/corpus/README.md
+!/corpus/sample/
+/models/*.bin
+/models/*.json
+/out/
+/spikes/*/target
+/learning/
+
+# Sound fonts are downloaded, not committed: they are large and their licences
+# (CC-BY for the good ones) attach to whoever redistributes them.
+/assets/soundfont/*.sf2
+
+# A local convenience script for building the exe; not part of the project.
+/build
