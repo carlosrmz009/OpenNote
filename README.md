@@ -4,3 +4,5 @@
 
 # OpenNote
 Automatic piano fingering software combining various conceptual research papers.
+
+A fun project that aims to test out the capabilities of opus 5 ;)
