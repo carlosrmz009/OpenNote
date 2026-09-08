@@ -1039,15 +1039,42 @@ impl RuleScorer {
         if prev.finger == t.current.finger {
             return if prev.midi == t.current.midi { 0.0 } else { SAME_FINGER_STEP };
         }
-        let d = self.distance(prev.midi, t.current.midi);
         let span = self.spans.get(t.hand, prev.finger, t.current.finger);
-        if d > span.max_prac as f32 {
-            d - span.max_prac as f32
-        } else if d < span.min_prac as f32 {
-            span.min_prac as f32 - d
-        } else {
-            0.0
+        let (lo, hi) = (span.min_prac as f32, span.max_prac as f32);
+
+        // The two ends of a span mean different things, and only one of them is a
+        // distance.
+        //
+        // The end far from zero says how far the hand can stretch, which is a question
+        // about millimetres and is asked in them. The end *near* zero says the two
+        // fingers have to be on different keys, which is a question about keys and has
+        // to be asked by counting them. Which end is which depends on the pair: from
+        // the second finger to the third the bounds run 1 to 5, and from the third to
+        // the second they run -5 to -1, so the adjacency bound is the lower one going
+        // up and the upper one coming down.
+        //
+        // Asking the near bound in millimetres was a mistake, and an expensive one. A
+        // semitone averages 13.7 mm but is only 11.75 mm from a white key to the black
+        // one beside it, so an ordinary semitone measured 0.86 of one and fell outside
+        // a bound of 1. This rule carries ten times the weight of the others precisely
+        // so the search treats it as very nearly forbidden — so playing G with the
+        // second finger and A flat with the third, which is what every edition of every
+        // flat-key scale asks for, was scored as a thing a hand cannot do. Real music is
+        // full of semitones taken by adjacent fingers with one of the two keys black,
+        // and every one of them was charged.
+        let far = self.distance(prev.midi, t.current.midi);
+        let near = Ruler::Chromatic.distance(prev.midi, t.current.midi);
+        let adjacency = |bound: f32| bound.abs() <= 1.0;
+
+        let above = if adjacency(hi) { near } else { far };
+        if above > hi {
+            return above - hi;
         }
+        let below = if adjacency(lo) { near } else { far };
+        if below < lo {
+            return lo - below;
+        }
+        0.0
     }
 
     /// A repeated pitch that changes finger for no reason.
