@@ -29,5 +29,24 @@ fn main() -> anyhow::Result<()> {
             n.finger.map(|f| f.number().to_string()).unwrap_or_else(|| "-".into())
         );
     }
+
+    // And the grips the animator will actually draw, which is not the same list: a
+    // chord too wide to hold is rolled into two.
+    for hand in on_hand::Hand::ALL {
+        println!("
+{hand:?} grips:");
+        for event in timeline.hand_grips(hand) {
+            if event.time < until - 4.0 || event.time > until {
+                continue;
+            }
+            let mut keys = event.grip.keys.clone();
+            keys.sort_by_key(|(midi, _)| *midi);
+            println!(
+                "  {:7.2}  {}",
+                event.time,
+                keys.iter().map(|(m, f)| format!("{m}={}", f.number())).collect::<Vec<_>>().join(" ")
+            );
+        }
+    }
     Ok(())
 }

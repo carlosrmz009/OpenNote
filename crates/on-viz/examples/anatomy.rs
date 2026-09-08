@@ -65,6 +65,7 @@ fn main() -> anyhow::Result<()> {
     let mut let_go = 0usize;
     let mut still_sounding = 0usize;
     let mut abandoned: Vec<String> = Vec::new();
+    let mut free_handed: Vec<String> = Vec::new();
     let mut other_hand_busy = 0usize;
     let mut buried: Vec<String> = Vec::new();
     let mut through_but_reached = 0usize;
@@ -132,6 +133,18 @@ fn main() -> anyhow::Result<()> {
                     });
                     if busy {
                         other_hand_busy += 1;
+                    }
+                    // The ones that matter are the ones the other hand could have
+                    // taken. A hand that lets go while the other is also committed had
+                    // no choice; a hand that lets go while the other is free was simply
+                    // sent to the wrong place.
+                    if !busy && free_handed.len() < 10 {
+                        free_handed.push(format!(
+                            "  {:.2}s {hand:?} let go of {} to reach {:?} — other hand idle",
+                            event.time,
+                            note.midi,
+                            event.grip.keys.iter().map(|(m, _)| *m).collect::<Vec<_>>()
+                        ));
                     }
                     if abandoned.len() < 5 {
                         abandoned.push(format!(
@@ -209,7 +222,8 @@ fn main() -> anyhow::Result<()> {
     println!("  notes still sounding under a hand:       {still_sounding}");
     println!("  ...that the hand had to let go of:       {let_go}");
     println!("      of those, with the other hand busy:  {other_hand_busy}");
-    for line in &abandoned {
+    println!("      of those, with the other hand FREE: {}", let_go - other_hand_busy);
+    for line in &free_handed {
         println!("{line}");
     }
     println!("      of those, ones that did reach the key: {through_but_reached}");

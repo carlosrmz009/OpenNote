@@ -105,10 +105,13 @@ struct Simultaneity {
 
 /// Assign hands by Viterbi over pitch splits.
 fn assign_by_search(score: &mut Score, options: &HandAssignment) {
-    let events = collect_simultaneities(score);
+    let mut events = collect_simultaneities(score);
     if events.is_empty() {
         return;
     }
+    // A hand that is still holding something is not free to go elsewhere, and the
+    // search cannot know that unless each event says what is still down.
+    hold_sustained(&mut events);
     // When the foot is holding the strings, in seconds.
     //
     // A hand is only obliged to stay on a key while the key is what is holding the note.
@@ -189,6 +192,70 @@ fn assign_by_search(score: &mut Score, options: &HandAssignment) {
             split = back[i][split];
         }
     }
+}
+
+/// Fold notes that are still sounding into every event that happens while they sound.
+///
+/// Without this the search sees one instant at a time and nothing else. A hand holding a
+/// bass octave struck four events ago looks perfectly free, because [`Simultaneity`]
+/// only carries the notes that *begin* at its own onset — so the octave was invisible,
+/// and the cheapest way to reach a note two octaves above it was to send the hand that
+/// was already holding the octave. It let go of both and went, while the other hand sat
+/// idle. A hand cannot be in two places, and the search had no way of knowing it was
+/// asking one to be.
+///
+/// Folded in, the note is part of what its hand has to cover, so the ordinary span and
+/// travel costs charge for it and the search sends the free hand instead. It stays a
+/// cost rather than a prohibition on purpose: when both hands are genuinely committed
+/// something has to give, and then the cheapest thing to give up is what gives.
+///
+/// A note is carried only as long as its written duration, which is the span over which
+/// the score is asking for it to be held. What the pedal does with it afterwards is the
+/// pedal's business.
+fn hold_sustained(events: &mut [Simultaneity]) {
+    // What each earlier event struck, and when it stops.
+    let mut sounding: Vec<(NoteId, u8, f64)> = Vec::new();
+    for index in 0..events.len() {
+        let now = events[index].onset_seconds;
+        sounding.retain(|(_, _, until)| *until > now + 1e-6);
+
+        // Remember what this event strikes before anything is folded into it, so a
+        // held note is never recorded twice.
+        let struck: Vec<(NoteId, u8, f64)> = events[index]
+            .notes
+            .iter()
+            .zip(&events[index].pitches)
+            .zip(&events[index].until)
+            .map(|((id, midi), until)| (*id, *midi, *until))
+            .collect();
+
+        for (id, midi, until) in &sounding {
+            if struck.iter().any(|(other, _, _)| other == id) {
+                continue;
+            }
+            events[index].notes.push(*id);
+            events[index].pitches.push(*midi);
+            events[index].until.push(*until);
+        }
+        sort_by_pitch(&mut events[index]);
+
+        sounding.extend(struck);
+    }
+}
+
+/// Sort an event's parallel arrays low to high, which the split argument depends on.
+fn sort_by_pitch(event: &mut Simultaneity) {
+    let mut rows: Vec<(NoteId, u8, f64)> = event
+        .notes
+        .iter()
+        .zip(&event.pitches)
+        .zip(&event.until)
+        .map(|((id, midi), until)| (*id, *midi, *until))
+        .collect();
+    rows.sort_by_key(|(_, midi, _)| *midi);
+    event.notes = rows.iter().map(|(id, _, _)| *id).collect();
+    event.pitches = rows.iter().map(|(_, midi, _)| *midi).collect();
+    event.until = rows.iter().map(|(_, _, until)| *until).collect();
 }
 
 /// Group note onsets into simultaneities, sorted low to high within each.
@@ -650,5 +717,49 @@ mod tests {
 
         // And once everything has stopped, neither hand is committed to anything.
         assert_eq!(still_held(&event, 2, Hand::Left, &keyboard, 9.0), None);
+    }
+
+    #[test]
+    fn a_hand_holding_a_chord_does_not_go_and_fetch_something_else() {
+        // The shape of the opening of a great many romantic pieces: the left hand puts
+        // down a bass octave and holds it, and a broken figure runs above it. The
+        // figure's lowest note sits between the two hands, so it can be argued either
+        // way — until you notice that the left hand is holding the octave and cannot
+        // be in two places.
+        //
+        // It used to be argued the wrong way, and not because the cost was too low.
+        // Each instant was scored on its own, so an octave struck four events earlier
+        // and still held was invisible: the left hand looked idle, and reaching down
+        // for the figure looked free. It let go of both notes and went, while the
+        // right hand — which had a gap exactly there — sat still.
+        let q = TICKS_PER_QUARTER as Ticks;
+        let mut notes = vec![
+            // The bass octave, held right through.
+            Note { duration: 8 * q, ..note(0, 28, 0, None) },
+            Note { duration: 8 * q, ..note(1, 40, 0, None) },
+        ];
+        // A figure above it: 52, 64, 71, 64 repeating. The 52s are the ones in
+        // question, and the right hand is between notes when each of them falls.
+        let figure = [52u8, 64, 71, 64, 52, 64, 71, 64];
+        for (i, midi) in figure.iter().enumerate() {
+            notes.push(Note {
+                duration: q / 2,
+                ..note(2 + i as u32, *midi, (i as Ticks + 1) * q, None)
+            });
+        }
+        let mut score = score_of(notes);
+        assign_hands(&mut score, &HandAssignment::default());
+
+        let hand_of = |id: u32| score.notes.iter().find(|n| n.id == NoteId(id)).unwrap().hand;
+        assert_eq!(hand_of(0), Some(Hand::Left), "the bass octave is the left hand's");
+        assert_eq!(hand_of(1), Some(Hand::Left));
+        for (i, midi) in figure.iter().enumerate() {
+            let id = 2 + i as u32;
+            assert_eq!(
+                hand_of(id),
+                Some(Hand::Right),
+                "note {id} ({midi}) belongs to the right hand: the left is holding the octave"
+            );
+        }
     }
 }

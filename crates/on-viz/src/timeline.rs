@@ -316,17 +316,33 @@ impl Timeline {
             // and it is the only answer that leaves every struck note with a finger on
             // it. Dropping one instead lit a key that nothing was touching, which is
             // the thing anybody watching notices first.
-            let mut rolled: Vec<(&TimelineNote, Finger)> = Vec::new();
+            // Taken off the bottom into groups the hand can actually hold, rather than
+            // into one lump: peeling a note off does not make what came off playable,
+            // and a chord spanning two octaves needs two goes. Left as a lump it drew a
+            // hand holding the bottom two notes of a two-octave chord, which was an
+            // octave apart under the fifth finger and the second — a shape the hand
+            // misses by four millimetres, and the whole point of rolling was to stop
+            // drawing shapes like that.
+            let mut rolls: Vec<Vec<(&TimelineNote, Finger)>> = Vec::new();
             while held.len() > 1 && !makeable(&held) {
-                rolled.push(held.remove(0));
+                let lowest = held.remove(0);
+                match rolls.last_mut() {
+                    Some(group) => {
+                        group.push(lowest);
+                        if !makeable(group) {
+                            let overflow = group.pop().expect("just pushed");
+                            rolls.push(vec![overflow]);
+                        }
+                    }
+                    None => rolls.push(vec![lowest]),
+                }
             }
 
-            // The bottom of a rolled chord goes down first, on the beat, and the hand
-            // arrives at the rest of it a moment later.
+            // Bottom first, on the beat, and the hand climbs through the rest of it.
             let mut grip_time = time;
-            if !rolled.is_empty() {
-                events.push(grip_event(&rolled, time, time));
-                grip_time = time + ROLL_SECONDS;
+            for group in &rolls {
+                events.push(grip_event(group, grip_time, time));
+                grip_time += ROLL_SECONDS;
             }
 
             let struck: Vec<(Finger, u8)> = held
@@ -441,7 +457,14 @@ impl KeyStates {
 /// A roll, not an arpeggio: fast enough to read as one chord rather than as separate
 /// notes, slow enough that the hand is visibly somewhere else by the time it gets
 /// there. Pianists roll a wide chord in about this long.
-const ROLL_SECONDS: f64 = 0.075;
+///
+/// It also has to stay short because every key of the chord lights at the written
+/// onset while the hand is still climbing, so the last note of a roll is lit for this
+/// long times the number of steps before a finger reaches it. Two octaves takes three
+/// steps, and at a twentieth of a second each that is a tenth of a second of climb —
+/// about the shortest gap that still reads as a roll, and short enough not to read as
+/// a key playing itself.
+const ROLL_SECONDS: f64 = 0.05;
 
 /// Assemble one grip from the notes a hand has down.
 fn grip_event(
