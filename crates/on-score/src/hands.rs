@@ -182,6 +182,10 @@ fn assign_by_search(score: &mut Score, options: &HandAssignment) {
         .map(|(i, _)| i)
         .unwrap_or(0);
 
+    // Backwards, and that matters. A note held across several events appears in all of
+    // them, so it is written more than once; going back to front means the event that
+    // *struck* it writes last and wins, which is the one whose split actually decided
+    // whose note it was.
     for i in (0..events.len()).rev() {
         let event = &events[i];
         for (j, id) in event.notes.iter().enumerate() {
