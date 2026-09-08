@@ -1064,7 +1064,13 @@ impl RuleScorer {
         // and every one of them was charged.
         let far = self.distance(prev.midi, t.current.midi);
         let near = Ruler::Chromatic.distance(prev.midi, t.current.midi);
-        let adjacency = |bound: f32| bound.abs() <= 1.0;
+        // Two semitones catches every separation bound in the tables and no stretch
+        // bound: they run 1 or 2 where they are minima and -1 or -2 where they are
+        // maxima, and the next value in either direction is 3 away from zero. It has to
+        // reach 2, because a whole tone is 23.5 mm wherever it falls and that is 1.71
+        // semitone-widths — so a pair told it needs two of them, which is the second
+        // finger against the fifth, was charged for every whole tone in the piece.
+        let adjacency = |bound: f32| bound.abs() <= 2.0;
 
         let above = if adjacency(hi) { near } else { far };
         if above > hi {
