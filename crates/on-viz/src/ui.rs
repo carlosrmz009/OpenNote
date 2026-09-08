@@ -16,12 +16,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use on_hand::{HandProfile, HandSize};
 
 use crate::layout::Extent;
-use crate::render::{Audio, Performance, Transport, ViewportInset};
+use crate::render::{Audio, Capture, Performance, Transport, ViewportInset};
 use crate::session::{self, SessionSettings};
 
 /// What the window knows about the piece it is showing.
@@ -72,6 +73,9 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            // Bevy already measures the frame rate and smooths it; a hand-rolled
+            // average of `Time::delta` would only be a worse copy of this.
+            .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_systems(EguiPrimaryContextPass, draw_menus)
             .add_systems(Update, (finish_tasks, apply_reload).chain());
     }
@@ -108,6 +112,11 @@ fn draw_menus(
     mut reload: ResMut<Reload>,
     performance: Res<Performance>,
     audio: Res<Audio>,
+    diagnostics: Res<DiagnosticsStore>,
+    // Present only when a frame is being grabbed rather than played. A frame rate
+    // means nothing in a still, and the offline video export never builds a menu bar
+    // at all, so this is the whole of what has to be excluded.
+    capture: Option<Res<Capture>>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
@@ -280,6 +289,25 @@ fn draw_menus(
                 if !note.is_empty() {
                     ui.separator();
                     ui.label(note);
+                }
+
+                // The frame rate, hard against the right-hand edge. Laid out
+                // right-to-left so it stays in the corner however wide the title
+                // beside it grows, rather than being pushed off the end by a long
+                // filename.
+                if capture.is_none() {
+                    if let Some(fps) = diagnostics
+                        .get(&FrameTimeDiagnosticsPlugin::FPS)
+                        .and_then(|fps| fps.smoothed())
+                    {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{fps:.0} fps"))
+                                    .monospace()
+                                    .weak(),
+                            );
+                        });
+                    }
                 }
             });
         });
