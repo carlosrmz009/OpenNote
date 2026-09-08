@@ -19,7 +19,7 @@ video has the same piano on it as the one you heard.
 
 ## Where to get one
 
-All three of these come from [FreePats](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html),
+Both of these come from [FreePats](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html),
 which is the reputable place for openly licensed instrument samples. Nothing here is
 bundled and nothing is downloaded for you — pick one and fetch it yourself.
 
@@ -28,16 +28,11 @@ one that matters, because the whole file is read into memory when a piece is pla
 
 | | Download | Unpacked | Licence | Notes |
 |---|---|---|---|---|
-| **Salamander Grand Piano** | 296 MiB | **1.27 GiB** | CC-BY 3.0 | A Yamaha C5 in sixteen velocity layers, by Alexander Holm. The best of the three by a distance, and it wants the RAM to prove it. |
 | **YDP Grand Piano** | 36 MiB | 113 MiB | CC-BY 3.0 | A Yamaha Disklavier Pro. A real grand at a size you will not notice. |
 | **Upright Piano KW** | 27 MiB | ~30 MiB | **CC0** | An upright, not a grand — but public domain, so it asks nothing of you at all. |
 
 ```bash
-# Salamander Grand Piano — the best of them
-curl -LO 'https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPiano-SF2-V3+20200602.tar.xz'
-tar xJf 'SalamanderGrandPiano-SF2-V3+20200602.tar.xz' --strip-components=1 -C assets/soundfont
-
-# YDP Grand Piano — a tenth of the size, still a real grand
+# YDP Grand Piano — a real grand, and small enough not to notice
 curl -LO https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2
 tar xjf YDP-GrandPiano-SF2-20160804.tar.bz2 --strip-components=1 -C assets/soundfont
 
@@ -55,13 +50,16 @@ preset in the file is the one played, so a piano-only SoundFont needs no configu
 
 ## Attribution
 
-Both grands are **CC-BY 3.0**, which asks you to credit the author and say if you
+The YDP grand is **CC-BY 3.0**, which asks you to credit the author and say if you
 changed anything. That obligation is yours, not this repository's, and it attaches to
 anything you publish with that piano on it — a rendered video, most obviously.
 
 - **YDP Grand Piano** — Roberto (roberto@zenvoid.org), from Zenph Studios / OLPC samples
-- **Salamander Grand Piano** — Alexander Holm
 - **Upright Piano KW** — CC0, so nothing is required
+
+Whatever you supply yourself carries its own terms, and they are yours to honour: the
+Yamaha C7 this project's own renders use is not from FreePats and is not covered by
+anything above.
 
 `assets/soundfont/*.sf2` is gitignored. Downloaded samples are yours and stay in your
 working copy; redistributing them is a licence question this repository does not answer
