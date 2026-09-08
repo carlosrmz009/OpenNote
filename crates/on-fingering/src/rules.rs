@@ -1446,4 +1446,38 @@ mod tests {
         assert!(costs.per_rule[Rule::PositionChangeCount.index()] > 0.0);
         assert!(costs.per_rule[Rule::PositionChangeSize.index()] > 0.0);
     }
+
+    #[test]
+    fn an_ordinary_semitone_between_adjacent_fingers_is_not_impossible() {
+        // The physical ruler is the one that ships, and it measures the keyboard rather
+        // than counting semitones. G to A flat is 11.75 mm, which is 0.86 of an average
+        // semitone — so a bound written as "at least 1" was failed by the most ordinary
+        // interval in flat-key playing, and `Impractical` carries ten times the weight
+        // of every other rule.
+        let physical = RuleScorer::new(
+            RuleSet::Consensus,
+            RuleWeights::default(),
+            &PARNCUTT,
+            Ruler::Physical,
+        );
+        // G with the second finger, A flat with the third: every edition of E flat major.
+        let up = trigram(Hand::Right, (65, 1), (67, 2), (68, 3));
+        assert_eq!(physical.impractical(&up), 0.0, "G to A flat, fingers 2 to 3");
+        // And coming back down, where the same bound is the pair's upper one.
+        let down = trigram(Hand::Right, (70, 4), (68, 3), (67, 2));
+        assert_eq!(physical.impractical(&down), 0.0, "A flat to G, fingers 3 to 2");
+
+        // A whole tone between the second finger and the fifth is 23.5 mm, which is
+        // 1.71 average semitones against a bound of 2.
+        let wide = trigram(Hand::Right, (60, 1), (62, 2), (64, 5));
+        assert_eq!(physical.impractical(&wide), 0.0, "D to E, fingers 2 to 5");
+
+        // What the rule is actually for still fires: two fingers that cannot reach.
+        // The charge is on the step into the middle note, so the leap goes there.
+        let far = trigram(Hand::Right, (60, 4), (84, 5), (86, 5));
+        assert!(
+            physical.impractical(&far) > 0.0,
+            "a two-octave leap between the fourth and fifth fingers is impossible"
+        );
+    }
 }
