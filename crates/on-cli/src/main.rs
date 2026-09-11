@@ -56,8 +56,8 @@ pub struct ModelArgs {
     #[arg(long)]
     pub hand_length: Option<f32>,
 
-    /// Which published rule set to score with.
-    #[arg(long, value_enum, default_value_t = RuleSetArg::Badgerow)]
+    /// Which rule set to score with. The default combines all four.
+    #[arg(long, value_enum, default_value_t = RuleSetArg::Consensus)]
     pub rules: RuleSetArg,
 
     /// Measure intervals in semitones, as the original papers do, rather than in
@@ -144,19 +144,23 @@ impl From<HandSizeArg> for HandSize {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum RuleSetArg {
+    /// Every rule any of the four published sets charges for, weighted by how many
+    /// of them endorse it; the default, and what the engine is tuned around.
+    Consensus,
     /// Parncutt et al. (1997), the original twelve rules.
     Parncutt,
     /// Jacobs (2001).
     Jacobs,
     /// Balliauw et al.
     Balliauw,
-    /// Badgerow's revision; the default.
+    /// Badgerow's revision.
     Badgerow,
 }
 
 impl From<RuleSetArg> for RuleSet {
     fn from(value: RuleSetArg) -> Self {
         match value {
+            RuleSetArg::Consensus => RuleSet::Consensus,
             RuleSetArg::Parncutt => RuleSet::Parncutt,
             RuleSetArg::Jacobs => RuleSet::Jacobs,
             RuleSetArg::Balliauw => RuleSet::Balliauw,

@@ -69,7 +69,7 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
 
     let score = document.score();
     let prior = settings.prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior);
-    let solution = on_fingering::finger_score_consensus(score, &settings.fingering, prior);
+    let solution = on_fingering::finger_score_with_prior(score, &settings.fingering, prior);
     let mut timeline =
         Timeline::build_for(score, &solution.fingerings, &settings.fingering.profile);
     if timeline.title.is_none() {

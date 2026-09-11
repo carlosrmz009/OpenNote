@@ -56,7 +56,7 @@ pub fn run(args: ExplainArgs) -> Result<()> {
     let score = input.score();
     let prior = args.model.prior()?;
     let prior_ref = prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior);
-    let solution = on_fingering::finger_score_consensus(score, &options, prior_ref);
+    let solution = on_fingering::finger_score_with_prior(score, &options, prior_ref);
 
     println!(
         "{} — total cost {:.2} over {} notes",

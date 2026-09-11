@@ -59,7 +59,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
     let score = input.score();
     let notes = score.notes.len();
     let prior = args.model.prior()?;
-    let solution = on_fingering::finger_score_consensus(
+    let solution = on_fingering::finger_score_with_prior(
         score,
         &options,
         prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
