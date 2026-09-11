@@ -18,3 +18,7 @@
 
 # A local convenience script for building the exe; not part of the project.
 /build
+
+# Python bytecode from the tools/ scripts.
+__pycache__/
+*.pyc
