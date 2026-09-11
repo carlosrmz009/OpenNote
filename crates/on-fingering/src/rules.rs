@@ -971,6 +971,13 @@ impl RuleScorer {
         let (Some(prev), Some(next)) = (t.prev, t.next) else {
             return 0.0;
         };
+        // Same reason as the Parncutt pair these replace: three notes on one finger is
+        // a hand that kept its shape and moved, and a finger spans exactly zero against
+        // itself, so reading that as a comfort window makes every step of a settled
+        // hand a position change. A run of octaves collected it as noise.
+        if t.hand_only_travelled() {
+            return 0.0;
+        }
         let d13 = self.distance(prev.midi, next.midi);
         let span = self.spans.get(t.hand, prev.finger, next.finger);
         let mut cost = 0.0;
@@ -995,12 +1002,25 @@ impl RuleScorer {
         let (Some(prev), Some(next)) = (t.prev, t.next) else {
             return 0.0;
         };
+        // Same reason as the Parncutt pair these replace: three notes on one finger is
+        // a hand that kept its shape and moved, and a finger spans exactly zero against
+        // itself, so reading that as a comfort window makes every step of a settled
+        // hand a position change. A run of octaves collected it as noise.
+        if t.hand_only_travelled() {
+            return 0.0;
+        }
         let d13 = self.distance(prev.midi, next.midi);
         let span = self.spans.get(t.hand, prev.finger, next.finger);
         if d13 > span.max_comf as f32 {
             d13 - span.max_comf as f32
         } else if d13 < span.min_comf as f32 {
-            span.max_comf as f32 - d13
+            // From the bound that was crossed, not the far one. Measured against
+            // `max_comf`, a too-narrow interval is charged the whole width of the
+            // window and then drops to nothing the instant it reaches `min_comf`: for
+            // a pair whose window is two to eight semitones that is a seven-point step
+            // between two fingerings a semitone apart, which is more than an impossible
+            // stretch costs. Every sibling rule measures from the bound it crossed.
+            span.min_comf as f32 - d13
         } else {
             0.0
         }
@@ -1479,5 +1499,33 @@ mod tests {
             physical.impractical(&far) > 0.0,
             "a two-octave leap between the fourth and fifth fingers is impossible"
         );
+    }
+
+    #[test]
+    fn the_position_rules_have_no_cliff_in_them() {
+        // A cost function the search can reason about has to be continuous: two
+        // fingerings a semitone apart in hand position must not be separated by more
+        // than the rule's own slope. `balliauw_position_comfort` measured a too-narrow
+        // interval against the far end of its window, so for the pair (2, 5) the charge
+        // fell from seven to zero in one semitone — more than an impossible stretch
+        // costs, and enough to drown every other term deciding the passage.
+        let s = scorer(RuleSet::Balliauw);
+        for (from, to) in [(2u8, 5u8), (1, 3), (3, 4), (2, 3)] {
+            for rule in [Rule::BalliauwPositionComfort, Rule::PositionChangeSize] {
+                let at = |apart: u8| {
+                    let middle = if from == 1 { 2 } else { 1 };
+                    let t = trigram(Hand::Right, (60, from), (61, middle), (60 + apart, to));
+                    s.score_with(&t, &[rule]).total()
+                };
+                for apart in 0..14u8 {
+                    let (here, next) = (at(apart), at(apart + 1));
+                    assert!(
+                        (next - here).abs() <= 2.5,
+                        "{rule:?} jumps from {here} to {next} between {apart} and {}                          semitones for the pair ({from}, {to})",
+                        apart + 1
+                    );
+                }
+            }
+        }
     }
 }
