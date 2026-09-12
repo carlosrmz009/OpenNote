@@ -43,8 +43,20 @@ pub struct FingeredNote {
     pub duration: f64,
     /// Which hand played it.
     pub hand: HandLabel,
-    /// Which finger, 1..=5.
-    pub finger: u8,
+    /// Which finger, 1..=5, where somebody wrote one down.
+    ///
+    /// `None` for a note nobody annotated, and those are kept rather than discarded.
+    /// An edition marks up the fingerings a player needs told and leaves the obvious
+    /// ones bare — often most of the piece — so dropping the bare notes reads the
+    /// music with holes in it. What the engine is then asked to finger is not the
+    /// piece: a hand's reach, what it is still holding and how long it has to get
+    /// anywhere are all computed from notes that are not there.
+    ///
+    /// It also makes the evaluation meaningless, because the score being fingered is
+    /// not the score the annotator fingered.
+    ///
+    /// Older corpus files wrote a bare number here and deserialise into `Some`.
+    pub finger: Option<u8>,
 }
 
 /// What to assume a note's length is when the corpus file does not say.
@@ -103,7 +115,9 @@ impl Piece {
         self.notes
             .iter()
             .filter(|note| note.hand == label)
-            .filter_map(|note| Some(Placement::new(note.midi, Finger::from_number(note.finger)?)))
+            .filter_map(|note| {
+                Some(Placement::new(note.midi, Finger::from_number(note.finger?)?))
+            })
             .collect()
     }
 }
@@ -313,23 +327,30 @@ fn read_pig(path: &Path) -> Result<Option<Piece>> {
         let Some(midi) = spelled_pitch_to_midi(fields[3]) else {
             continue;
         };
-        // The struck finger, before any substitution.
+        // The struck finger, before any substitution. In PIG every note carries one;
+        // a partially annotated corpus in the same encoding — ThumbSet is distributed
+        // this way — leaves it zero or blank where nobody said, and those notes are
+        // kept unannotated rather than dropped.
         let raw = fields[7].split('_').next().unwrap_or_default();
-        let Ok(signed) = raw.parse::<i32>() else {
-            continue;
+        let signed = raw.parse::<i32>().unwrap_or(0);
+        let finger = match signed.unsigned_abs() as u8 {
+            f @ 1..=5 => Some(f),
+            _ => None,
         };
-        if signed == 0 {
-            continue;
-        }
-        let hand = if signed > 0 {
-            HandLabel::Right
-        } else {
-            HandLabel::Left
+        // The sign carries the hand, so an unannotated note says nothing about which
+        // hand played it and one has to be guessed. Middle C is the usual split and is
+        // what the staff would have said in a score that had one.
+        let hand = match signed {
+            0 => {
+                if midi < 60 {
+                    HandLabel::Left
+                } else {
+                    HandLabel::Right
+                }
+            }
+            n if n > 0 => HandLabel::Right,
+            _ => HandLabel::Left,
         };
-        let finger = signed.unsigned_abs() as u8;
-        if !(1..=5).contains(&finger) {
-            continue;
-        }
         notes.push(FingeredNote {
             midi,
             onset,
@@ -404,6 +425,9 @@ fn read_musicxml(path: &Path) -> Result<Option<Piece>> {
     // already works that out; this fills in anything cross-staff or ambiguous.
     on_score::assign_hands(&mut score, &on_score::hands::HandAssignment::default());
 
+    // Every note, not only the annotated ones. An edition fingers what the player
+    // needs told and leaves the rest bare, so filtering on `given_finger` here threw
+    // away most of the music and left the engine fingering a line full of holes.
     let notes: Vec<FingeredNote> = score
         .notes
         .iter()
@@ -413,11 +437,11 @@ fn read_musicxml(path: &Path) -> Result<Option<Piece>> {
                 onset: note.onset_seconds,
                 duration: note.duration_seconds,
                 hand: HandLabel::from(note.hand?),
-                finger: note.given_finger?.number(),
+                finger: note.given_finger.map(|f| f.number()),
             })
         })
         .collect();
-    if notes.is_empty() {
+    if notes.iter().all(|note| note.finger.is_none()) {
         return Ok(None);
     }
     let stem = path
@@ -488,12 +512,12 @@ mod tests {
                 // difference is what the hand is actually holding.
                 duration: 0.5,
                 hand: HandLabel::Right,
-                finger: 1
+                finger: Some(1)
             }
         );
         // A substitution keeps the finger that strikes the note.
         assert_eq!(piece.notes[3].hand, HandLabel::Left);
-        assert_eq!(piece.notes[3].finger, 2);
+        assert_eq!(piece.notes[3].finger, Some(2));
 
         let right = piece.placements(Hand::Right);
         assert_eq!(right.len(), 2);
@@ -550,5 +574,44 @@ mod tests {
         let new = r#"{"midi":60,"onset":0.5,"duration":2.0,"hand":"right","finger":1}"#;
         let note: FingeredNote = serde_json::from_str(new).unwrap();
         assert_eq!(note.duration, 2.0);
+    }
+
+    #[test]
+    fn a_partly_annotated_source_keeps_the_notes_nobody_fingered() {
+        // An edition fingers what the player needs told and leaves the rest bare, and
+        // a crowdsourced corpus is barer still — ThumbSet is partial by construction.
+        // Those notes have to survive reading, because the engine is asked to finger
+        // the piece and a piece with holes in it is a different piece: what a hand is
+        // still holding, how far it has to travel and how long it has to get there are
+        // all computed from notes that would not be there.
+        //
+        // PIG itself never exercises this, because PIG annotates everything.
+        let dir = std::env::temp_dir().join("opennote-corpus-partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial_fingering.txt");
+        // Five notes; only the second and fourth carry a finger, the rest read zero.
+        std::fs::write(
+            &path,
+            "//Version: PIG 1.0\n\
+             0\t0.0\t0.5\tC4\t0\t0\t0\t0\n\
+             1\t0.5\t1.0\tD4\t0\t0\t0\t2\n\
+             2\t1.0\t1.5\tE4\t0\t0\t0\t0\n\
+             3\t1.5\t2.0\tF4\t0\t0\t0\t4\n\
+             4\t2.0\t2.5\tG4\t0\t0\t0\t0\n",
+        )
+        .unwrap();
+
+        let piece = read_pig(&path).unwrap().unwrap();
+        assert_eq!(piece.notes.len(), 5, "every note survives, annotated or not");
+        let fingers: Vec<Option<u8>> = piece.notes.iter().map(|n| n.finger).collect();
+        assert_eq!(fingers, vec![None, Some(2), None, Some(4), None]);
+
+        // And the ones nobody fingered contribute nothing to what the prior learns.
+        let placements = piece.placements(Hand::Right);
+        assert_eq!(
+            placements.len(),
+            2,
+            "only the annotated notes teach the model anything"
+        );
     }
 }

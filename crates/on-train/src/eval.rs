@@ -97,9 +97,13 @@ pub fn evaluate(
             for (index, note) in annotation.notes.iter().enumerate() {
                 let Some(id) = keys.get(index) else { continue };
                 let Some(ours) = chosen.get(id) else { continue };
+                // Only where somebody wrote a finger down. The unannotated notes are
+                // in the piece so the engine fingers the real music, but there is
+                // nothing to agree or disagree with on them.
+                let Some(theirs) = note.finger else { continue };
                 compared += 1;
-                acceptable.entry(index).or_default().push(note.finger);
-                if *ours == note.finger {
+                acceptable.entry(index).or_default().push(theirs);
+                if *ours == theirs {
                     agreed += 1;
                 }
             }
@@ -219,7 +223,7 @@ mod tests {
                     midi: *midi,
                     onset: i as f64 * 0.25,
                     hand: HandLabel::Right,
-                    finger: *finger,
+                    finger: Some(*finger),
                 })
                 .collect(),
         }

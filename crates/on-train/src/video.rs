@@ -411,7 +411,7 @@ pub fn extract(
                 // back up, so there is nothing better to say than the default.
                 duration: crate::corpus::ASSUMED_DURATION,
                 hand,
-                finger: finger.number(),
+                finger: Some(finger.number()),
             });
         }
     }
@@ -710,7 +710,7 @@ mod tests {
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
         assert_eq!(piece.notes[0].midi, 64);
-        assert_eq!(piece.notes[0].finger, 3, "the middle finger was over E");
+        assert_eq!(piece.notes[0].finger, Some(3), "the middle finger was over E");
     }
 
     #[test]
@@ -732,7 +732,7 @@ mod tests {
         ];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 3);
-        let mut fingers: Vec<u8> = piece.notes.iter().map(|n| n.finger).collect();
+        let mut fingers: Vec<u8> = piece.notes.iter().map(|n| n.finger.expect("video extraction always names a finger")).collect();
         fingers.sort_unstable();
         fingers.dedup();
         assert_eq!(fingers.len(), 3, "a finger was used twice");
@@ -808,6 +808,6 @@ mod tests {
         let onsets = vec![Onset { midi: 65, time: 3.0 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
-        assert_eq!(piece.notes[0].finger, 4, "the ring finger was over F");
+        assert_eq!(piece.notes[0].finger, Some(4), "the ring finger was over F");
     }
 }
