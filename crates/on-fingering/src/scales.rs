@@ -69,30 +69,81 @@ pub const MIN_SCALE_RUN: usize = 6;
 
 /// How much longer than the run's own median a gap has to be before it breaks the run.
 ///
-/// Scale detection reads pitches in event order and nothing else, so without this a
-/// run is five stepwise notes whether they occupy half a bar or eight bars either side
-/// of a rest, a phrase ending and a change of texture. When that misfires it applies
-/// the pattern bonus to every interior note, which is large enough to overrule the
-/// whole ergonomic model — so a false positive is expensive and worth being strict
-/// about.
+/// Scale detection reads pitches in event order, so without a clock a run is six
+/// stepwise notes whether they occupy half a bar or eight bars either side of a rest,
+/// a phrase ending and a change of texture. A false positive puts the taught pattern
+/// on every interior note with a bonus large enough to overrule the ergonomic model,
+/// so it is worth being strict about.
 ///
-/// Two and a half lets a run breathe — a scale is rarely metronomic, and the last note
-/// of a group is often longer — while still breaking at a rest or a held note.
+/// Two and a half lets a run breathe — a scale is rarely metronomic, and a phrase
+/// often slows into its last note — while still breaking at a rest.
 const RUN_GAP_FACTOR: f64 = 2.5;
 
-/// Whether the step from the previous note to this one is long enough to end a run.
+/// The longest a single step of a scale can be, in seconds, whatever the rest of the
+/// run is doing.
 ///
-/// Judged against the median of the gaps already in the run, which is robust to the
-/// one long note a scale often ends on in a way a mean is not. With fewer than two
-/// gaps there is nothing to judge against and the run continues.
-fn breaks_the_run(gaps: &[f64], next: f64) -> bool {
-    if gaps.len() < 2 {
-        return false;
+/// The relative test above compares a gap with its neighbours, which says nothing
+/// about a passage that is evenly slow. A stepwise line whose notes are three seconds
+/// apart is not a run at any tempo — it is a series of separate events that happen to
+/// be adjacent in pitch — and no relative measure can see that, because relative to
+/// each other those gaps are perfectly regular.
+///
+/// Two seconds is generous: a scale practised at one note a second is well inside it.
+/// It is the bound that stops a slow accelerating phrase being read as one long scale.
+const RUN_GAP_CEILING_SECONDS: f64 = 2.0;
+
+/// How many consecutive semitones it takes before a passage is a chromatic run.
+///
+/// Five, where a diatonic run needs six. The extra note there buys exclusion of the
+/// five-finger position, and that reasoning is diatonic: C-D-E-F-G is what one still
+/// hand plays 1-2-3-4-5. Five chromatic semitones are not a hand position — the taught
+/// fingering alternates the third finger on the black keys with the thumb on the white
+/// ones, and it crosses. So a chromatic fragment has nothing to be confused with, and
+/// gating it at six left five-note fragments to a model that reaches for alternating
+/// thumb and second finger: comfortable, and what no pianist plays.
+pub const MIN_CHROMATIC_RUN: usize = 5;
+
+/// Split a stepwise candidate wherever its clock says the notes are not consecutive.
+///
+/// Two passes, and the second one is the reason. Judging each gap against the gaps
+/// *before* it cannot work: at the head of a run there is nothing to judge against, so
+/// the first gaps are free however long they are, and a run that is speeding up never
+/// breaks at all because a running median only ratchets one way. Taking the median over
+/// the whole candidate gives every gap the same yardstick wherever it falls, which also
+/// stops a gradual slowing from truncating a real scale — the median is no longer just
+/// the fast opening.
+///
+/// A residual: a scale that slows by a fifth on every note for fifteen notes still
+/// loses its last note to the ceiling, because by then one step really is taking over
+/// two seconds. Losing one note at a cadence is a far smaller fault than reading ten
+/// seconds of separate events as a scale, which is what the ceiling is there to stop.
+fn split_on_gaps(start: usize, end: usize, onsets: &[f64]) -> Vec<(usize, usize)> {
+    let gaps: Vec<f64> = (start + 1..end)
+        .filter_map(|i| Some(onsets.get(i)? - onsets.get(i - 1)?))
+        .collect();
+    if gaps.len() != end - start - 1 || gaps.len() < 2 {
+        return vec![(start, end)];
     }
-    let mut sorted: Vec<f64> = gaps.to_vec();
+    let mut sorted = gaps.clone();
     sorted.sort_by(f64::total_cmp);
     let median = sorted[sorted.len() / 2];
-    median > 0.0 && next > median * RUN_GAP_FACTOR
+    // Either much longer than this run's own steps, or simply too long to be one.
+    let limit = if median > 0.0 {
+        (median * RUN_GAP_FACTOR).min(RUN_GAP_CEILING_SECONDS)
+    } else {
+        RUN_GAP_CEILING_SECONDS
+    };
+
+    let mut out = Vec::new();
+    let mut from = start;
+    for (k, gap) in gaps.iter().enumerate() {
+        if *gap > limit {
+            out.push((from, start + 1 + k));
+            from = start + 1 + k;
+        }
+    }
+    out.push((from, end));
+    out
 }
 
 /// Semitone offsets of the seven degrees of a major scale.
@@ -192,29 +243,22 @@ pub fn find_chromatic_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize
         let mut end = index + 1;
         let mut direction = 0i32;
         let mut previous = first;
-        let mut gaps: Vec<f64> = Vec::new();
         while end < pitches.len() {
             let Some(pitch) = pitches[end] else { break };
             let step = pitch as i32 - previous as i32;
             if step.abs() != 1 || (direction != 0 && step.signum() != direction) {
                 break;
             }
-            let gap = onsets.get(end).zip(onsets.get(end - 1)).map(|(a, b)| a - b);
-            if let Some(gap) = gap {
-                if breaks_the_run(&gaps, gap) {
-                    break;
-                }
-                gaps.push(gap);
-            }
             direction = step.signum();
             previous = pitch;
             end += 1;
         }
-        let length = end - index;
-        if length >= MIN_SCALE_RUN {
-            runs.push((index, end));
+        for (from, to) in split_on_gaps(index, end, onsets) {
+            if to - from >= MIN_CHROMATIC_RUN {
+                runs.push((from, to));
+            }
         }
-        index = if length > 1 { end } else { index + 1 };
+        index = if end - index > 1 { end } else { index + 1 };
     }
     runs
 }
@@ -317,7 +361,6 @@ pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> 
         let mut end = index + 1;
         let mut direction = 0i32;
         let mut previous = pitches[index].unwrap();
-        let mut gaps: Vec<f64> = Vec::new();
         while end < pitches.len() {
             let Some(pitch) = pitches[end] else { break };
             let step = pitch as i32 - previous as i32;
@@ -329,32 +372,29 @@ pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> 
             } else if step.signum() != direction {
                 break;
             }
-            // A scale is stepwise in time as well as in pitch. Without this, a motif
-            // and its answer eight bars later are one run.
-            let gap = onsets.get(end).zip(onsets.get(end - 1)).map(|(a, b)| a - b);
-            if let Some(gap) = gap {
-                if breaks_the_run(&gaps, gap) {
-                    break;
-                }
-                gaps.push(gap);
-            }
             previous = pitch;
             end += 1;
         }
 
-        let length = end - index;
-        if length >= MIN_SCALE_RUN {
-            let notes: Vec<u8> = pitches[index..end].iter().flatten().copied().collect();
+        // Pitch found the candidate; the clock says where it actually breaks. A scale
+        // is stepwise in time as well as in pitch, and without this a motif and its
+        // answer eight bars later are one run.
+        for (from, to) in split_on_gaps(index, end, onsets) {
+            let length = to - from;
+            if length < MIN_SCALE_RUN {
+                continue;
+            }
+            let notes: Vec<u8> = pitches[from..to].iter().flatten().copied().collect();
             if let Some(tonic) = key_of(&notes) {
                 if anchored_elsewhere(&notes, tonic) {
                     // A scale in some other key than the one its notes suggest. Say
                     // nothing rather than say the wrong thing.
                 } else {
-                    runs.push(ScaleRun { start: index, length, tonic });
+                    runs.push(ScaleRun { start: from, length, tonic });
                 }
             }
         }
-        index = if length > 1 { end } else { index + 1 };
+        index = if end - index > 1 { end } else { index + 1 };
     }
     runs
 }
@@ -609,5 +649,61 @@ mod tests {
                 "and so should attract no taught fingering"
             );
         }
+    }
+
+    #[test]
+    fn the_clock_is_read_over_the_whole_run_not_the_prefix() {
+        // Judging each gap against the gaps before it fails three ways, and all three
+        // are the same fault: a prefix is not a yardstick.
+
+        // At the head there is nothing to judge against, so two notes four seconds
+        // apart followed by a fast tail used to read as one scale.
+        let notes = seq(&[60, 62, 64, 65, 67, 69, 71]);
+        assert!(
+            find_scale_runs(&notes, &[0.0, 4.0, 8.0, 8.25, 8.5, 8.75, 9.0]).is_empty(),
+            "a run cannot begin with two four-second steps"
+        );
+
+        // A running median only ratchets up, so a passage that speeds up never broke
+        // at all — ten and a half seconds of it.
+        assert!(
+            find_scale_runs(&notes, &[0.0, 3.0, 5.5, 7.5, 9.0, 10.0, 10.5]).is_empty(),
+            "stepwise and evenly slow is a series of events, not a scale"
+        );
+
+        // And the mirror image: a real scale slowing into a cadence must not be
+        // truncated, because the taught fingering matters most at the arrival.
+        let long = seq(&[60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]);
+        let mut onsets = vec![0.0];
+        let mut gap = 0.2;
+        for _ in 1..long.len() {
+            onsets.push(onsets.last().unwrap() + gap);
+            gap *= 1.2;
+        }
+        let runs = find_scale_runs(&long, &onsets);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert!(
+            runs[0].length >= long.len() - 1,
+            "a ritardando should cost at most the last note, kept {} of {}",
+            runs[0].length,
+            long.len()
+        );
+    }
+
+    #[test]
+    fn a_chromatic_fragment_is_shorter_than_a_scale_fragment() {
+        // `MIN_SCALE_RUN` is six because five diatonic steps are a five-finger
+        // position. Five chromatic steps are not a hand position — the taught
+        // fingering crosses the thumb under the third finger — so the diatonic
+        // reasoning does not reach them, and gating them at six left five-note
+        // fragments to a model that reaches for alternating thumb and second finger.
+        let five: Vec<Option<u8>> = (60..65).map(Some).collect();
+        let onsets = even(five.len());
+        assert_eq!(find_chromatic_runs(&five, &onsets).len(), 1);
+        assert!(
+            !scale_fingerings(Hand::Right, &five, &onsets).is_empty(),
+            "a five-note chromatic fragment should take the taught fingering"
+        );
+        assert!(MIN_CHROMATIC_RUN < MIN_SCALE_RUN);
     }
 }
