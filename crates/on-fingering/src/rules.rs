@@ -1509,19 +1509,34 @@ mod tests {
         // interval against the far end of its window, so for the pair (2, 5) the charge
         // fell from seven to zero in one semitone — more than an impossible stretch
         // costs, and enough to drown every other term deciding the passage.
-        let s = scorer(RuleSet::Balliauw);
-        for (from, to) in [(2u8, 5u8), (1, 3), (3, 4), (2, 3)] {
-            for rule in [Rule::BalliauwPositionComfort, Rule::PositionChangeSize] {
+        //
+        // Each rule is asked of a set that contains it. `score_with` walks the set's
+        // own rules and skips anything outside them, so asking a Parncutt rule of a
+        // Balliauw scorer reads zero everywhere and asserts nothing — which is exactly
+        // what the first version of this test did with `PositionChangeSize`. The
+        // non-zero check below is what makes that failure loud instead of silent.
+        for (rule, set) in [
+            (Rule::BalliauwPositionComfort, RuleSet::Balliauw),
+            (Rule::PositionChangeSize, RuleSet::Parncutt),
+        ] {
+            let s = scorer(set);
+            for (from, to) in [(2u8, 5u8), (1, 3), (3, 4), (2, 3)] {
                 let at = |apart: u8| {
                     let middle = if from == 1 { 2 } else { 1 };
                     let t = trigram(Hand::Right, (60, from), (61, middle), (60 + apart, to));
                     s.score_with(&t, &[rule]).total()
                 };
-                for apart in 0..14u8 {
-                    let (here, next) = (at(apart), at(apart + 1));
+                let samples: Vec<f32> = (0..15u8).map(at).collect();
+                assert!(
+                    samples.iter().any(|v| *v != 0.0),
+                    "{rule:?} never fires under {set:?} for the pair ({from}, {to}), so                      sweeping it proves nothing"
+                );
+                for (apart, pair) in samples.windows(2).enumerate() {
                     assert!(
-                        (next - here).abs() <= 2.5,
-                        "{rule:?} jumps from {here} to {next} between {apart} and {}                          semitones for the pair ({from}, {to})",
+                        (pair[1] - pair[0]).abs() <= 2.5,
+                        "{rule:?} jumps from {} to {} between {apart} and {} semitones                          for the pair ({from}, {to})",
+                        pair[0],
+                        pair[1],
                         apart + 1
                     );
                 }
