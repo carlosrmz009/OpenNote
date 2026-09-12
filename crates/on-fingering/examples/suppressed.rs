@@ -9,6 +9,9 @@ use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
 
+/// Evenly spaced onsets, one per note.
+///
+
 fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1).expect("usage: suppressed <midi>");
     let mut file = MidiDocument::read(&path)?;
@@ -16,6 +19,12 @@ fn main() -> anyhow::Result<()> {
     let score = file.score();
 
     for hand in Hand::ALL {
+        let onsets: Vec<f64> = score
+            .notes
+            .iter()
+            .filter(|n| n.hand == Some(hand))
+            .map(|n| n.onset_seconds)
+            .collect();
         let pitches: Vec<Option<u8>> = score
             .notes
             .iter()
@@ -58,7 +67,7 @@ fn main() -> anyhow::Result<()> {
             }
             index = if length > 1 { end } else { index + 1 };
         }
-        let kept = find_scale_runs(&pitches).len();
+        let kept = find_scale_runs(&pitches, &onsets).len();
         println!(
             "{hand:?}: {all} scale runs by content, {kept} still fingered, {} suppressed",
             suppressed.len()

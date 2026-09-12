@@ -69,6 +69,16 @@ fn per_rule(solution: &on_fingering::Solution) -> Vec<(Rule, f32)> {
     out
 }
 
+/// Evenly spaced onsets, one per note.
+///
+/// Scale detection breaks a run at a gap much longer than the run's own median, so a
+/// synthetic scale needs a clock. A practised scale is even, which is also the case
+/// that must not be broken.
+fn even_onsets(n: usize) -> Vec<f64> {
+    (0..n).map(|i| i as f64 * 0.25).collect()
+}
+
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let key = args.next().unwrap_or_else(|| "Eb".into());
@@ -84,7 +94,7 @@ fn main() {
     };
     let pitches = scale_pitches(tonic, base, 2);
     let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
-    let books = scale_fingerings(hand, &optional);
+    let books = scale_fingerings(hand, &optional, &even_onsets(optional.len()));
 
     // No pattern bonus in either run: the question is what the *rules and the hand*
     // make of the two fingerings, not what the bonus is worth.

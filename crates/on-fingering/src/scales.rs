@@ -52,7 +52,48 @@ pub const CHROMATIC_BONUS: f32 = 12.0;
 
 /// How many consecutive stepwise notes it takes before a passage is a scale rather
 /// than a few notes that happen to be adjacent.
-pub const MIN_SCALE_RUN: usize = 5;
+///
+/// Six, which is one more than a hand sitting still can reach without moving.
+///
+/// At five this caught C-D-E-F-G and gave its interior notes the taught 2-3-1 — a
+/// thumb crossing on F — against the 1-2-3-4-5 every teacher writes for a five-finger
+/// position. The pattern bonus is large enough to win that argument, so the fragment
+/// has to be excluded rather than out-argued.
+///
+/// Six rather than the octave it is tempting to ask for. Measured on the test pieces:
+/// every scale run in them is exactly six notes long, so at seven the taught patterns
+/// stop reaching real music altogether — ten runs in one piece become none — while
+/// six excludes the five-finger position just as well. The collision is with what one
+/// still hand covers, and that is five notes, not eight.
+pub const MIN_SCALE_RUN: usize = 6;
+
+/// How much longer than the run's own median a gap has to be before it breaks the run.
+///
+/// Scale detection reads pitches in event order and nothing else, so without this a
+/// run is five stepwise notes whether they occupy half a bar or eight bars either side
+/// of a rest, a phrase ending and a change of texture. When that misfires it applies
+/// the pattern bonus to every interior note, which is large enough to overrule the
+/// whole ergonomic model — so a false positive is expensive and worth being strict
+/// about.
+///
+/// Two and a half lets a run breathe — a scale is rarely metronomic, and the last note
+/// of a group is often longer — while still breaking at a rest or a held note.
+const RUN_GAP_FACTOR: f64 = 2.5;
+
+/// Whether the step from the previous note to this one is long enough to end a run.
+///
+/// Judged against the median of the gaps already in the run, which is robust to the
+/// one long note a scale often ends on in a way a mean is not. With fewer than two
+/// gaps there is nothing to judge against and the run continues.
+fn breaks_the_run(gaps: &[f64], next: f64) -> bool {
+    if gaps.len() < 2 {
+        return false;
+    }
+    let mut sorted: Vec<f64> = gaps.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    median > 0.0 && next > median * RUN_GAP_FACTOR
+}
 
 /// Semitone offsets of the seven degrees of a major scale.
 const MAJOR_DEGREES: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
@@ -140,7 +181,7 @@ fn chromatic_finger(hand: Hand, pitch: u8) -> u8 {
 ///
 /// Every step a semitone, all in one direction. Five of those in a row cannot fit any
 /// major scale, so this never competes with [`find_scale_runs`] for the same notes.
-pub fn find_chromatic_runs(pitches: &[Option<u8>]) -> Vec<(usize, usize)> {
+pub fn find_chromatic_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize, usize)> {
     let mut runs = Vec::new();
     let mut index = 0;
     while index < pitches.len() {
@@ -151,11 +192,19 @@ pub fn find_chromatic_runs(pitches: &[Option<u8>]) -> Vec<(usize, usize)> {
         let mut end = index + 1;
         let mut direction = 0i32;
         let mut previous = first;
+        let mut gaps: Vec<f64> = Vec::new();
         while end < pitches.len() {
             let Some(pitch) = pitches[end] else { break };
             let step = pitch as i32 - previous as i32;
             if step.abs() != 1 || (direction != 0 && step.signum() != direction) {
                 break;
+            }
+            let gap = onsets.get(end).zip(onsets.get(end - 1)).map(|(a, b)| a - b);
+            if let Some(gap) = gap {
+                if breaks_the_run(&gaps, gap) {
+                    break;
+                }
+                gaps.push(gap);
             }
             direction = step.signum();
             previous = pitch;
@@ -257,7 +306,7 @@ fn anchored_elsewhere(notes: &[u8], tonic: u8) -> bool {
     }
 }
 
-pub fn find_scale_runs(pitches: &[Option<u8>]) -> Vec<ScaleRun> {
+pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> {
     let mut runs = Vec::new();
     let mut index = 0;
     while index < pitches.len() {
@@ -268,6 +317,7 @@ pub fn find_scale_runs(pitches: &[Option<u8>]) -> Vec<ScaleRun> {
         let mut end = index + 1;
         let mut direction = 0i32;
         let mut previous = pitches[index].unwrap();
+        let mut gaps: Vec<f64> = Vec::new();
         while end < pitches.len() {
             let Some(pitch) = pitches[end] else { break };
             let step = pitch as i32 - previous as i32;
@@ -278,6 +328,15 @@ pub fn find_scale_runs(pitches: &[Option<u8>]) -> Vec<ScaleRun> {
                 direction = step.signum();
             } else if step.signum() != direction {
                 break;
+            }
+            // A scale is stepwise in time as well as in pitch. Without this, a motif
+            // and its answer eight bars later are one run.
+            let gap = onsets.get(end).zip(onsets.get(end - 1)).map(|(a, b)| a - b);
+            if let Some(gap) = gap {
+                if breaks_the_run(&gaps, gap) {
+                    break;
+                }
+                gaps.push(gap);
             }
             previous = pitch;
             end += 1;
@@ -311,9 +370,13 @@ pub struct Taught {
 
 /// The finger the standard fingering gives each note of each scale run, keyed by
 /// position in the input sequence.
-pub fn scale_fingerings(hand: Hand, pitches: &[Option<u8>]) -> HashMap<usize, Taught> {
+pub fn scale_fingerings(
+    hand: Hand,
+    pitches: &[Option<u8>],
+    onsets: &[f64],
+) -> HashMap<usize, Taught> {
     let mut out = HashMap::new();
-    for run in find_scale_runs(pitches) {
+    for run in find_scale_runs(pitches, onsets) {
         let table = &MAJOR_SCALES[run.tonic as usize];
         let pattern = match hand {
             Hand::Right => &table.right,
@@ -331,7 +394,7 @@ pub fn scale_fingerings(hand: Hand, pitches: &[Option<u8>]) -> HashMap<usize, Ta
     }
     // After the major scales, since a chromatic reading is the more specific one: it
     // takes every step as a semitone, which no run of a major scale does.
-    for (start, end) in find_chromatic_runs(pitches) {
+    for (start, end) in find_chromatic_runs(pitches, onsets) {
         for index in (start + 1)..(end - 1) {
             let Some(pitch) = pitches[index] else { continue };
             if let Some(finger) = Finger::from_number(chromatic_finger(hand, pitch)) {
@@ -350,6 +413,12 @@ mod tests {
         pitches.iter().map(|p| Some(*p)).collect()
     }
 
+    /// Evenly spaced onsets, one per note: a scale played in time, which is the case
+    /// the gap rule must never break.
+    fn even(n: usize) -> Vec<f64> {
+        (0..n).map(|i| i as f64 * 0.25).collect()
+    }
+
     /// An ascending major scale from a tonic, spanning whole octaves.
     fn scale(tonic: u8, octaves: usize) -> Vec<Option<u8>> {
         let mut out = Vec::new();
@@ -364,7 +433,8 @@ mod tests {
 
     #[test]
     fn a_scale_is_recognised_and_its_key_identified() {
-        let runs = find_scale_runs(&scale(60, 2));
+        let notes = scale(60, 2);
+        let runs = find_scale_runs(&notes, &even(notes.len()));
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].start, 0);
         assert_eq!(runs[0].length, 15);
@@ -374,7 +444,8 @@ mod tests {
     #[test]
     fn keys_with_accidentals_are_identified_too() {
         for tonic in 0..12u8 {
-            let runs = find_scale_runs(&scale(60 + tonic, 1));
+            let notes = scale(60 + tonic, 1);
+            let runs = find_scale_runs(&notes, &even(notes.len()));
             assert_eq!(runs.len(), 1, "scale on {tonic} not found");
             assert_eq!(runs[0].tonic, tonic, "scale on {tonic} misidentified");
         }
@@ -382,30 +453,35 @@ mod tests {
 
     #[test]
     fn a_few_adjacent_notes_are_not_a_scale() {
-        assert!(find_scale_runs(&seq(&[60, 62, 64, 65])).is_empty());
+        assert!(find_scale_runs(&seq(&[60, 62, 64, 65]), &even(16)).is_empty());
     }
 
     #[test]
     fn an_arpeggio_is_not_a_scale() {
-        assert!(find_scale_runs(&seq(&[60, 64, 67, 72, 76, 79])).is_empty());
+        assert!(find_scale_runs(&seq(&[60, 64, 67, 72, 76, 79]), &even(16)).is_empty());
     }
 
     #[test]
     fn a_chromatic_run_is_not_a_major_scale() {
-        assert!(find_scale_runs(&seq(&[60, 61, 62, 63, 64, 65, 66])).is_empty());
+        assert!(find_scale_runs(&seq(&[60, 61, 62, 63, 64, 65, 66]), &even(16)).is_empty());
     }
 
     #[test]
     fn a_run_that_turns_round_is_two_runs_not_one() {
-        let up_then_down = seq(&[60, 62, 64, 65, 67, 69, 71, 72, 71, 69, 67, 65, 64, 62, 60]);
-        let runs = find_scale_runs(&up_then_down);
+        // Two octaves each way, so both halves clear `MIN_SCALE_RUN` on their own and
+        // the test is about the turn rather than about the length.
+        let up = [60u8, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84];
+        let mut both: Vec<u8> = up.to_vec();
+        both.extend(up.iter().rev().skip(1).copied());
+        let up_then_down = seq(&both);
+        let runs = find_scale_runs(&up_then_down, &even(up_then_down.len()));
         assert_eq!(runs.len(), 2, "{runs:?}");
     }
 
     #[test]
     fn the_right_hand_gets_the_published_c_major_fingering() {
         let notes = scale(60, 2);
-        let map = scale_fingerings(Hand::Right, &notes);
+        let map = scale_fingerings(Hand::Right, &notes, &even(notes.len()));
         let fingers: Vec<u8> = (1..notes.len() - 1).map(|i| map[&i].finger.number()).collect();
         assert_eq!(fingers, vec![2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4]);
     }
@@ -413,7 +489,7 @@ mod tests {
     #[test]
     fn the_left_hand_gets_the_published_c_major_fingering() {
         let notes = scale(60, 2);
-        let map = scale_fingerings(Hand::Left, &notes);
+        let map = scale_fingerings(Hand::Left, &notes, &even(notes.len()));
         let fingers: Vec<u8> = (1..notes.len() - 1).map(|i| map[&i].finger.number()).collect();
         assert_eq!(fingers, vec![4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2]);
     }
@@ -467,7 +543,7 @@ mod tests {
     #[test]
     fn the_chromatic_scale_is_three_on_the_black_keys() {
         let line: Vec<Option<u8>> = (60..=72).map(Some).collect();
-        let right = scale_fingerings(Hand::Right, &line);
+        let right = scale_fingerings(Hand::Right, &line, &even(line.len()));
         // 1-3-1-3-1-2-3-1-3-1-3-1-2, less the two ends the search settles itself.
         let wanted = [1u8, 3, 1, 3, 1, 2, 3, 1, 3, 1, 3, 1, 2];
         for index in 1..line.len() - 1 {
@@ -478,13 +554,59 @@ mod tests {
             );
         }
         // The left hand is the mirror: its second finger takes E and B, not C and F.
-        let left = scale_fingerings(Hand::Left, &line);
+        let left = scale_fingerings(Hand::Left, &line, &even(line.len()));
         let wanted = [1u8, 3, 1, 3, 2, 1, 3, 1, 3, 1, 3, 2, 1];
         for index in 1..line.len() - 1 {
             assert_eq!(
                 left.get(&index).map(|t| t.finger.number()),
                 Some(wanted[index]),
                 "left hand at {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rest_in_the_middle_ends_the_run() {
+        // Scale detection reads pitches in event order. Without a clock, a motif and
+        // its answer a few bars later are one run, and every interior note of the
+        // invention collects a bonus large enough to overrule the ergonomic model.
+        // Ten notes, so a break at the midpoint leaves five either side and neither
+        // half is long enough to be a scale on its own.
+        let notes = seq(&[60, 62, 64, 65, 67, 69, 71, 72, 74, 76]);
+
+        // Played in time: one run, as before.
+        assert_eq!(find_scale_runs(&notes, &even(notes.len())).len(), 1);
+
+        // The same pitches with a rest in the middle are two fragments.
+        let mut broken = even(notes.len());
+        for onset in broken.iter_mut().skip(5) {
+            *onset += 4.0;
+        }
+        assert!(
+            find_scale_runs(&notes, &broken).is_empty(),
+            "a stepwise motif either side of a rest is not a scale"
+        );
+    }
+
+    #[test]
+    fn a_five_finger_position_is_not_a_scale() {
+        // C-D-E-F-G is what a hand sitting still plays 1-2-3-4-5, and it is what every
+        // teacher writes. Read as a scale run it collects the taught 2-3-1 instead — a
+        // thumb crossing on F — and the bonus is large enough to win that argument, so
+        // the fragment has to be excluded rather than out-argued.
+        //
+        // This is the boundary `SCALE_BONUS` is calibrated against: the constant can be
+        // raised to fix a flat key without quietly breaking the five-finger position,
+        // because the position is no longer a run at all.
+        for start in [60u8, 62, 64, 65, 67] {
+            let five = seq(&[start, start + 2, start + 4, start + 5, start + 7]);
+            assert!(
+                find_scale_runs(&five, &even(five.len())).is_empty(),
+                "five notes under a still hand should not be a scale run"
+            );
+            assert!(
+                scale_fingerings(Hand::Right, &five, &even(five.len())).is_empty(),
+                "and so should attract no taught fingering"
             );
         }
     }

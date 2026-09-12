@@ -101,7 +101,7 @@ fn show(tonic: u8, hand: Hand, octaves: usize, options: &FingeringOptions) {
     };
     let pitches = scale_pitches(tonic, base, octaves);
     let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
-    let want = scale_fingerings(hand, &optional);
+    let want = scale_fingerings(hand, &optional, &even_onsets(optional.len()));
     let score = melody(&pitches, hand);
     let solution = finger_score(&score, options);
     let mut got = vec![0u8; pitches.len()];
@@ -132,6 +132,16 @@ fn show(tonic: u8, hand: Hand, octaves: usize, options: &FingeringOptions) {
 
   (* where the model disagrees with the books)");
 }
+
+/// Evenly spaced onsets, one per note.
+///
+/// Scale detection breaks a run at a gap much longer than the run's own median, so a
+/// synthetic scale needs a clock. A practised scale is even, which is also the case
+/// that must not be broken.
+fn even_onsets(n: usize) -> Vec<f64> {
+    (0..n).map(|i| i as f64 * 0.25).collect()
+}
+
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -165,7 +175,7 @@ fn main() {
             };
             let pitches = scale_pitches(tonic, base, octaves);
             let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
-            let want = scale_fingerings(hand, &optional);
+            let want = scale_fingerings(hand, &optional, &even_onsets(optional.len()));
             for (which, options) in [(0, &taught_options), (1, &model_options)] {
                 let (same, of) = agreement(&pitches, &want, hand, options);
                 let index = slot * 2 + which;
@@ -229,7 +239,7 @@ fn main() {
                 };
                 let pitches = scale_pitches(tonic, base, octaves);
                 let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
-                let want = scale_fingerings(hand, &optional);
+                let want = scale_fingerings(hand, &optional, &even_onsets(optional.len()));
                 let (same, of) = agreement(&pitches, &want, hand, &options);
                 hit.0 += same;
                 hit.1 += of;
