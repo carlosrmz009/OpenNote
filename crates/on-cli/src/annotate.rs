@@ -252,6 +252,7 @@ mod tests {
             ],
             cost: 0.0,
             explanations: Vec::new(),
+            agreement: None,
         };
 
         assert_eq!(
@@ -263,7 +264,12 @@ mod tests {
     #[test]
     fn a_hand_with_nothing_to_play_has_no_line() {
         let score = Score::default();
-        let solution = Solution { fingerings: Vec::new(), cost: 0.0, explanations: Vec::new() };
+        let solution = Solution {
+            fingerings: Vec::new(),
+            cost: 0.0,
+            explanations: Vec::new(),
+            agreement: None,
+        };
         assert_eq!(fingering_line(&score, &solution, Hand::Left), None);
     }
 }

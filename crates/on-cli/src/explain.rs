@@ -68,8 +68,12 @@ pub fn run(args: ExplainArgs) -> Result<()> {
     // How much the four published sets actually agreed. Worth printing: it is the one
     // honest measure of how much work the consensus is doing, and if they never
     // disagreed there would be no point combining them.
-    let (unanimous, split) = on_fingering::Agreement::across_published(score, &options, prior_ref)
-        .tally();
+    //
+    // Only when the consensus is what produced the fingering above. Asked of a single
+    // published set, no vote was taken, and printing one anyway describes a model the
+    // reader did not use. The solve carries the figure so getting it costs nothing;
+    // recomputing it here used to run the four searches a second time.
+    let (unanimous, split) = solution.agreement.unwrap_or((0, 0));
     let total = unanimous + split;
     if total > 0 {
         let share = 100.0 * unanimous as f32 / total as f32;

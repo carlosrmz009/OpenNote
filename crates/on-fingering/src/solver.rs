@@ -215,6 +215,13 @@ pub struct Solution {
     pub cost: f32,
     /// Per-note reasoning.
     pub explanations: Vec<NoteExplanation>,
+    /// How far the four published sets agreed, as (unanimous, split) notes, when the
+    /// consensus was the model used.
+    ///
+    /// `None` for a single published set, because then no vote was taken. Carried here
+    /// so a caller wanting the figure does not have to run the four searches a second
+    /// time to get it — which is four fifths of the work of a consensus run.
+    pub agreement: Option<(usize, usize)>,
 }
 
 impl Solution {
@@ -336,9 +343,12 @@ pub fn finger_score_consensus(
     prior: Option<&dyn FingeringPrior>,
 ) -> Solution {
     let agreement = Agreement::across_published(score, options, prior);
+    let tally = agreement.tally();
     let mut combined = options.clone();
     combined.rule_set = RuleSet::Consensus;
-    solve_score(score, &combined, prior, Some(&agreement))
+    let mut solution = solve_score(score, &combined, prior, Some(&agreement));
+    solution.agreement = Some(tally);
+    solution
 }
 
 /// Finger a whole score, both hands.
@@ -423,7 +433,7 @@ fn solve_score(
     finger_the_twins(score, &mut fingerings);
     fingerings.sort_by_key(|f| f.note);
     explanations.sort_by_key(|e| e.note);
-    Solution { fingerings, cost, explanations }
+    Solution { fingerings, cost, explanations, agreement: None }
 }
 
 /// Give the same finger to notes the search collapsed into one.
@@ -678,7 +688,8 @@ impl<'a> HandSolver<'a> {
             .iter()
             .map(|e| if e.len() == 1 { Some(e.notes[0]) } else { None })
             .collect();
-        self.scales = crate::scales::scale_fingerings(self.hand, &line);
+        let onsets: Vec<f64> = events.iter().map(|e| e.onset_seconds).collect();
+        self.scales = crate::scales::scale_fingerings(self.hand, &line, &onsets);
     }
 
     /// Every fingering of a chord that this hand could physically arrange.
@@ -1144,7 +1155,7 @@ impl<'a> HandSolver<'a> {
             }
         }
 
-        Solution { fingerings, cost, explanations }
+        Solution { fingerings, cost, explanations, agreement: None }
     }
 }
 
