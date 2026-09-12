@@ -68,8 +68,14 @@ No sound font is bundled either. The piano in `on-audio` is synthesised from a m
 of a struck string, so out of the box there are no samples and no sample licence.
 
 A SoundFont you supply is played instead, through `rustysynth` (MIT). What that asks
-of you depends on which one you chose: the good openly licensed grands are CC-BY,
-which wants the author credited on anything you publish with that piano on it.
+of you depends on which one you chose. The openly licensed grands from FreePats are
+CC-BY, which wants the author credited on anything you publish with that piano on it.
+The concert grand used for this project's own renders is under the **Free Art License
+1.3**, which is copyleft: it permits commercial use, and asks for attribution, a
+pointer to the original, and that a *subsequent work* be released under the same or a
+compatible licence. Whether audio rendered from a sampled instrument is a subsequent
+work is a question for a lawyer and not for this file; `on-audio`'s modelled piano
+uses no samples and avoids it entirely.
 `assets/soundfont/README.md` names them and their authors; `assets/soundfont/*.sf2` is
 gitignored, so a downloaded instrument stays in your working copy.
 

@@ -57,9 +57,28 @@ anything you publish with that piano on it — a rendered video, most obviously.
 - **YDP Grand Piano** — Roberto (roberto@zenvoid.org), from Zenph Studios / OLPC samples
 - **Upright Piano KW** — CC0, so nothing is required
 
-Whatever you supply yourself carries its own terms, and they are yours to honour: the
-Yamaha C7 this project's own renders use is not from FreePats and is not covered by
-anything above.
+Whatever you supply yourself carries its own terms, and they are yours to honour.
+The concert grand this project's own renders use is not from FreePats and is not
+covered by anything above: it is under the **Free Art License 1.3**, which is a
+copyleft licence.
+
+That matters more than CC-BY does, and it is worth reading before you build anything
+on it. The Free Art License permits commercial use outright — distribution "with or
+without any charge" — and asks in return that you name the original authors, say where
+the original can be found, attach the licence or point to it, and, for a *subsequent
+work*, say that you modified it and release it under the same or a compatible licence.
+
+The question that needs a real answer, and this file is not the place it gets one, is
+whether audio rendered from a sampled instrument counts as a subsequent work. A
+rendering reproduces the samples rather than merely being made with a tool, which is
+not the same situation as a program's output, and the copyleft term is what makes the
+answer matter. If you are shipping rendered audio in something proprietary, ask a
+lawyer rather than this README.
+
+There is a way round it that costs nothing: the piano in `on-audio` is synthesised
+from a model of a struck string and uses no samples at all, so it carries no sample
+licence of any kind. It is the default, and it is what plays when no `.sf2` is
+present.
 
 `assets/soundfont/*.sf2` is gitignored. Downloaded samples are yours and stay in your
 working copy; redistributing them is a licence question this repository does not answer
