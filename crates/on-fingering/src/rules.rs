@@ -138,11 +138,13 @@ pub enum Rule {
     AlternationFingerChange,
     /// Badgerow: pivoting from a black-key thumb onto a weak finger.
     BlackThumbPivot,
+    /// One finger asked to play two different notes in a row.
+    RepeatedFinger,
 }
 
 impl Rule {
     /// Every rule, in a fixed order that the weight vector depends on.
-    pub const ALL: [Rule; 20] = [
+    pub const ALL: [Rule; 21] = [
         Rule::Stretch,
         Rule::SmallSpan,
         Rule::LargeSpan,
@@ -163,6 +165,7 @@ impl Rule {
         Rule::AlternationPairing,
         Rule::AlternationFingerChange,
         Rule::BlackThumbPivot,
+        Rule::RepeatedFinger,
     ];
 
     /// Index into the weight vector.
@@ -193,6 +196,7 @@ impl Rule {
             Rule::AlternationPairing => "aap",
             Rule::AlternationFingerChange => "aaf",
             Rule::BlackThumbPivot => "abp",
+            Rule::RepeatedFinger => "rep",
         }
     }
 
@@ -219,6 +223,7 @@ impl Rule {
             Rule::AlternationPairing => "it alternates between two adjacent weak fingers",
             Rule::AlternationFingerChange => "a repeated pitch is taken by a different finger",
             Rule::BlackThumbPivot => "it pivots from a black-key thumb onto a weak finger",
+            Rule::RepeatedFinger => "one finger has to play two different notes in a row",
         }
     }
 }
@@ -251,11 +256,26 @@ pub enum RuleSet {
 /// second, and that is the whole of what is wrong with it.
 const SAME_FINGER_STEP: f32 = 3.0;
 
+/// Rules every set carries, whatever its author wrote.
+///
+/// [`Rule::RepeatedFinger`] is not one author's opinion and does not belong to any of
+/// the four papers. It is a condition all of them get for free and this engine does
+/// not: Parncutt enumerates only fingerings in which consecutive notes take different
+/// fingers, so a repeated finger cannot arise for him and needs no rule. This search
+/// enumerates the larger space, so the constraint has to be stated.
+///
+/// It used to be stated inside [`Rule::Impractical`], which Balliauw added and
+/// Parncutt and Jacobs therefore do not have — so selecting either of those lost the
+/// same-finger constraint along with the span test, and the search answered C major
+/// with a repeated thumb and three fingers. Measured at 35% agreement against 80% for
+/// the two sets that happened to include it.
+pub const UNIVERSAL_RULES: [Rule; 1] = [Rule::RepeatedFinger];
+
 /// Rules about what a hand can physically do, rather than about what is comfortable.
 ///
 /// These keep their full weight in the consensus however few of the published sets
 /// list them: a majority cannot vote an interval into being reachable.
-const HARD_CONSTRAINTS: [Rule; 1] = [Rule::Impractical];
+const HARD_CONSTRAINTS: [Rule; 2] = [Rule::Impractical, Rule::RepeatedFinger];
 
 /// The published sets, which [`RuleSet::Consensus`] is built from.
 pub const PUBLISHED: [RuleSet; 4] =
@@ -279,6 +299,7 @@ impl RuleSet {
                 ThumbOnBlack,
                 FiveOnBlack,
                 ThumbPassing,
+                RepeatedFinger,
             ],
             // Jacobs drops the three-four-five rule, softens large spans, and
             // considers only finger 4 weak.
@@ -294,6 +315,7 @@ impl RuleSet {
                 ThumbOnBlack,
                 FiveOnBlack,
                 ThumbPassing,
+                RepeatedFinger,
             ],
             RuleSet::Balliauw => &[
                 Stretch,
@@ -311,6 +333,7 @@ impl RuleSet {
                 RepeatFingerOnPositionChange,
                 Impractical,
                 NonRepeatingFinger,
+                RepeatedFinger,
             ],
             RuleSet::Badgerow => &[
                 Stretch,
@@ -329,6 +352,7 @@ impl RuleSet {
                 AlternationPairing,
                 AlternationFingerChange,
                 BlackThumbPivot,
+                RepeatedFinger,
             ],
             // Everything any of them charges for. Which of these matter, and by how
             // much, is not decided here — it is decided by the weights, which scale
@@ -355,6 +379,7 @@ impl RuleSet {
                 AlternationPairing,
                 AlternationFingerChange,
                 BlackThumbPivot,
+                RepeatedFinger,
             ],
         }
     }
@@ -418,6 +443,10 @@ impl Default for RuleWeights {
         // heavily, so the solver treats it as very nearly a hard constraint while
         // still always being able to return an answer.
         w[Rule::Impractical.index()] = 10.0;
+        // The same weight: a finger that has to leave one key to reach the next cannot
+        // join the two, and that was the charge this carried while it lived inside
+        // `Impractical`.
+        w[Rule::RepeatedFinger.index()] = 10.0;
         RuleWeights(w)
     }
 }
@@ -672,6 +701,7 @@ impl RuleScorer {
             Rule::AlternationPairing => self.alternation_pairing(t),
             Rule::AlternationFingerChange => self.alternation_finger_change(t),
             Rule::BlackThumbPivot => self.black_thumb_pivot(t),
+            Rule::RepeatedFinger => self.repeated_finger(t),
         }
     }
 
@@ -1044,20 +1074,30 @@ impl RuleScorer {
     /// An interval the finger pair cannot span at all. Weighted heavily, so the
     /// solver treats it as very nearly a hard constraint without ever being unable
     /// to return an answer.
+    /// One finger asked to play two different notes in a row.
+    ///
+    /// A flat charge rather than one that grows with the interval. Whether the two
+    /// notes are a semitone or an octave apart, the finger has to leave the first to
+    /// reach the second, and that is the whole of what is wrong with it.
+    ///
+    /// Repeating a *pitch* is the exception and is what a finger is supposed to do
+    /// there, so it is left alone.
+    fn repeated_finger(&self, t: &Trigram) -> f32 {
+        let Some(prev) = t.prev else { return 0.0 };
+        if prev.finger == t.current.finger && prev.midi != t.current.midi {
+            SAME_FINGER_STEP
+        } else {
+            0.0
+        }
+    }
+
     fn impractical(&self, t: &Trigram) -> f32 {
         let Some(prev) = t.prev else { return 0.0 };
-        // One finger cannot be in two places. Every other pair of fingers spans some
-        // range and the charge is how far past it the interval reaches, which is the
-        // right shape for a stretch — but a finger against itself spans exactly nothing,
-        // so that arithmetic charges a semitone step almost nothing at all. It is not a
-        // small stretch, it is a different thing: the finger has to leave one key to
-        // reach the other, and a line played that way is not legato however close the
-        // two notes are.
-        //
-        // Repeating a pitch is the exception and is what a finger is *supposed* to do
-        // there, so it is left alone.
+        // A finger spans exactly nothing against itself, so the span arithmetic below
+        // says a semitone step costs almost nothing. That is not a small stretch, it is
+        // a different question, and it is asked by `Rule::RepeatedFinger`.
         if prev.finger == t.current.finger {
-            return if prev.midi == t.current.midi { 0.0 } else { SAME_FINGER_STEP };
+            return 0.0;
         }
         let span = self.spans.get(t.hand, prev.finger, t.current.finger);
         let (lo, hi) = (span.min_prac as f32, span.max_prac as f32);
@@ -1541,6 +1581,50 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_set_carries_the_rules_no_author_had_to_write() {
+        // `RepeatedFinger` belongs to none of the four papers, because none of them
+        // needs it: they enumerate only fingerings in which consecutive notes take
+        // different fingers, so the case cannot arise. This search enumerates the
+        // larger space, so every set has to carry the constraint however it was
+        // written — and when it lived inside `Impractical`, the two sets without that
+        // rule lost it and answered C major with a repeated thumb.
+        for set in PUBLISHED.iter().chain(std::iter::once(&RuleSet::Consensus)) {
+            for rule in UNIVERSAL_RULES {
+                assert!(
+                    set.rules().contains(&rule),
+                    "{set:?} is missing {rule:?}, which is not optional"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_finger_cannot_play_two_different_notes_in_a_row_under_any_set() {
+        // The behaviour that vanished. Every set must charge it, and none may charge a
+        // genuinely repeated pitch, which is what a finger is for.
+        for set in [
+            RuleSet::Parncutt,
+            RuleSet::Jacobs,
+            RuleSet::Balliauw,
+            RuleSet::Badgerow,
+            RuleSet::Consensus,
+        ] {
+            let s = scorer(set);
+            let stepped = trigram(Hand::Right, (60, 1), (62, 1), (64, 2));
+            assert!(
+                s.score_with(&stepped, &[Rule::RepeatedFinger]).total() > 0.0,
+                "{set:?} lets one finger take two different notes in a row"
+            );
+            let repeated = trigram(Hand::Right, (60, 1), (60, 1), (62, 2));
+            assert_eq!(
+                s.score_with(&repeated, &[Rule::RepeatedFinger]).total(),
+                0.0,
+                "{set:?} charges a repeated pitch, which is what a finger is for"
+            );
         }
     }
 }

@@ -45,7 +45,7 @@ const PER_NOTE_RULES: &[Rule] = &[Rule::WeakFinger];
 
 /// The same, for a voice whose finger did not change while the hand moved.
 ///
-/// [`Rule::Impractical`] charges a finger for playing two different notes in a row,
+/// [`Rule::RepeatedFinger`] charges a finger for playing two different notes in a row,
 /// because a line played that way cannot be joined. Between two chords that charge is
 /// wrong: the fingers are the corners of a shape rather than voices of a line, and a
 /// shape is meant to keep its fingers while the hand carries it somewhere else. Octaves
@@ -55,7 +55,8 @@ const PER_NOTE_RULES: &[Rule] = &[Rule::WeakFinger];
 ///
 /// The rule is left in place wherever the finger *did* change, since it is then saying
 /// something about the span between two different fingers, which is still true.
-const SHIFTED_VOICE_RULES: &[Rule] = &[Rule::WeakFinger, Rule::Impractical];
+const SHIFTED_VOICE_RULES: &[Rule] =
+    &[Rule::WeakFinger, Rule::Impractical, Rule::RepeatedFinger];
 
 /// How a fingering search is configured.
 #[derive(Debug, Clone)]
