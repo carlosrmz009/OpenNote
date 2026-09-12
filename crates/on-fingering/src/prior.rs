@@ -34,6 +34,43 @@
 //! have been seen in the specific one. A context seen once, with one finger, is
 //! mostly ignored; a context seen a hundred times, with four different fingers, is
 //! trusted and its diversity is taken as real.
+//!
+//! # Symmetry
+//!
+//! Backing off to a more general *context* is not the only way to make a small corpus
+//! go further. A fingering is also the same fingering when the keyboard is looked at
+//! in a mirror, or when the passage is played backwards, and two of the symmetries in
+//! Nakamura, Saito & Yoshii (2020, sec. 5.2.2) say so:
+//!
+//! * **reflection** — the left hand is the right hand mirrored. Reflecting pitch about
+//!   any D maps white keys to white and black to black, so it is an exact symmetry of
+//!   the keyboard rather than an approximation: every interval flips sign and every
+//!   colour survives. The thumb lands where the thumb was, because it lies on the low
+//!   side of the right hand and the high side of the left.
+//! * **time inversion** — a passage played from the end costs a hand what it cost
+//!   forwards. Malwine Bree wrote this down for Leschetizky's students in 1902, and
+//!   the scale fingerings bear it out: a rising C major right hand, 1-2-3-1-2-3-4-5,
+//!   reversed is exactly the fingering taught for the descent.
+//!
+//! Both fill a second table per hand, in that hand's own frame, holding every image of
+//! everything ever observed. Those tables are not a *more general context* — they hold
+//! the same contexts, seen several times over — so they sit between the hand's own
+//! counts and the backoff: an estimate is shrunk first toward what the symmetries say,
+//! and only then toward the more general context.
+//!
+//! Per hand, and reflected on the way in rather than on the way out, because the two
+//! hands answer the same context oppositely: a rising interval after the thumb means
+//! one thing to a right hand and the reverse to a left one. Pooling them unreflected
+//! measures worse than not pooling at all.
+//!
+//! This is what makes the symmetries free rather than a trade. Nakamura et al. found
+//! (sec. 6.5, Fig. 7) that imposing them *raises* accuracy on a small corpus and
+//! *lowers* it on a large one, because a real pianist is not quite symmetric and
+//! enough data eventually shows it. Putting them in the backoff chain rather than into
+//! the model gets both halves of that finding at once: with little data the hand's own
+//! counts are thin and the pooled estimate carries, and with a lot of data they
+//! dominate it and whatever asymmetry is real survives. There is nothing to switch and
+//! nothing to tune.
 
 use std::collections::HashMap;
 
@@ -128,6 +165,20 @@ fn bucket(semitones: i32) -> usize {
     (semitones.clamp(-MAX_INTERVAL - 1, MAX_INTERVAL + 1) + MAX_INTERVAL + 1) as usize
 }
 
+/// The pitch that plays the same part in the other hand.
+///
+/// Reflection about D4. Any D would do, and so would any G sharp: those are the two
+/// axes the pattern of black keys is symmetric about, which is what makes this an
+/// exact symmetry rather than a near one. White keys map to white, black to black, and
+/// every interval flips sign.
+///
+/// The result can land off the end of the keyboard, and it does not matter. Nothing
+/// downstream reads the pitch itself — only the interval between two of them and the
+/// colour of each, and the reflection preserves both wherever it lands.
+fn reflect(midi: u8) -> u8 {
+    (2 * 62i32 - i32::from(midi)) as u8
+}
+
 /// Two key colours, as a number 0..=3.
 fn colours(from: u8, to: u8) -> u8 {
     u8::from(on_hand::keyboard::is_black(from)) * 2 + u8::from(on_hand::keyboard::is_black(to))
@@ -145,29 +196,24 @@ impl HandCounts {
         self.tallies.entry(context).or_insert([0; 5])[finger.index()] += 1;
     }
 
-    /// Probability of `finger` in this context, smoothed by backing off.
+    /// One Witten-Bell step: shrink a broader estimate toward what was seen here.
     ///
-    /// Witten-Bell: the specific estimate is trusted in proportion to how much was
-    /// seen there, and the number of *distinct* fingers seen sets how much weight the
-    /// more general estimate keeps. A context with one observation of one finger is
-    /// nearly ignored; a well-populated one is nearly taken at face value.
-    fn probability(&self, context: &Context, finger: Finger) -> f32 {
-        let backoff = match context.backoff() {
-            Some(parent) => self.probability(&parent, finger),
-            // At the very bottom, before anything has been seen, every finger is
-            // equally likely. This is the only place a number is invented.
-            None => 0.2,
-        };
+    /// The estimate from this table is trusted in proportion to how much was seen in
+    /// this context, and the number of *distinct* fingers seen sets how much weight
+    /// `broader` keeps. A context with one observation of one finger barely moves it;
+    /// a well-populated one nearly replaces it. Seeing nothing at all passes it
+    /// through untouched, which is what makes the chain safe to extend.
+    fn shrink(&self, context: &Context, finger: Finger, broader: f32) -> f32 {
         let Some(tally) = self.tallies.get(context) else {
-            return backoff;
+            return broader;
         };
         let total: u32 = tally.iter().sum();
         if total == 0 {
-            return backoff;
+            return broader;
         }
         let distinct = tally.iter().filter(|c| **c > 0).count() as f32;
         let count = tally[finger.index()] as f32;
-        (count + distinct * backoff) / (total as f32 + distinct)
+        (count + distinct * broader) / (total as f32 + distinct)
     }
 
     /// How many observations went into this model.
@@ -183,6 +229,41 @@ impl HandCounts {
 #[derive(Debug, Default, Clone)]
 pub struct NgramPrior {
     hands: [HandCounts; 2],
+    /// Every observation under its symmetry images, one table per hand and each in
+    /// that hand's own frame. See the module documentation: this is what a thin corpus
+    /// falls back on.
+    ///
+    /// Per hand rather than shared, because the two hands answer the same context
+    /// oppositely — a rising interval after the thumb means one thing to a right hand
+    /// and the reverse to a left one. Pooling them unreflected would average two
+    /// contradictory distributions together, which measures worse than not pooling at
+    /// all.
+    pooled: [HandCounts; 2],
+    /// Which symmetries fill that table. Measured rather than assumed; see
+    /// `cargo run -p on-fingering --example symmetry`.
+    symmetries: Symmetries,
+}
+
+/// Which of the two symmetries the pooled table is allowed to assume.
+///
+/// They are not equally safe. Nakamura, Saito & Yoshii (2020, sec. 6.5) found the
+/// reflection to be the stronger assumption of the two — "the degree of asymmetry is
+/// larger for the reflection symmetry than the time inversion symmetry" — and that is
+/// visible here too, so the two can be chosen between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Symmetries {
+    /// Neither: each hand learns only from itself, played only forwards.
+    None,
+    /// Time inversion only: a hand learns from its own passages played backwards.
+    /// Adds nothing a balanced corpus does not already have, and is here because
+    /// Nakamura et al. found it the safer of the two on a large one.
+    Time,
+    /// Both, including the reflection that ties the two hands together. The default:
+    /// measured to help most where there is least data, by 11 points on one scale and
+    /// still 4 on six, and to be the only thing that carries anything at all from one
+    /// hand to the other.
+    #[default]
+    Full,
 }
 
 impl NgramPrior {
@@ -191,13 +272,55 @@ impl NgramPrior {
         Self::default()
     }
 
+    /// An empty model assuming the given symmetries.
+    pub fn with_symmetries(symmetries: Symmetries) -> Self {
+        Self { symmetries, ..Self::default() }
+    }
+
     /// Learn from one hand's part of one piece.
     ///
     /// `placements` are the notes of that hand in time order, each with the finger a
     /// pianist actually used. Every context this note falls into is counted, from the
     /// most specific down, which is what lets the backoff work later.
+    ///
+    /// The same notes are counted a second time into the pooled table, under each of
+    /// the four images the two symmetries generate: as played, mirrored into the other
+    /// hand, reversed in time, and both at once.
     pub fn observe(&mut self, hand: Hand, placements: &[Placement]) {
-        let counts = &mut self.hands[hand as usize];
+        Self::count(&mut self.hands[hand as usize], placements);
+        if self.symmetries == Symmetries::None {
+            return;
+        }
+
+        // Time inversion: this hand's own table gets the passage forwards and
+        // backwards.
+        let mut backwards = placements.to_vec();
+        backwards.reverse();
+        Self::count(&mut self.pooled[hand as usize], placements);
+        Self::count(&mut self.pooled[hand as usize], &backwards);
+
+        if self.symmetries != Symmetries::Full {
+            return;
+        }
+        // Reflection: the *other* hand's table gets the same passage mirrored, which is
+        // what that hand would have played. Both images go in, so each hand's pooled
+        // table ends up holding all four.
+        let other = match hand {
+            Hand::Right => Hand::Left,
+            Hand::Left => Hand::Right,
+        };
+        let mirrored: Vec<Placement> = placements
+            .iter()
+            .map(|p| Placement::new(reflect(p.midi), p.finger))
+            .collect();
+        let mut mirrored_backwards = mirrored.clone();
+        mirrored_backwards.reverse();
+        Self::count(&mut self.pooled[other as usize], &mirrored);
+        Self::count(&mut self.pooled[other as usize], &mirrored_backwards);
+    }
+
+    /// Tally one sequence of placements into one table.
+    fn count(counts: &mut HandCounts, placements: &[Placement]) {
         for (index, current) in placements.iter().enumerate() {
             counts.observe(Context::Empty, current.finger);
             let Some(previous) = index.checked_sub(1).map(|i| placements[i]) else {
@@ -220,6 +343,24 @@ impl NgramPrior {
         }
     }
 
+    /// Probability of `finger` in this context, smoothed.
+    ///
+    /// Three tiers, narrowest first: what this hand did here, what the symmetries say
+    /// about here, and what happens in the more general context. Each shrinks the one
+    /// behind it, so a tier with nothing in it costs nothing.
+    fn probability(&self, hand: Hand, context: &Context, finger: Finger) -> f32 {
+        let general = match context.backoff() {
+            Some(parent) => self.probability(hand, &parent, finger),
+            // At the very bottom, before anything has been seen, every finger is
+            // equally likely. This is the only place a number is invented.
+            None => 0.2,
+        };
+        // Always in this hand's own frame: the reflection was applied when the
+        // observations went in, not when the question is asked.
+        let pooled = self.pooled[hand as usize].shrink(context, finger, general);
+        self.hands[hand as usize].shrink(context, finger, pooled)
+    }
+
     /// How many notes this model was trained on, both hands together.
     pub fn observations(&self) -> u32 {
         self.hands.iter().map(HandCounts::observations).sum()
@@ -240,9 +381,12 @@ impl NgramPrior {
             std::fs::create_dir_all(parent)?;
         }
         let stored = StoredModel {
-            version: 1,
+            version: 2,
+            symmetries: self.symmetries,
             left: serialize_hand(&self.hands[Hand::Left as usize]),
             right: serialize_hand(&self.hands[Hand::Right as usize]),
+            pooled_left: serialize_hand(&self.pooled[Hand::Left as usize]),
+            pooled_right: serialize_hand(&self.pooled[Hand::Right as usize]),
         };
         let text = serde_json::to_string_pretty(&stored)?;
         std::fs::write(path, text)?;
@@ -254,12 +398,15 @@ impl NgramPrior {
         let text = std::fs::read_to_string(path)?;
         let stored: StoredModel = serde_json::from_str(&text)?;
         anyhow::ensure!(
-            stored.version == 1,
-            "this model was written by a different version of opennote"
+            stored.version == 2,
+            "this model was written by a different version of opennote; retrain it"
         );
         let mut prior = Self::new();
         prior.hands[Hand::Left as usize] = deserialize_hand(&stored.left);
         prior.hands[Hand::Right as usize] = deserialize_hand(&stored.right);
+        prior.pooled[Hand::Left as usize] = deserialize_hand(&stored.pooled_left);
+        prior.pooled[Hand::Right as usize] = deserialize_hand(&stored.pooled_right);
+        prior.symmetries = stored.symmetries;
         Ok(prior)
     }
 
@@ -379,7 +526,6 @@ impl FingeringPrior for NgramPrior {
         prev: Option<Placement>,
         current: Placement,
     ) -> f32 {
-        let counts = &self.hands[hand as usize];
         let context = match (prev2, prev) {
             (_, None) => Context::Empty,
             (before, Some(previous)) => {
@@ -395,7 +541,9 @@ impl FingeringPrior for NgramPrior {
         };
         // Floored, so an unseen fingering is merely unlikely rather than forbidden.
         // The rules, not the corpus, are what rule a fingering out.
-        counts.probability(&context, current.finger).max(1e-4).ln()
+        self.probability(hand, &context, current.finger)
+            .max(1e-4)
+            .ln()
     }
 }
 
@@ -405,6 +553,16 @@ struct StoredModel {
     version: u32,
     left: HashMap<String, Tally>,
     right: HashMap<String, Tally>,
+    /// The symmetry images, which cannot be rebuilt on load: the placements they were
+    /// derived from are gone by then.
+    pooled_left: HashMap<String, Tally>,
+    /// As above, for the right hand.
+    pooled_right: HashMap<String, Tally>,
+    /// Which symmetries built that table. Stored because it decides the frame a
+    /// left-hand query is asked in, so reading it back wrong would silently mirror
+    /// every left-hand lookup.
+    #[serde(default)]
+    symmetries: Symmetries,
 }
 
 fn serialize_hand(counts: &HandCounts) -> HashMap<String, Tally> {
@@ -434,6 +592,118 @@ mod tests {
             .iter()
             .map(|(midi, finger)| Placement::new(*midi, Finger::from_number(*finger).unwrap()))
             .collect()
+    }
+
+
+    /// Reflecting about a D is an exact symmetry of the keyboard: it is its own
+    /// inverse, it never turns a white key black, and it flips every interval.
+    #[test]
+    fn reflection_is_an_exact_symmetry_of_the_keyboard() {
+        use on_hand::keyboard::is_black;
+        for midi in 21..=108u8 {
+            assert_eq!(reflect(reflect(midi)), midi, "midi {midi}");
+            assert_eq!(
+                is_black(reflect(midi)),
+                is_black(midi),
+                "reflecting {midi} changed its colour"
+            );
+        }
+        for (low, high) in [(60u8, 64u8), (61, 66), (70, 71)] {
+            let forward = i32::from(high) - i32::from(low);
+            let mirrored = i32::from(reflect(high)) - i32::from(reflect(low));
+            assert_eq!(forward, -mirrored, "{low} to {high}");
+        }
+    }
+
+    /// The point of the reflection symmetry: a hand learns from the other hand.
+    ///
+    /// Shown a right-hand scale and nothing else, the model should have an opinion
+    /// about the mirrored left-hand passage — which, with separate per-hand tables and
+    /// no pooling, it could not have.
+    #[test]
+    fn what_one_hand_is_shown_teaches_the_other() {
+        let scale = run(&[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2), (69, 3)]);
+        let mut prior = NgramPrior::new();
+        for _ in 0..20 {
+            prior.observe(Hand::Right, &scale);
+        }
+
+        // The same passage in the mirror, which is a left hand descending. After 64
+        // with the middle finger, the taught continuation is the thumb on 65 — so in
+        // the mirror, after reflect(64) with the middle finger comes reflect(65) with
+        // the thumb.
+        let previous = Some(Placement::new(reflect(64), Finger::Middle));
+        let taught = Placement::new(reflect(65), Finger::Thumb);
+        let not_taught = Placement::new(reflect(65), Finger::Little);
+        let left_taught = prior.log_probability(Hand::Left, None, previous, taught);
+        let left_other = prior.log_probability(Hand::Left, None, previous, not_taught);
+        assert!(
+            left_taught > left_other,
+            "the left hand learned nothing from the right: {left_taught} vs {left_other}"
+        );
+    }
+
+    /// The point of the time inversion symmetry: a rising passage teaches the fall.
+    ///
+    /// Shown only the ascent, the model should expect the descending fingering, which
+    /// is the ascent read backwards. Bree recorded the same property of fingering for
+    /// Leschetizky's students in 1902.
+    #[test]
+    fn a_rising_passage_teaches_the_falling_one() {
+        let up = run(&[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2)]);
+        let mut prior = NgramPrior::new();
+        for _ in 0..20 {
+            prior.observe(Hand::Right, &up);
+        }
+
+        // Coming down onto 64: the ascent has 64 with the middle finger before the
+        // thumb on 65, so the descent from 65 should reach 64 with the middle finger.
+        let previous = Some(Placement::new(65, Finger::Thumb));
+        let taught = Placement::new(64, Finger::Middle);
+        let not_taught = Placement::new(64, Finger::Little);
+        let down_taught = prior.log_probability(Hand::Right, None, previous, taught);
+        let down_other = prior.log_probability(Hand::Right, None, previous, not_taught);
+        assert!(
+            down_taught > down_other,
+            "the descent learned nothing from the ascent: {down_taught} vs {down_other}"
+        );
+    }
+
+    /// The symmetries must not overrule what the hand was actually shown.
+    ///
+    /// This is the half of Nakamura et al.'s finding that says a real pianist is not
+    /// quite symmetric: given enough evidence that one hand does something its mirror
+    /// does not, the hand's own counts have to win. They sit in front of the pooled
+    /// table precisely so that they can.
+    #[test]
+    fn a_hands_own_evidence_outweighs_the_symmetries() {
+        let mut prior = NgramPrior::new();
+        // The right hand is shown one thing a great many times...
+        let habit = run(&[(60, 1), (62, 2)]);
+        for _ in 0..200 {
+            prior.observe(Hand::Right, &habit);
+        }
+        // ...and the left hand the mirrored context resolved the other way, once.
+        let contrary = run(&[(reflect(60), 1), (reflect(62), 4)]);
+        prior.observe(Hand::Left, &contrary);
+
+        let previous = Some(Placement::new(60, Finger::Thumb));
+        let shown = prior.log_probability(
+            Hand::Right,
+            None,
+            previous,
+            Placement::new(62, Finger::Index),
+        );
+        let mirrored_only = prior.log_probability(
+            Hand::Right,
+            None,
+            previous,
+            Placement::new(62, Finger::Ring),
+        );
+        assert!(
+            shown > mirrored_only,
+            "the mirror overruled two hundred observations: {shown} vs {mirrored_only}"
+        );
     }
 
     /// An untrained model has no opinion, so every finger comes out equally likely.
