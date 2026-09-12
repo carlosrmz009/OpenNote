@@ -18,6 +18,7 @@
 
 pub mod biomech;
 pub mod patterns;
+pub mod playability;
 pub mod prior;
 pub mod ruler;
 pub mod rules;
@@ -26,6 +27,7 @@ pub mod solver;
 pub mod spans;
 
 pub use biomech::{BiomechModel, BiomechWeights, Grip};
+pub use playability::{measure_solution, Playability};
 pub use prior::NgramPrior;
 pub use ruler::Ruler;
 pub use rules::{Placement, Rule, RuleCosts, RuleScorer, RuleSet, RuleWeights, Trigram};

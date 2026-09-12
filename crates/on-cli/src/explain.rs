@@ -104,7 +104,7 @@ pub fn run(args: ExplainArgs) -> Result<()> {
         println!(
             "{:>7.2}s  {hand} {:<4} finger {}   {}",
             note.onset_seconds,
-            pitch_name(note.midi),
+            on_hand::keyboard::name(note.midi),
             explanation.finger.number(),
             confidence(explanation.margin),
         );
@@ -140,24 +140,16 @@ fn confidence(margin: f32) -> &'static str {
 }
 
 /// A pitch as a musician would write it, using sharps.
-fn pitch_name(midi: u8) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    let octave = midi as i32 / 12 - 1;
-    format!("{}{}", NAMES[(midi % 12) as usize], octave)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn pitches_are_named_the_way_musicians_write_them() {
-        assert_eq!(pitch_name(60), "C4");
-        assert_eq!(pitch_name(61), "C#4");
-        assert_eq!(pitch_name(21), "A0");
-        assert_eq!(pitch_name(108), "C8");
+        assert_eq!(on_hand::keyboard::name(60), "C4");
+        assert_eq!(on_hand::keyboard::name(61), "C#4");
+        assert_eq!(on_hand::keyboard::name(21), "A0");
+        assert_eq!(on_hand::keyboard::name(108), "C8");
     }
 
     #[test]

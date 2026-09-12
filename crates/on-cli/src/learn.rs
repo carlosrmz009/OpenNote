@@ -8,7 +8,7 @@
 //!
 //! See `docs/TRAINING.md` for the walkthrough.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -133,6 +133,12 @@ pub struct TrainArgs {
 /// Measure a fingering against expert annotations.
 #[derive(Debug, Args)]
 pub struct EvalArgs {
+    /// A score to measure on its own terms: `.musicxml`, `.mxl`, `.xml`, `.mid` or
+    /// `.midi`. Reports whether the fingering is playable and how much it moves the
+    /// hand, neither of which needs annotations. Without it, the corpus is measured
+    /// against the fingerings pianists wrote.
+    pub score: Option<PathBuf>,
+
     /// The corpus directory.
     #[arg(long, default_value = CORPUS_DIR)]
     pub corpus: PathBuf,
@@ -183,8 +189,8 @@ pub fn corpus(args: CorpusArgs) -> Result<()> {
             homography.write(&out)?;
             println!(
                 "The keyboard runs from {} to {} across the frame.",
-                note_name(clicked.lowest_white),
-                note_name(clicked.highest_white)
+                on_hand::keyboard::name(clicked.lowest_white),
+                on_hand::keyboard::name(clicked.highest_white)
             );
             println!("Written to {}.", out.display());
             println!(
@@ -332,6 +338,9 @@ pub fn train(args: TrainArgs) -> Result<()> {
 
 /// Run `opennote eval`.
 pub fn eval(args: EvalArgs) -> Result<()> {
+    if let Some(score) = args.score.clone() {
+        return eval_score(&score, &args);
+    }
     let corpus = Corpus::at(&args.corpus)?;
     let pieces = corpus.load()?;
     if pieces.is_empty() {
@@ -397,14 +406,6 @@ fn verdict(before: MatchRates, after: MatchRates) -> String {
     }
 }
 
-/// A MIDI number as a pianist would say it.
-fn note_name(midi: u8) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
-    format!("{}{}", NAMES[usize::from(midi) % 12], i32::from(midi) / 12 - 1)
-}
-
 /// "s", unless there is exactly one.
 fn plural(n: usize) -> &'static str {
     if n == 1 {
@@ -412,4 +413,55 @@ fn plural(n: usize) -> &'static str {
     } else {
         "s"
     }
+}
+
+/// Measure one score with no annotations to compare against.
+///
+/// Two things can be said about a fingering without knowing what a pianist would have
+/// written. Whether a hand could perform it at all — which has a right answer, zero,
+/// and is a regression test rather than a benchmark. And how much it moves the hand,
+/// which has no right answer but is comparable between two runs over the same music,
+/// and so says whether a change made the fingering calmer or busier.
+///
+/// This is the only measurement available on music nobody has annotated, which is to
+/// say on nearly all music.
+fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
+    if !path.exists() {
+        bail!("{} does not exist", path.display());
+    }
+    let options = args.weights.options()?;
+    let mut input = on_score::Document::open(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let assignment = on_score::hands::HandAssignment {
+        profile: options.profile.clone(),
+        ..Default::default()
+    };
+    on_score::assign_hands(input.score_mut(), &assignment);
+    let score = input.score();
+
+    let prior = args.weights.prior()?;
+    let solution = on_fingering::finger_score_with_prior(
+        score,
+        &options,
+        prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
+    );
+
+    let spans = options.span_model.table();
+    let measured = on_fingering::measure_solution(score, &solution, spans);
+    let title = score.title.clone().unwrap_or_else(|| "untitled".into());
+    println!("{title}: {} notes fingered", solution.fingerings.len());
+    println!("  {measured}");
+    if measured.impossible > 0 {
+        println!(
+            "\n  {} transition(s) no hand can make. Some of those are the measure being\n  \
+             strict rather than the fingering being wrong — inside an octave it cannot\n  \
+             tell a hand that moved from one that did not — but a number that grows\n  \
+             after a change to the rules is a change that broke something.",
+            measured.impossible
+        );
+        for flaw in &measured.flaws {
+            println!("    {flaw}");
+        }
+    }
+    Ok(())
 }

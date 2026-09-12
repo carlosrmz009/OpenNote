@@ -100,19 +100,42 @@ impl Grip {
 
     /// The lowest pitch in the grip, or `None` if it is empty.
     fn base(&self) -> Option<u8> {
-        self.keys.first().map(|(m, _)| *m)
+        self.keys.iter().map(|(m, _)| *m).min()
+    }
+
+    /// The highest pitch in the grip, or `None` if it is empty.
+    fn top(&self) -> Option<u8> {
+        self.keys.iter().map(|(m, _)| *m).max()
     }
 
     /// How many octaves this grip sits above the reference octave the cache uses.
     ///
-    /// Normalising to a middle octave rather than to zero keeps every shifted note
-    /// on the keyboard: a hand spans well under two octaves, so a grip anchored in
-    /// the octave from middle C never runs off either end.
+    /// Normalising to a middle octave rather than to zero keeps the shifted notes on
+    /// the keyboard for any grip a hand could actually hold, since a hand spans well
+    /// under two octaves. But a grip is not only what the hand strikes — it is
+    /// everything still sounding, and a part that holds a bass note under four octaves
+    /// of passagework produces grips far wider than a hand. Anchoring those on their
+    /// lowest note alone would shift the top one off the end of the keyboard.
+    ///
+    /// So the offset is the one that puts the base in the reference octave, pulled back
+    /// as far as it must be to keep the whole grip on real keys. Such a grip is
+    /// unreachable and will be scored as such; what it must not do is ask the geometry
+    /// for a key that does not exist. Every note in a score is on the keyboard by the
+    /// time it reaches here, so a shift that fits always exists — zero, at worst.
     fn octave_offset(&self) -> i32 {
-        match self.base() {
-            Some(base) => (base as i32 - 60).div_euclid(12),
-            None => 0,
-        }
+        let (Some(base), Some(top)) = (self.base(), self.top()) else {
+            return 0;
+        };
+        let (lowest, highest) = (
+            on_hand::keyboard::MIDI_LOWEST as i32,
+            on_hand::keyboard::MIDI_HIGHEST as i32,
+        );
+        // Shifting down by `s` octaves needs `base - 12s >= lowest` and
+        // `top - 12s <= highest`. Both hold at s = 0 for any grip already on the
+        // keyboard, so the range below is never empty.
+        let most = (base as i32 - lowest).div_euclid(12);
+        let least = (top as i32 - highest + 11).div_euclid(12);
+        ((base as i32 - 60).div_euclid(12)).clamp(least, most)
     }
 
     /// A cache key that collapses grips differing only by whole octaves.
