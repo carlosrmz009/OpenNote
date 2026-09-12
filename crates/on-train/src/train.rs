@@ -257,7 +257,7 @@ mod tests {
                     midi: *midi,
                     onset: i as f64 * 0.25,
                     hand: HandLabel::Right,
-                    finger: *finger,
+                    finger: Some(*finger),
                 })
                 .collect(),
         }
