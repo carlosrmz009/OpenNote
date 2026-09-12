@@ -114,7 +114,7 @@ pub enum Rule {
     ThreeFourFive,
     /// Finger 3 immediately followed by finger 4.
     ThreeToFour,
-    /// Finger 4 on a black key next to finger 3 on a white one.
+    /// Finger 3 on a black key next to finger 4 on a white one.
     FourOnBlack,
     /// Thumb on a black key.
     ThumbOnBlack,
@@ -211,7 +211,7 @@ impl Rule {
             Rule::WeakFinger => "it uses a weak finger",
             Rule::ThreeFourFive => "fingers 3, 4 and 5 are all in play at once",
             Rule::ThreeToFour => "finger 3 hands over directly to finger 4",
-            Rule::FourOnBlack => "finger 4 is on a black key beside finger 3 on a white one",
+            Rule::FourOnBlack => "finger 3 is on a black key beside finger 4 on a white one",
             Rule::ThumbOnBlack => "the thumb is on a black key",
             Rule::FiveOnBlack => "the little finger is on a black key",
             Rule::ThumbPassing => "the thumb passes under, or a finger crosses over it",
@@ -895,17 +895,28 @@ impl RuleScorer {
     }
 
     /// Rule 9. Finger 4 on a black key immediately beside finger 3 on a white one.
+    /// The third finger on a black key beside the fourth on a white one.
+    ///
+    /// The name is Parncutt's and it reads backwards: what is charged is not finger 4
+    /// landing on a black key, which is ordinary — every flat-key scale does it, and
+    /// B flat major takes A with 3 and B flat with 4 in every edition ever printed.
+    /// What is awkward is the other arrangement. Finger 3 is the longest and finger 4
+    /// is shorter, so 3 up on a black key with 4 down on a white one twists the hand
+    /// against its own proportions.
+    ///
+    /// This was transcribed inverted, and nothing tested it. Charging the natural
+    /// arrangement and excusing the awkward one cost every rule set between four and
+    /// seven points of agreement with the taught scale fingerings — the flat keys
+    /// most of all, which is exactly where finger 4 belongs on a black key.
     fn four_on_black(&self, t: &Trigram) -> f32 {
         let Some(prev) = t.prev else { return 0.0 };
-        let a = prev.finger == Finger::Ring
-            && is_black(prev.midi)
-            && t.current.finger == Finger::Middle
-            && is_white(t.current.midi);
-        let b = prev.finger == Finger::Middle
-            && is_white(prev.midi)
-            && t.current.finger == Finger::Ring
-            && is_black(t.current.midi);
-        if a || b {
+        let awkward = |a: Placement, b: Placement| {
+            a.finger == Finger::Middle
+                && is_black(a.midi)
+                && b.finger == Finger::Ring
+                && is_white(b.midi)
+        };
+        if awkward(prev, t.current) || awkward(t.current, prev) {
             1.0
         } else {
             0.0
@@ -1626,5 +1637,33 @@ mod tests {
                 "{set:?} charges a repeated pitch, which is what a finger is for"
             );
         }
+    }
+
+    #[test]
+    fn four_on_black_charges_the_awkward_arrangement_not_the_ordinary_one() {
+        // Parncutt's name for this rule reads backwards, and it was transcribed the
+        // way the name reads. Finger 4 on a black key is ordinary — B flat major takes
+        // A with 3 and B flat with 4 in every edition printed. What twists the hand is
+        // the reverse: finger 3, the longest, up on a black key while finger 4, which
+        // is shorter, is down on a white one.
+        //
+        // Inverted and untested, this charged the taught flat-key fingerings and
+        // excused the awkward ones, at four to seven points of agreement per rule set.
+        let s = scorer(RuleSet::Parncutt);
+
+        // 3 on B flat (black), 4 on B (white): the arrangement that costs.
+        assert_eq!(s.four_on_black(&trigram(Hand::Right, (58, 3), (59, 4), (60, 1))), 1.0);
+        // And the same pair the other way round in time.
+        assert_eq!(s.four_on_black(&trigram(Hand::Right, (59, 4), (58, 3), (60, 1))), 1.0);
+
+        // 3 on A (white), 4 on B flat (black): what every flat-key scale does.
+        assert_eq!(
+            s.four_on_black(&trigram(Hand::Right, (57, 3), (58, 4), (60, 1))),
+            0.0,
+            "the taught flat-key arrangement must not be charged"
+        );
+        // Neither finger involved, or both on the same colour: nothing to say.
+        assert_eq!(s.four_on_black(&trigram(Hand::Right, (60, 1), (62, 2), (64, 3))), 0.0);
+        assert_eq!(s.four_on_black(&trigram(Hand::Right, (58, 3), (61, 4), (60, 1))), 0.0);
     }
 }
