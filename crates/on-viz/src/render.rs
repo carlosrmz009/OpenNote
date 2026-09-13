@@ -126,7 +126,7 @@ const HIT_LINE_GLOW: f32 = 4.4;
 /// the key rather than washing over its neighbours. This was 84 mm — three and a half
 /// white keys — which put a struck note's light over the two keys either side of it and
 /// made a chord one continuous glare instead of three lit keys.
-const FLASH_SIZE_MM: f32 = 40.0;
+const FLASH_SIZE_MM: f32 = 58.0;
 
 /// How far above the keys its centre sits. A little above the hit line, so the burst
 /// looks like it is coming off the key rather than out of the front of the instrument.
@@ -218,10 +218,10 @@ const BLACK_KEY_GLOW: f32 = 1.45;
 /// two hundred millimetres tall and the motes had room to be separate points of light.
 /// In a plume the width of one key their halos overlap completely, and a hundred
 /// overlapping halos is not dust, it is a lamp.
-const SPARK_GLOW: f32 = 1.9;
+const SPARK_GLOW: f32 = 3.4;
 
 /// How long one mote of dust lives, in seconds.
-const SPARK_LIFE: f32 = 0.50;
+const SPARK_LIFE: f32 = 0.60;
 
 /// How long the plume goes on after the key comes up, in seconds.
 ///
@@ -263,7 +263,7 @@ const SPARK_SUSTAIN_SHARE: f32 = 0.34;
 /// some are being born, some are at the top of their arc and some are fading — which is
 /// what a fountain is, and what a single burst can never look like however many motes
 /// it has in it.
-const SPARKS_PER_NOTE: usize = 150;
+const SPARKS_PER_NOTE: usize = 600;
 
 /// The most that may be in the air at once, over all notes. A dense passage will exceed
 /// it and the excess is simply not drawn.
@@ -272,7 +272,7 @@ const SPARKS_PER_NOTE: usize = 150;
 /// not, so the pool is sized for what can actually be sounding — eighty plumes at once
 /// is already more keys than a pianist has fingers and a pedal. It was three times this
 /// when a plume took ten times as many motes.
-const MAX_SPARKS: usize = 12_000;
+const MAX_SPARKS: usize = 24_000;
 
 /// How fast a mote is thrown, in millimetres per second, and how hard it falls.
 ///
@@ -283,7 +283,7 @@ const MAX_SPARKS: usize = 12_000;
 /// exactly the space the dust rises into, so a tall plume hides what is coming — which
 /// matters more than the plume does. A couple of white keys of height is plenty to read
 /// as dust coming off the key.
-const SPARK_RISE_MM: f32 = 170.0;
+const SPARK_RISE_MM: f32 = 255.0;
 const SPARK_GRAVITY_MM: f32 = 45.0;
 
 /// How far a mote wanders sideways by the end of its life, as a fraction of the width
@@ -302,7 +302,7 @@ const SPARK_GRAVITY_MM: f32 = 45.0;
 /// came off: it stays within the margins of that key instead of drifting over its
 /// neighbours, and a black key — which is narrower — throws a narrower plume without
 /// anything having to say so.
-const SPARK_WANDER_KEYS: f32 = 0.40;
+const SPARK_WANDER_KEYS: f32 = 0.50;
 
 /// How the wandering builds with time. Below one it is quick at first and then eases,
 /// which is what leaves the plume narrow at the key and open at the top.
@@ -327,16 +327,16 @@ const SPARK_FILAMENT: u32 = 13;
 /// There is air in the room, and the old dust at the top of a plume has drifted a
 /// little off to one side. One direction per note, so a plume leans rather than
 /// blurring — but not far enough to leave the key it came from.
-const SPARK_DRIFT_KEYS: f32 = 0.35;
+const SPARK_DRIFT_KEYS: f32 = 0.40;
 
 /// How far a mote wanders as it travels, in key widths, and how tightly it curls.
-const SPARK_CURL_KEYS: f32 = 0.10;
+const SPARK_CURL_KEYS: f32 = 0.14;
 const SPARK_CURL_RATE: f32 = 2.6;
 
 /// How big a mote is drawn, in millimetres. About a pixel at the usual framing: these
 /// read as dust because they are small and there are many, not because of anything
 /// drawn into them.
-const SPARK_SIZE_MM: std::ops::Range<f32> = 0.7..2.4;
+const SPARK_SIZE_MM: std::ops::Range<f32> = 0.9..3.2;
 
 /// How long a mote stays white before it takes the colour of the note that threw it.
 ///
