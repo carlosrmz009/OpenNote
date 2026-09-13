@@ -1023,15 +1023,19 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         animators[Hand::Right as usize].extent(&poses[1]),
     ];
 
-    // Boxes intersect only where they overlap on every axis, and the shallowest of the
-    // three is how far one has to move to be clear of the other.
-    let overlap = (0..3)
-        .map(|axis| extents[0][axis].1.min(extents[1][axis].1) - extents[0][axis].0.max(extents[1][axis].0))
-        .fold(f32::INFINITY, f32::min);
-    if overlap <= CLEARANCE_SLACK_MM {
+    // Boxes intersect only where they overlap on every axis, so the shallowest of the
+    // three says whether they are inside each other at all.
+    let reach = |axis: usize| {
+        extents[0][axis].1.min(extents[1][axis].1) - extents[0][axis].0.max(extents[1][axis].0)
+    };
+    if (0..3).map(reach).fold(f32::INFINITY, f32::min) <= CLEARANCE_SLACK_MM {
         return poses;
     }
-    let lift = (overlap + CLEARANCE_SLACK_MM).min(CLEARANCE_MAX_MM);
+    // How far to lift is the overlap *in height*, not the shallowest one. Lifting only
+    // separates them vertically, so clearing by the smallest overlap on some other axis
+    // leaves them exactly as tangled as they were — which is what it did, and why half
+    // the collisions with a hand free to move were still there afterwards.
+    let lift = (reach(2) + CLEARANCE_SLACK_MM).min(CLEARANCE_MAX_MM);
 
     let free = [
         animators[Hand::Left as usize].grip_at(time).is_none(),

@@ -123,6 +123,9 @@ fn main() -> anyhow::Result<()> {
     let mut sampled = 0usize;
     let mut worst_overlap = 0.0f32;
     let mut collisions: Vec<String> = Vec::new();
+    let mut both_busy = 0usize;
+    let mut one_free = 0usize;
+    let mut worst_depth_overlap = 0.0f32;
 
     for hand in Hand::ALL {
         let model = BiomechModel::new(options.profile.clone(), hand, options.biomech);
@@ -284,6 +287,20 @@ fn main() -> anyhow::Result<()> {
             (left[0].0, left[0].1, right[0].0, right[0].1);
         if overlap > COLLISION_SLACK_MM {
             colliding += 1;
+            // Why was it not got out of? A hand holding keys cannot be lifted off them.
+            let free = [
+                animators[Hand::Left as usize].grip_at(at).is_none(),
+                animators[Hand::Right as usize].grip_at(at).is_none(),
+            ];
+            if free[0] || free[1] {
+                one_free += 1;
+            } else {
+                both_busy += 1;
+            }
+            // How much room is left along the keys — the axis a busy hand can still
+            // move along, since a finger can slide up and down a key it is holding.
+            worst_depth_overlap = worst_depth_overlap
+                .max(left[1].1.min(right[1].1) - left[1].0.max(right[1].0));
             worst_overlap = worst_overlap.max(overlap);
             if collisions.len() < 6 && collisions.last().is_none_or(|last: &String| {
                 // One line per episode rather than one per sample.
@@ -307,6 +324,9 @@ fn main() -> anyhow::Result<()> {
         "  moments the two hands share a space:     {colliding} of {sampled}  \
          (worst {worst_overlap:.0} mm)"
     );
+    println!("      of those, with a hand free to lift: {one_free}");
+    println!("      of those, with BOTH hands holding:   {both_busy}");
+    println!("      worst overlap along the keys:        {worst_depth_overlap:.0} mm");
     for line in &collisions {
         println!("{line}");
     }
