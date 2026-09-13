@@ -538,7 +538,28 @@ const STRIKE_LIFT_DEG: (f32, f32) = (2.5, 9.0);
 ///
 /// A few millimetres. It is felt more than seen, and taken much further the hand starts
 /// pumping at the keyboard.
+///
+/// On its own this is not seen *at all*. The camera looks straight down and its
+/// projection is orthographic, so height is exactly the view axis and a wrist that only
+/// changes its height moves precisely zero pixels — and the forearm does not give it
+/// away either, because the shoulder it is aimed at tracks the wrist's own height. The
+/// translation is kept because it is what actually happens and because the fingertips
+/// have to travel with the key they are pressing; what makes it *visible* is the angle
+/// below.
 const WRIST_DROP_MM: (f32, f32) = (1.6, 6.5);
+
+/// How far the wrist extends as it sinks, in degrees, softest to hardest.
+///
+/// Dropping the wrist while the fingers stay on the keys opens the angle between the
+/// back of the hand and the forearm — anatomically an extension, which is why this is
+/// subtracted from the flexion. The joint has 35 degrees of extension available from
+/// its playing neutral, and this uses under a third of it.
+///
+/// This is the part that can be seen from overhead. Rotating the hand about the wrist
+/// shortens the distance from wrist to knuckles *as projected on the screen*, so the
+/// hand foreshortens as it takes the note and opens out again as it releases. The
+/// motion the camera cannot show becomes one it can.
+const WRIST_DROP_DEG: (f32, f32) = (3.5, 13.0);
 
 /// How long the wrist takes to go down into a note, and how long the whole sink and
 /// release lasts, in seconds.
@@ -649,7 +670,8 @@ impl HandAnimator {
         // Where the hand would be if it were only getting from one chord to the next,
         // and then the things that make it look like a hand doing it.
         let mut pose = self.carried(index, time);
-        pose.q[dof::WRIST_Z] += self.wrist_settle(index, time) + self.breath(index, time);
+        pose.q[dof::WRIST_Z] += self.breath(index, time);
+        self.sink_into_note(&mut pose, index, time);
         self.raise_fingers_about_to_strike(&mut pose, index, time);
         self.skeleton.clamp(&mut pose);
         pose
@@ -687,23 +709,24 @@ impl HandAnimator {
         moved
     }
 
-    /// How far the wrist has sunk into the note it just played, in millimetres.
+    /// Sink the wrist into the note it just played.
     ///
-    /// Negative, because it is going down. Down quickly with the key and back up more
-    /// slowly, and further for a louder note — which is where most of the difference
-    /// between a soft passage and a loud one actually shows, since the fingers
-    /// themselves barely move differently.
-    fn wrist_settle(&self, index: usize, time: f64) -> f32 {
+    /// Down quickly with the key and back up more slowly, and further for a louder note
+    /// — which is where most of the difference between a soft passage and a loud one
+    /// shows, since the fingers themselves barely move differently.
+    ///
+    /// Both a drop and an extension. The drop is what happens; the extension is what
+    /// can be seen, for the reason given on [`WRIST_DROP_MM`].
+    fn sink_into_note(&self, pose: &mut HandPose, index: usize, time: f64) {
         let current = &self.events[index];
         let since = time - current.time;
         if since < 0.0 || since >= WRIST_SETTLE_SECONDS {
-            return 0.0;
+            return;
         }
         let Some(hardest) = current.struck.iter().map(|(_, v)| *v).max() else {
-            return 0.0;
+            return;
         };
         let hardness = f32::from(hardest) / 127.0;
-        let depth = WRIST_DROP_MM.0 + (WRIST_DROP_MM.1 - WRIST_DROP_MM.0) * hardness;
 
         let shape = if since < WRIST_FALL_SECONDS {
             (since / WRIST_FALL_SECONDS) as f32
@@ -714,7 +737,12 @@ impl HandAnimator {
             // off it.
             1.0 - back * back * (3.0 - 2.0 * back)
         };
-        -depth * shape.clamp(0.0, 1.0)
+        let shape = shape.clamp(0.0, 1.0);
+
+        let depth = WRIST_DROP_MM.0 + (WRIST_DROP_MM.1 - WRIST_DROP_MM.0) * hardness;
+        let angle = WRIST_DROP_DEG.0 + (WRIST_DROP_DEG.1 - WRIST_DROP_DEG.0) * hardness;
+        pose.q[dof::WRIST_Z] -= depth * shape;
+        pose.q[dof::WRIST_FLEXION] -= angle.to_radians() * shape;
     }
 
     /// The small drift of a hand that is waiting rather than playing.
@@ -1209,6 +1237,48 @@ mod tests {
         assert!(
             (height(WRIST_SETTLE_SECONDS + 0.4) - settled).abs() < 0.01,
             "the wrist should come back up"
+        );
+    }
+
+
+    /// The sink has to be visible, and height alone is not.
+    ///
+    /// The camera looks straight down through an orthographic projection, so the height
+    /// of anything is exactly the view axis: a wrist that only drops moves zero pixels,
+    /// and the forearm does not give it away either because the shoulder it is aimed at
+    /// tracks the wrist's own height. The first version of this was correct and
+    /// completely invisible.
+    ///
+    /// What reaches the screen is the hand flattened onto the keyboard plane, so the
+    /// test is on that: the distance from wrist to fingertip with height thrown away
+    /// must actually change while the note is being taken.
+    #[test]
+    fn the_sink_moves_something_the_camera_can_see() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+        score.notes[0].velocity = 120;
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+
+        // Wrist to fingertip as the camera gets it: height thrown away.
+        let flat = |t: f64| {
+            let pose = animator.pose_at(t);
+            let posture = animator.skeleton().forward(&pose);
+            (posture.chain[Finger::Middle.index()][3].truncate() - posture.wrist.truncate())
+                .length()
+        };
+
+        let settled = flat(WRIST_SETTLE_SECONDS + 0.05);
+        let sunk = flat(WRIST_FALL_SECONDS);
+        assert!(
+            (settled - sunk).abs() > 2.0,
+            "the hand has to visibly foreshorten as it takes the note: {settled:.2} mm \
+             settled against {sunk:.2} mm sunk, on a keyboard whose white keys are \
+             23.5 mm wide"
         );
     }
 
