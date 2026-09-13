@@ -17,6 +17,13 @@
 //!   crossing the thumb or by shifting bodily. Pianists minimise this, so lower is
 //!   better, but only to a point: a fingering that never moves the hand is usually one
 //!   that has stopped playing the music. It is read against a reference, not alone.
+//! * **travel** — how far the hand actually goes, in metres over the whole piece.
+//!   R_pc counts position changes; this measures them. Gao et al. (2023) build their
+//!   whole reward function on the principle of minimal motion, and it is the one
+//!   ergonomic quantity that adds up over a piece rather than averaging out.
+//! * **stretch** — how near its limit the hand is held, averaged over every pair of
+//!   fingers in every chord. Zero is a hand at rest and one is a hand at the end of
+//!   its reach.
 //!
 //! Neither replaces agreement. A fingering can be perfectly playable, barely move, and
 //! still be nothing a pianist would write. What they catch is the opposite failure —
@@ -52,6 +59,7 @@
 //! single notes the two edges coincide and this reduces to the plain note pair the
 //! papers describe.
 
+use on_hand::keyboard::Keyboard;
 use on_hand::{Finger, Hand};
 use on_score::Score;
 
@@ -135,6 +143,14 @@ pub struct Playability {
     pub shifts: usize,
     /// Transitions examined, which is what the rates are over.
     pub transitions: usize,
+    /// How far the hand travelled in total, in millimetres.
+    pub travel_mm: f64,
+    /// Summed span stress, over [`Playability::spans_measured`] finger pairs.
+    pub stretch_total: f64,
+    /// How many finger pairs that was, so the mean can be taken.
+    pub spans_measured: usize,
+    /// Pairs held wider or narrower than the hand finds comfortable.
+    pub stretched: usize,
 }
 
 impl Playability {
@@ -169,6 +185,28 @@ impl Playability {
         rate(self.position_changes(), self.transitions)
     }
 
+    /// How near its limit the hand is held, averaged over every finger pair in every
+    /// chord.
+    ///
+    /// Zero is a hand at rest; one is a hand at the limit of what the span tables say
+    /// it can be forced to. Above one means the music is asking for more than that,
+    /// which the reachability model charges for separately.
+    pub fn mean_stretch(&self) -> f32 {
+        if self.spans_measured == 0 {
+            0.0
+        } else {
+            (self.stretch_total / self.spans_measured as f64) as f32
+        }
+    }
+
+    /// The fraction of finger pairs held outside the comfortable span.
+    ///
+    /// The "large-span ratio" of the ergonomic literature. A passage of tenths will
+    /// have a high one honestly; it is for comparing two fingerings of the same music.
+    pub fn stretched_rate(&self) -> f32 {
+        rate(self.stretched, self.spans_measured)
+    }
+
     /// Add another hand's, or another piece's, tally to this one.
     pub fn add(&mut self, other: Playability) {
         self.impossible += other.impossible;
@@ -177,6 +215,10 @@ impl Playability {
         self.crossings += other.crossings;
         self.shifts += other.shifts;
         self.transitions += other.transitions;
+        self.travel_mm += other.travel_mm;
+        self.stretch_total += other.stretch_total;
+        self.spans_measured += other.spans_measured;
+        self.stretched += other.stretched;
     }
 }
 
@@ -193,6 +235,13 @@ impl std::fmt::Display for Playability {
             self.crossings,
             self.shifts,
             self.transitions
+        )?;
+        write!(
+            f,
+            "\n  travel {:.1} m   stretch {:.2} (mean), {:.1}% beyond comfortable",
+            self.travel_mm / 1000.0,
+            self.mean_stretch(),
+            self.stretched_rate() * 100.0,
         )
     }
 }
@@ -257,6 +306,58 @@ fn impossible(hand: Hand, from: Placement, to: Placement) -> bool {
     // A thumb crossing is the one crossing hands make, so the product test passing is
     // what makes this impossible rather than merely awkward.
     i32::from(from.finger.number()) * i32::from(to.finger.number()) > 4
+}
+
+/// Where the hand must be for a finger to reach a note, in millimetres along the
+/// keyboard.
+///
+/// Gao et al. (2023, §3.4.2) estimate it by projecting back from the played key to
+/// where the middle finger would sit, on the reasoning that the hand covers several
+/// keys and the middle finger is as good a point to call its centre as any. They step
+/// one white key per finger number; the span tables here say what the real offset is,
+/// so the midpoint of the relaxed span from the middle finger to the playing one is
+/// used instead. It is the same idea measured rather than assumed.
+///
+/// The table already mirrors itself for the left hand, so one formula serves both.
+fn hand_position_mm(hand: Hand, spans: &SpanTable, keys: &Keyboard, at: Placement) -> f64 {
+    let span = spans.get(hand, Finger::Middle, at.finger);
+    let natural = f64::from(span.min_rel + span.max_rel) / 2.0;
+    f64::from(keys.centre_x(at.midi)) - natural * f64::from(crate::ruler::SEMITONE_MM)
+}
+
+/// Where the hand is while playing a chord.
+///
+/// The average of what the lowest and the highest note each imply, which is Gao et
+/// al.'s rule and the obvious one: a hand holding a shape is centred between its ends.
+fn chord_position_mm(hand: Hand, spans: &SpanTable, keys: &Keyboard, chord: &Chord) -> Option<f64> {
+    let low = chord.notes.first()?;
+    let high = chord.notes.last()?;
+    Some(
+        (hand_position_mm(hand, spans, keys, *low) + hand_position_mm(hand, spans, keys, *high))
+            / 2.0,
+    )
+}
+
+/// How near its limit a pair of fingers is being held, as a fraction.
+///
+/// Zero anywhere inside the relaxed range, rising to one at the edge of what the pair
+/// can be forced to, and beyond one for a span the tables say is not available at all.
+/// Both directions count: a hand bunched too narrow is working as surely as one spread
+/// too wide, which is why the span tables carry a minimum as well as a maximum.
+fn span_stress(span: crate::spans::Span, semitones: i32) -> f64 {
+    let (rel, prac) = if semitones > span.max_rel {
+        (span.max_rel, span.max_prac)
+    } else if semitones < span.min_rel {
+        (span.min_rel, span.min_prac)
+    } else {
+        return 0.0;
+    };
+    let room = f64::from((prac - rel).abs());
+    if room <= 0.0 {
+        // The pair has no give at all in this direction, so any departure is total.
+        return 1.0;
+    }
+    f64::from((semitones - rel).abs()) / room
 }
 
 /// How long the hand needs to uncross a pair, in seconds.
@@ -330,7 +431,31 @@ impl Chord {
 /// Measure one hand's part.
 pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
     let mut out = Playability::default();
+    let keys = Keyboard::new();
+
+    // How stretched the hand is holding each chord. Every pair of fingers in it, since
+    // a chord is uncomfortable if any two of its fingers are.
+    for chord in events {
+        for (i, low) in chord.notes.iter().enumerate() {
+            for high in &chord.notes[i + 1..] {
+                let semitones = i32::from(high.midi) - i32::from(low.midi);
+                let span = spans.get(hand, low.finger, high.finger);
+                out.stretch_total += span_stress(span, semitones);
+                out.spans_measured += 1;
+                if !span.is_comfortable(semitones) {
+                    out.stretched += 1;
+                }
+            }
+        }
+    }
+
     for pair in events.windows(2) {
+        if let (Some(from), Some(to)) = (
+            chord_position_mm(hand, spans, &keys, &pair[0]),
+            chord_position_mm(hand, spans, &keys, &pair[1]),
+        ) {
+            out.travel_mm += (to - from).abs();
+        }
         let (Some(from), Some(to)) = (pair[0].notes.first(), pair[1].notes.first()) else {
             continue;
         };
@@ -432,6 +557,79 @@ mod tests {
             .collect()
     }
 
+
+
+    /// A hand playing in one position barely travels; a hand thrown around the
+    /// keyboard travels a long way. If the measure cannot tell those apart it is
+    /// measuring nothing.
+    #[test]
+    fn travel_tracks_how_far_the_hand_actually_goes() {
+        // Five notes under one hand position, taken with consecutive fingers.
+        let settled = events(&[(60, 1), (62, 2), (64, 3), (65, 4), (67, 5)]);
+        // The same five fingers, but flung across three octaves.
+        let flung = events(&[(60, 1), (84, 2), (48, 3), (84, 4), (60, 5)]);
+
+        let a = measure(Hand::Right, &PARNCUTT, &settled);
+        let b = measure(Hand::Right, &PARNCUTT, &flung);
+        assert!(
+            b.travel_mm > 5.0 * a.travel_mm,
+            "settled {:.0} mm, flung {:.0} mm",
+            a.travel_mm,
+            b.travel_mm
+        );
+        // A hand in one position still shifts a little as the fingers take their notes.
+        assert!(a.travel_mm < 200.0, "{:.0} mm is not one position", a.travel_mm);
+    }
+
+    /// The hand position estimate has to be a property of the hand, not of the note.
+    ///
+    /// A fifth played 1-5 and the same fifth played by a hand reaching up with 1-2 put
+    /// the hand in different places, and that is the whole point of projecting back
+    /// from the played key rather than just using the key.
+    #[test]
+    fn the_hand_is_not_where_the_note_is() {
+        let keys = Keyboard::new();
+        let thumb = hand_position_mm(Hand::Right, &PARNCUTT, &keys, Placement::new(60, Finger::Thumb));
+        let little = hand_position_mm(Hand::Right, &PARNCUTT, &keys, Placement::new(60, Finger::Little));
+        assert!(
+            thumb > little,
+            "playing C with the thumb puts the hand above it, and with the little \
+             finger below: {thumb:.0} vs {little:.0}"
+        );
+        // The middle finger is the reference, so it sits on its own note.
+        let middle = hand_position_mm(Hand::Right, &PARNCUTT, &keys, Placement::new(60, Finger::Middle));
+        assert!((middle - f64::from(keys.centre_x(60))).abs() < 1.0, "{middle}");
+    }
+
+    /// Stretch is zero for a hand at rest and rises as the span opens, in both
+    /// directions: bunched is work too.
+    #[test]
+    fn stretch_rises_away_from_the_resting_hand() {
+        let pair = |low: u8, high: u8, a: u8, b: u8| {
+            let chord = vec![Chord {
+                onset_seconds: 0.0,
+                notes: vec![
+                    Placement::new(low, Finger::from_number(a).unwrap()),
+                    Placement::new(high, Finger::from_number(b).unwrap()),
+                ],
+            }];
+            measure(Hand::Right, &PARNCUTT, &chord).mean_stretch()
+        };
+
+        // Parncutt puts the relaxed range for thumb against little finger at 7 to 10
+        // semitones, which is worth knowing: an octave taken 1-5 is already a slight
+        // stretch, and a ninth more so. The tables decide this, not intuition.
+        let resting = pair(60, 69, 1, 5);
+        let octave = pair(60, 72, 1, 5);
+        let reaching = pair(60, 74, 1, 5);
+        assert_eq!(resting, 0.0, "a sixth 1-5 is a hand at rest, got {resting}");
+        assert!(octave > 0.0, "an octave 1-5 is past relaxed, got {octave}");
+        assert!(reaching > octave, "a ninth reaches further, got {reaching}");
+
+        // And squeezed the other way: those two fingers on neighbouring keys.
+        let bunched = pair(60, 61, 1, 5);
+        assert!(bunched > 0.0, "1-5 on a semitone is a bunched hand, got {bunched}");
+    }
 
     /// The measure has to stay capable of saying no, or it is worth nothing.
     ///
@@ -589,7 +787,12 @@ mod tests {
             ],
         }];
         let out = measure(Hand::Right, &PARNCUTT, &triad);
-        assert_eq!(out, Playability::default(), "{out}");
+        assert_eq!(out.transitions, 0, "{out}");
+        assert_eq!(out.position_changes(), 0, "{out}");
+        assert_eq!(out.impossible, 0, "{out}");
+        assert_eq!(out.travel_mm, 0.0, "one chord, so the hand never moves: {out}");
+        // It is still a shape the hand holds, and the three pairs in it are measured.
+        assert_eq!(out.spans_measured, 3, "{out}");
     }
 
     /// A hand that has to jump two octaves has moved, and the measure should say so.

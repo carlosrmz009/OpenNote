@@ -153,6 +153,24 @@ Piano: 1604 notes fingered
   the thumb or by shifting bodily. There is no right answer; pianists minimise it, but
   a fingering that never moves the hand has usually stopped playing the music. It is
   for comparing two runs over the same piece.
+- **travel** — how far the hand goes in total, in metres. Position changes counts them;
+  this measures them. Gao et al. (2023) build an entire reward function on minimal
+  motion, and it is the one ergonomic quantity that accumulates over a piece instead of
+  averaging out.
+- **stretch** — how near its limit the hand is held, averaged over every pair of fingers
+  in every chord, with the percentage held beyond comfortable alongside. Zero is a hand
+  at rest and one is a hand at the end of its reach.
+
+These last two respond to the hand you tell it about, which is the point:
+
+```
+--hand-size small    travel 55.8 m   stretch 0.31 (mean), 5.8% beyond comfortable
+--hand-size medium   travel 51.5 m   stretch 0.12 (mean), 5.2% beyond comfortable
+--hand-size large    travel 52.1 m   stretch 0.12 (mean), 4.3% beyond comfortable
+```
+
+A small hand has to move further and reach harder to play the same notes. No
+score-symbolic fingering system can say that, because none of them has a hand.
 
 The difference between the first two is worth understanding, because it is the one
 place this engine can answer a question the literature cannot. To uncross two fingers
