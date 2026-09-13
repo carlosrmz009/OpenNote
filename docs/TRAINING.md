@@ -137,20 +137,30 @@ opennote eval path/to/score.mid
 
 ```
 Piano: 1604 notes fingered
-  IFR 0.39%   position changes 47.3% (60 crossing, 676 shift, 1557 transitions)
+  unplayable 0 (0.00%)   IFR 0.39%   position changes 47.3% (60 crossing, 676 shift, 1557 transitions)
 ```
 
-- **IFR**, the incapable-performing fingering rate — the fraction of transitions no
-  hand can make, because two fingers other than the thumb would have to cross. Zero is
-  the only good answer, and a number that *grows* after a change to the rules is a
-  change that broke something. Some of what it flags is the measure being strict rather
-  than the fingering being wrong: inside an octave it cannot tell a hand that moved
-  from one that did not, so it prints how long the hand had, and half a second is
-  plenty. Under about a tenth of a second is worth looking at.
+- **unplayable** — transitions no hand could make *in the time the music allows*. Zero
+  is the only good answer. A number above zero is either a bug in the search or a part
+  that cannot be played by one hand as the hands have been split; `opennote annotate`
+  will tell you which, by reporting the same passage out of reach.
+- **IFR**, the incapable-performing fingering rate — the same crossings counted the way
+  Zhao et al. define them, so the figure can be read against their published ones.
+  Their corpus records no durations, so their test has to assume the hand never moves,
+  and on real music most of what it flags is simply a hand that did. Expect it to be
+  larger than the unplayable count, and do not read it as a fault count.
 - **position changes** — how often the hand leaves the position it was in, by crossing
   the thumb or by shifting bodily. There is no right answer; pianists minimise it, but
   a fingering that never moves the hand has usually stopped playing the music. It is
   for comparing two runs over the same piece.
+
+The difference between the first two is worth understanding, because it is the one
+place this engine can answer a question the literature cannot. To uncross two fingers
+the hand has to travel far enough to bring them back inside what they can span, and
+that takes a knowable time at a hand's top speed — about two octaves in an eighth of a
+second, which is the figure the biomechanical model is already calibrated against. A
+crossing with 350 ms in front of it is a hand that moved. A crossing with 38 ms in
+front of it, where the move needs 47, is not a fingering at all.
 
 ### Seeing what it learned
 

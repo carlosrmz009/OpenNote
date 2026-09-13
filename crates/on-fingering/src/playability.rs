@@ -7,9 +7,11 @@
 //! being rendered, which agreement never can.
 //!
 //! * **IFR**, the incapable-performing fingering rate of Zhao, Guan & Li (2021, §4.2.2)
-//!   — the fraction of note transitions that no hand can make. It should be zero. It
-//!   is the one number here with a right answer, which makes it a regression test
-//!   rather than a benchmark.
+//!   — the fraction of note transitions where two fingers other than the thumb would
+//!   have to cross. Reported exactly as they define it, so it can be read against
+//!   their published figures.
+//! * **unplayable** — the subset of those the hand had no time to get out of. This is
+//!   the number with a right answer, and the right answer is zero.
 //! * **R_pc**, the change position rate of Ramoneda, Jeong, Nakamura, Serra & Miron
 //!   (2022, §5.1) — how often the hand leaves the position it was in, either by
 //!   crossing the thumb or by shifting bodily. Pianists minimise this, so lower is
@@ -20,6 +22,24 @@
 //! still be nothing a pianist would write. What they catch is the opposite failure —
 //! output that scores respectably against annotations while containing a transition
 //! that cannot physically be made — and that failure is invisible to a match rate.
+//!
+//! # Why IFR alone is not the answer
+//!
+//! Zhao et al. define the crossing test on PIG, which records no durations at all, so
+//! their measure cannot ask how long the hand had. It has to assume the worst, and
+//! they say so: they count the cases in their own ground truth that the rule wrongly
+//! rejects. Applied to real music the assumption bites hard, because most flagged
+//! crossings are simply a hand that moved between the two notes.
+//!
+//! This engine knows the timings, which is the one thing every system built on PIG has
+//! had to do without. So each flagged crossing is asked a second question: to uncross
+//! the pair, the hand must travel far enough to bring the two fingers back inside what
+//! they can span, and at [`HAND_SPEED_MM_PER_SECOND`] that takes a knowable time. If
+//! the music allowed it, the crossing is a hand movement and nothing is wrong. If it
+//! did not, no hand can do it.
+//!
+//! Both are reported. IFR for comparison with the literature, and the unplayable count
+//! for knowing whether the engine is producing nonsense.
 //!
 //! # Reading a chord
 //!
@@ -46,6 +66,15 @@ use crate::spans::SpanTable;
 /// as simultaneous.
 pub const CHORD_SECONDS: f64 = 0.030;
 
+/// How fast a hand travels along the keyboard at full stretch, in millimetres per
+/// second.
+///
+/// The same calibration the biomechanical model uses for its reconfiguration ceiling:
+/// a pianist covers two octaves, 328 mm, in roughly an eighth of a second. That is a
+/// ceiling and not a cruising speed, which is the right end to err at here — a measure
+/// that calls a fingering impossible should be sure.
+pub const HAND_SPEED_MM_PER_SECOND: f64 = 2.0 * 164.0 / 0.125;
+
 /// One transition that cannot be made, and where in the piece it is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Flaw {
@@ -58,21 +87,26 @@ pub struct Flaw {
     /// The note being reached for.
     pub to: Placement,
     /// How long the hand had between the two, in seconds.
-    ///
-    /// The measure itself ignores this, because the published definition does: PIG
-    /// carries no durations, so every system built on it is timing-blind. It is
-    /// recorded because it is what separates the two kinds of flag. A crossing with
-    /// milliseconds between the notes is a fingering no hand can play. The same
-    /// crossing with half a second between them is a hand that had time to move, and
-    /// the measure simply cannot see that it did.
     pub seconds_available: f64,
+    /// How long it would need, to travel far enough to uncross the pair.
+    pub seconds_needed: f64,
+}
+
+impl Flaw {
+    /// Whether the hand had no time to get out of its own way.
+    ///
+    /// A crossing this is false for is not a fault at all: it is a hand that moved,
+    /// which the crossing test on its own cannot see.
+    pub fn unplayable(&self) -> bool {
+        self.seconds_needed > self.seconds_available
+    }
 }
 
 impl std::fmt::Display for Flaw {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:>8.2}s  {:<5} {:>4} {} -> {:<4} {}   {:.0} ms to move",
+            "{:>8.2}s  {:<5} {:>4} {} -> {:<4} {}   {:>4.0} ms to move, needs {:.0}{}",
             self.onset_seconds,
             format!("{:?}", self.hand).to_lowercase(),
             on_hand::keyboard::name(self.from.midi),
@@ -80,6 +114,8 @@ impl std::fmt::Display for Flaw {
             on_hand::keyboard::name(self.to.midi),
             self.to.finger.number(),
             self.seconds_available * 1000.0,
+            self.seconds_needed * 1000.0,
+            if self.unplayable() { "  UNPLAYABLE" } else { "" },
         )
     }
 }
@@ -87,8 +123,10 @@ impl std::fmt::Display for Flaw {
 /// What a fingering costs a hand, measured against nothing but itself.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Playability {
-    /// Transitions no hand can make.
+    /// Transitions where two fingers other than the thumb would have to cross.
     pub impossible: usize,
+    /// Those of them the hand had no time to move out of.
+    pub unplayable: usize,
     /// Each of them, in time order, for a caller that wants to go and look.
     pub flaws: Vec<Flaw>,
     /// Position changes made by passing the thumb.
@@ -100,12 +138,21 @@ pub struct Playability {
 }
 
 impl Playability {
-    /// The incapable-performing fingering rate: the fraction that cannot be played.
+    /// The incapable-performing fingering rate, as Zhao et al. define it.
     ///
-    /// Zero is the only acceptable value. Anything else is a bug in the search, not a
-    /// difference of opinion about fingering.
+    /// Comparable with their published figures, and generous with false positives for
+    /// the reason given in the module documentation. For the question of whether the
+    /// output is sound, use [`Playability::unplayable_rate`].
     pub fn incapable_rate(&self) -> f32 {
         rate(self.impossible, self.transitions)
+    }
+
+    /// The fraction of transitions no hand could make in the time the music allows.
+    ///
+    /// Zero is the only acceptable value. Anything else is either a bug in the search
+    /// or music that cannot be played by two hands as the parts have been assigned.
+    pub fn unplayable_rate(&self) -> f32 {
+        rate(self.unplayable, self.transitions)
     }
 
     /// Position changes of both kinds.
@@ -125,6 +172,7 @@ impl Playability {
     /// Add another hand's, or another piece's, tally to this one.
     pub fn add(&mut self, other: Playability) {
         self.impossible += other.impossible;
+        self.unplayable += other.unplayable;
         self.flaws.extend(other.flaws);
         self.crossings += other.crossings;
         self.shifts += other.shifts;
@@ -136,7 +184,10 @@ impl std::fmt::Display for Playability {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "IFR {:.2}%   position changes {:.1}% ({} crossing, {} shift, {} transitions)",
+            "unplayable {} ({:.2}%)   IFR {:.2}%   position changes {:.1}% \
+             ({} crossing, {} shift, {} transitions)",
+            self.unplayable,
+            self.unplayable_rate() * 100.0,
             self.incapable_rate() * 100.0,
             self.change_rate() * 100.0,
             self.crossings,
@@ -208,6 +259,28 @@ fn impossible(hand: Hand, from: Placement, to: Placement) -> bool {
     i32::from(from.finger.number()) * i32::from(to.finger.number()) > 4
 }
 
+/// How long the hand needs to uncross a pair, in seconds.
+///
+/// To play the second note with the second finger, the hand has to be somewhere that
+/// puts the two inside what the pair can span. The shortfall is how far outside that
+/// span the interval falls, which the tables already answer in semitones, and a
+/// semitone is a known number of millimetres. Dividing by the speed a hand can travel
+/// gives the time — a lower bound, since it assumes the hand is already moving at its
+/// ceiling and has only to translate.
+///
+/// A pair the tables say can span the interval needs no time at all, and is therefore
+/// never unplayable however fast it comes. That is how the two sources are reconciled
+/// where they disagree: Zhao et al.'s product test rejects a thumb crossing the little
+/// finger, while Parncutt's measured tables give the pair a minimum practical span of
+/// -1 and so permit it. The measured tables win on what a hand can do; the product
+/// test still reports it, so the IFR figure stays theirs.
+fn seconds_to_uncross(hand: Hand, spans: &SpanTable, from: Placement, to: Placement) -> f64 {
+    let semitones = i32::from(to.midi) - i32::from(from.midi);
+    let span = spans.get(hand, from.finger, to.finger);
+    let shortfall = f64::from(span.impracticality(semitones));
+    shortfall * f64::from(crate::ruler::SEMITONE_MM) / HAND_SPEED_MM_PER_SECOND
+}
+
 /// Whether the hand left the position it was in.
 ///
 /// Two ways, following Ramoneda et al. (2022, §5.1). The thumb passes under or over,
@@ -273,13 +346,18 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
             out.transitions += 1;
             if impossible(hand, from, to) {
                 out.impossible += 1;
-                out.flaws.push(Flaw {
+                let flaw = Flaw {
                     hand,
                     onset_seconds: pair[1].onset_seconds,
                     from,
                     to,
                     seconds_available: pair[1].onset_seconds - pair[0].onset_seconds,
-                });
+                    seconds_needed: seconds_to_uncross(hand, spans, from, to),
+                };
+                if flaw.unplayable() {
+                    out.unplayable += 1;
+                }
+                out.flaws.push(flaw);
             }
             match position_change(hand, spans, from, to) {
                 Some(Change::Crossing) => out.crossings += 1,
@@ -352,6 +430,79 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+
+    /// The measure has to stay capable of saying no, or it is worth nothing.
+    ///
+    /// The same crossing, twice: once with the notes far enough apart that the hand
+    /// can be somewhere else by the second one, and once with them almost together.
+    /// Both are crossings and both are counted in the IFR, because that is how Zhao et
+    /// al. define it. Only the second is a fingering no hand can play.
+    #[test]
+    fn a_crossing_is_unplayable_only_when_the_hand_had_no_time() {
+        // The shape the measure found in real music: a left hand leaving G sharp with
+        // the little finger and wanting C an octave-ish below with the ring finger,
+        // which needs the whole hand somewhere else.
+        let crossed = |seconds: f64| {
+            vec![
+                Chord::single(0.0, Placement::new(44, Finger::Little)),
+                Chord::single(seconds, Placement::new(36, Finger::Ring)),
+            ]
+        };
+
+        let hurried = measure(Hand::Left, &PARNCUTT, &crossed(0.038));
+        assert_eq!(hurried.impossible, 1, "{hurried}");
+        assert_eq!(hurried.unplayable, 1, "{hurried}");
+
+        let unhurried = measure(Hand::Left, &PARNCUTT, &crossed(1.0));
+        assert_eq!(unhurried.impossible, 1, "still a crossing: {unhurried}");
+        assert_eq!(
+            unhurried.unplayable, 0,
+            "a second is long enough to carry a hand anywhere: {unhurried}"
+        );
+    }
+
+    /// Where the two published sources disagree, the measured span tables decide what a
+    /// hand can do and the heuristic only decides what gets reported.
+    ///
+    /// Zhao et al.'s product test rejects the thumb crossing the little finger, since
+    /// 1 times 5 exceeds their threshold. Parncutt's Table 1 gives that pair a minimum
+    /// practical span of -1, which is to say it was measured and it is possible. So it
+    /// is counted in the IFR, for comparability with their figures, and never called
+    /// unplayable.
+    #[test]
+    fn the_measured_tables_outrank_the_heuristic() {
+        let fast = vec![
+            Chord::single(0.0, Placement::new(64, Finger::Thumb)),
+            Chord::single(0.01, Placement::new(63, Finger::Little)),
+        ];
+        let out = measure(Hand::Right, &PARNCUTT, &fast);
+        assert_eq!(out.impossible, 1, "Zhao et al. reject it: {out}");
+        assert_eq!(out.unplayable, 0, "Parncutt measured it: {out}");
+    }
+
+    /// The time a hand needs scales with how far out of position it is, so a wider
+    /// crossing needs longer. Without that the measure would be a fixed threshold
+    /// wearing a physical argument as a disguise.
+    #[test]
+    fn a_wider_crossing_needs_longer() {
+        let gap = |to: u8| {
+            let events = vec![
+                Chord::single(0.0, Placement::new(60, Finger::Little)),
+                Chord::single(0.05, Placement::new(to, Finger::Ring)),
+            ];
+            measure(Hand::Left, &PARNCUTT, &events)
+                .flaws
+                .first()
+                .map(|f| f.seconds_needed)
+        };
+        let (near, far) = (gap(58), gap(52));
+        assert!(near.is_some() && far.is_some(), "{near:?} {far:?}");
+        assert!(
+            far > near,
+            "six semitones out of position needs no longer than two: {far:?} vs {near:?}"
+        );
     }
 
     /// The fingering every pianist is taught for a C major scale has to come out

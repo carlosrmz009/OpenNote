@@ -22,3 +22,10 @@
 # Python bytecode from the tools/ scripts.
 __pycache__/
 *.pyc
+
+# Local working files: the generated README and benchmark report, and the images they
+# reference. Carlos's own README.md is the one in the repo; these are drafts that live
+# on one machine and are not part of the project.
+/README.draft.md
+/BENCHMARK.draft.md
+/docs/images/

@@ -451,17 +451,24 @@ fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
     let title = score.title.clone().unwrap_or_else(|| "untitled".into());
     println!("{title}: {} notes fingered", solution.fingerings.len());
     println!("  {measured}");
-    if measured.impossible > 0 {
+    if measured.unplayable > 0 {
         println!(
-            "\n  {} transition(s) no hand can make. Some of those are the measure being\n  \
-             strict rather than the fingering being wrong — inside an octave it cannot\n  \
-             tell a hand that moved from one that did not — but a number that grows\n  \
-             after a change to the rules is a change that broke something.",
-            measured.impossible
+            "\n  {} transition(s) no hand could make in the time the music allows.\n  \
+             Either the search went wrong, or the part as assigned is not playable by\n  \
+             one hand — `opennote annotate` will say if the passage is out of reach.",
+            measured.unplayable
         );
-        for flaw in &measured.flaws {
+        for flaw in measured.flaws.iter().filter(|f| f.unplayable()) {
             println!("    {flaw}");
         }
+    }
+    let cleared = measured.impossible - measured.unplayable;
+    if cleared > 0 {
+        println!(
+            "\n  {cleared} further crossing(s) are counted by the IFR but had time to\n  \
+             happen. They are in that figure because Zhao et al. define it on a corpus\n  \
+             with no durations, so it cannot ask; they are not faults."
+        );
     }
     Ok(())
 }
