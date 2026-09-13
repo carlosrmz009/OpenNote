@@ -11,7 +11,7 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use on_fingering::biomech::{BiomechModel, BiomechWeights};
+use on_fingering::biomech::BiomechWeights;
 use on_hand::keyboard::{is_black, BLACK_KEY_HEIGHT, KEY_DIP, WHITE_KEY_LENGTH};
 use on_hand::{Hand, HandProfile};
 use tracing::warn;
@@ -403,13 +403,8 @@ impl Performance {
         hands_available: bool,
         soundfont: Option<std::path::PathBuf>,
     ) -> Self {
-        let animators = Hand::ALL
-            .iter()
-            .map(|hand| {
-                let model = BiomechModel::new(profile.clone(), *hand, BiomechWeights::default());
-                HandAnimator::new(*hand, model, timeline.hand_grips(*hand).to_vec())
-            })
-            .collect();
+        let animators = timeline.animators(&profile, BiomechWeights::default());
+
         let torso = on_hand::torso::Torso::new(&profile, layout.centre_mm().0);
         Self { timeline, layout, animators, assets_root, hands_available, soundfont, torso }
     }

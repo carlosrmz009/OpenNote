@@ -11,10 +11,13 @@
 //! * whether the solved posture sits inside the joint ranges, and by how many degrees
 //!   it does not
 //! * whether any part of the hand ends up below the keys it is supposed to be playing
+//! * whether the two hands ever end up in the same place at the same time
 //!
-//! The right answer to all three is zero. A miss means the drawn hand is somewhere the
+//! The right answer to all four is zero. A miss means the drawn hand is somewhere the
 //! fingering did not ask for; a joint out of range means the drawn hand is doing
-//! something no hand does; and a hand under the keyboard is the one anybody notices.
+//! something no hand does; a hand under the keyboard is the one anybody notices; and
+//! two hands in one place is the other one anybody notices, because hands are solid and
+//! these ones will draw straight through each other.
 //!
 //!     cargo run -p on-viz --example anatomy -- path/to/piece.mid
 
@@ -24,7 +27,7 @@ use on_hand::skeleton::{HandPose, DOF, LIMITS};
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
-use on_viz::timeline::Timeline;
+use on_viz::timeline::{HandAnimator, Timeline};
 
 /// How far below the top of the keys a joint may sit before it is inside them.
 ///
@@ -37,6 +40,51 @@ const THROUGH_THE_KEYS_MM: f32 = 12.0;
 /// it, in seconds. A rolled chord is the reason there is any window at all; it wants a
 /// little more than the roll itself.
 const LATE_ARRIVAL: f64 = 0.12;
+
+/// How often the two hands are checked against each other, in seconds.
+///
+/// They are posed by interpolation, so a collision can happen between two grips rather
+/// than at either of them. It has to be sampled, and this is finer than a rendered
+/// frame at sixty a second.
+const COLLISION_STEP: f64 = 1.0 / 90.0;
+
+/// How much the two hands may overlap along the keyboard before it counts, in
+/// millimetres.
+///
+/// Not zero. Real hands sit close together and a player's fingers interleave; what is
+/// being looked for is the drawn models passing through each other, not two hands being
+/// near. A couple of millimetres of slack keeps the ordinary close position from being
+/// reported as a fault.
+const COLLISION_SLACK_MM: f32 = 2.0;
+
+/// The patch of keyboard one posed hand covers, in millimetres: along the keys and
+/// into them.
+///
+/// Every joint it has, not only the fingertips: what collides is the backs of the hands
+/// and the wrists, which is exactly the part no fingering model has an opinion about.
+///
+/// All three axes. Two hands at the same place along the keyboard are not necessarily
+/// in each other: one can be further onto the keys than the other, which is what a
+/// player does to get two hands into one register, and one can be lifted over the other,
+/// which is what a player does to cross them. A check on the keyboard plane alone calls
+/// both of those a collision.
+fn hand_box(animator: &HandAnimator, pose: &on_hand::skeleton::HandPose) -> [(f32, f32); 3] {
+    let posture = animator.skeleton().forward(pose);
+    let mut box_ = [
+        (posture.wrist.x, posture.wrist.x),
+        (posture.wrist.y, posture.wrist.y),
+        (posture.wrist.z, posture.wrist.z),
+    ];
+    for digit in &posture.chain {
+        for joint in digit {
+            for (axis, value) in [joint.x, joint.y, joint.z].into_iter().enumerate() {
+                box_[axis].0 = box_[axis].0.min(value);
+                box_[axis].1 = box_[axis].1.max(value);
+            }
+        }
+    }
+    box_
+}
 
 fn main() -> anyhow::Result<()> {
     let Some(path) = std::env::args().nth(1) else {
@@ -71,6 +119,10 @@ fn main() -> anyhow::Result<()> {
     let mut through_but_reached = 0usize;
     let mut struck_unplayed = 0usize;
     let mut silent_strikes: Vec<String> = Vec::new();
+    let mut colliding = 0usize;
+    let mut sampled = 0usize;
+    let mut worst_overlap = 0.0f32;
+    let mut collisions: Vec<String> = Vec::new();
 
     for hand in Hand::ALL {
         let model = BiomechModel::new(options.profile.clone(), hand, options.biomech);
@@ -210,11 +262,54 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Do the two hands ever end up in the same place? Sampled rather than taken at the
+    // grips, because the hands are posed by interpolation and can meet on the way
+    // between two postures that are each perfectly fine on their own.
+    // The same builder the renderer uses, so this measures what is actually drawn.
+    let animators = timeline.animators(&options.profile, options.biomech);
+    let mut at = 0.0;
+    while at <= timeline.duration {
+        sampled += 1;
+        // Posed the way the renderer poses them, lifting included, or this measures
+        // something that is never drawn.
+        let posed = on_viz::timeline::pose_both(&animators, at);
+        let left = hand_box(&animators[Hand::Left as usize], &posed[0]);
+        let right = hand_box(&animators[Hand::Right as usize], &posed[1]);
+        // Two boxes intersect only where they overlap on every axis, and the shallowest
+        // of the three overlaps is how far one would have to move to be clear.
+        let overlap = (0..3)
+            .map(|axis| left[axis].1.min(right[axis].1) - left[axis].0.max(right[axis].0))
+            .fold(f32::INFINITY, f32::min);
+        let (left_low, left_high, right_low, right_high) =
+            (left[0].0, left[0].1, right[0].0, right[0].1);
+        if overlap > COLLISION_SLACK_MM {
+            colliding += 1;
+            worst_overlap = worst_overlap.max(overlap);
+            if collisions.len() < 6 && collisions.last().is_none_or(|last: &String| {
+                // One line per episode rather than one per sample.
+                !last.starts_with(&format!("  {:.1}", at.floor()))
+            }) {
+                collisions.push(format!(
+                    "  {at:.2}s the hands overlap by {overlap:.0} mm  \
+                     (left {left_low:.0}..{left_high:.0}, right {right_low:.0}..{right_high:.0})"
+                ));
+            }
+        }
+        at += COLLISION_STEP;
+    }
+
     println!("{path}");
     println!("  grips the hands are drawn holding:      {grips}");
     println!("  ...where a finger never reaches its key: {missed}  (worst {worst_miss:.1} mm)");
     println!("  ...where a joint is outside its range:   {out_of_range}  (worst {worst_violation:.1}°)");
     println!("  ...where the hand is through the keys:   {through}  (deepest {deepest:.1} mm)");
+    println!(
+        "  moments the two hands share a space:     {colliding} of {sampled}  \
+         (worst {worst_overlap:.0} mm)"
+    );
+    for line in &collisions {
+        println!("{line}");
+    }
     println!("  notes struck with no finger on them:     {struck_unplayed}");
     for line in &silent_strikes {
         println!("{line}");
