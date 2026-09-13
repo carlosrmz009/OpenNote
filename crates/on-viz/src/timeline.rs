@@ -574,6 +574,25 @@ const CLEARANCE_SLACK_MM: f32 = 3.0;
 /// worse than showing it.
 const CLEARANCE_MAX_MM: f32 = 60.0;
 
+/// The most a hand's body will be swung aside to get clear of the other, in degrees.
+///
+/// Ulnar and radial deviation is the joint a player angles a wrist with, and its range
+/// is 30 degrees one way and 20 the other. This asks for a fraction of that: enough to
+/// take a palm out of the other hand, not enough to look like the hand is being wrung.
+const SWING_MAX_DEG: f32 = 14.0;
+
+/// How far a held fingertip may be dragged off its key by that swing, in millimetres.
+///
+/// The swing keeps the *centroid* of the held fingers exactly, but the fingers either
+/// side of it rotate about that centroid, and the wider the shape the further they go:
+/// fourteen degrees across an octave would move the outer fingers twenty millimetres,
+/// which is most of a white key. So the angle is scaled back until the worst-moved
+/// finger is within this.
+///
+/// A quarter of a white key. A finger that far from where it was is still on the key it
+/// is holding, and a collision is worth that much; half a key is not.
+const SWING_TOLERANCE_MM: f32 = 6.0;
+
 /// How long before a strike a finger starts to lift, in seconds.
 ///
 /// Short. It is a preparation, not a wind-up, and a run of quick notes has less time
@@ -1051,9 +1070,111 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         }
         (true, false) => poses[0].q[dof::WRIST_Z] += lift,
         (false, true) => poses[1].q[dof::WRIST_Z] += lift,
-        (false, false) => {}
+        // Neither can be lifted: both are holding keys and have to stay on them. Swing
+        // the bodies apart instead, which keeps every finger where it is.
+        (false, false) => {
+            let centres = [
+                (extents[0][0].0 + extents[0][0].1) / 2.0,
+                (extents[1][0].0 + extents[1][0].1) / 2.0,
+            ];
+            for side in 0..2 {
+                let animator = &animators[side];
+                let Some(grip) = animator.grip_at(time) else {
+                    continue;
+                };
+                swing_clear(animator, &mut poses[side], grip, centres[1 - side]);
+            }
+        }
     }
     poses
+}
+
+/// Swing a hand's body aside without taking its fingers off their keys.
+///
+/// The last resort, for when both hands are holding and neither can be lifted over the
+/// other. A hand is far wider than the notes it plays, so two hands working in one
+/// register meet at the palms long before the fingers do — and a player answers that by
+/// angling the wrists outward, not by moving the fingers.
+///
+/// The pose can do exactly that. Deviation swings the whole hand about the wrist, which
+/// takes the fingers with it; translating the wrist by however far the fingertips moved
+/// puts them back. The centroid of the held tips is restored exactly, because the wrist
+/// translation is a rigid shift of everything. Individual fingers rotate a little about
+/// that centroid, which for the narrow shapes this happens on is a millimetre or two —
+/// the price of getting a palm out of another hand.
+///
+/// Both directions are tried and the better kept, rather than reasoning about which
+/// sign of deviation swings which way for which hand: the answer depends on the hand,
+/// the shape and where the other hand is, and measuring it is both shorter and right.
+fn swing_clear(
+    animator: &HandAnimator,
+    pose: &mut HandPose,
+    grip: &Grip,
+    away_from: f32,
+) {
+    if grip.keys.is_empty() {
+        return;
+    }
+    // Where the held fingers are now, and where their middle is.
+    let tips = |p: &HandPose| -> Vec<glam::Vec3> {
+        let posture = animator.skeleton.forward(p);
+        grip.keys
+            .iter()
+            .map(|(_, finger)| posture.chain[finger.index()][3])
+            .collect()
+    };
+    let middle = |t: &[glam::Vec3]| t.iter().copied().sum::<glam::Vec3>() / t.len() as f32;
+
+    let before = tips(pose);
+    let held = middle(&before);
+
+    // Swing by an angle, then shift the wrist so the middle of the held fingers is back
+    // where it was. That shift is a rigid translation of the whole hand, so the middle
+    // is restored exactly; how far the *outer* fingers end up from their keys is what
+    // has to be watched.
+    let swung = |angle: f32| {
+        let mut trial = *pose;
+        trial.q[dof::WRIST_DEVIATION] += angle;
+        animator.skeleton.clamp(&mut trial);
+        let moved = middle(&tips(&trial));
+        trial.q[dof::WRIST_X] += held.x - moved.x;
+        trial.q[dof::WRIST_Y] += held.y - moved.y;
+        let strayed = tips(&trial)
+            .iter()
+            .zip(&before)
+            .map(|(now, was)| now.distance(*was))
+            .fold(0.0f32, f32::max);
+        (trial, strayed)
+    };
+
+    let mut best: Option<(f32, HandPose)> = None;
+    for sign in [1.0f32, -1.0] {
+        let full = sign * SWING_MAX_DEG.to_radians();
+        let (_, strayed) = swung(full);
+        // Scale the angle back until the worst-moved finger is inside tolerance. The
+        // displacement is very nearly linear in the angle over this range, so one step
+        // is enough.
+        let angle = if strayed > SWING_TOLERANCE_MM {
+            full * (SWING_TOLERANCE_MM / strayed)
+        } else {
+            full
+        };
+        let (trial, strayed) = swung(angle);
+        if strayed > SWING_TOLERANCE_MM * 1.5 {
+            continue;
+        }
+        // Did the body actually end up further from the other hand?
+        let gained = (trial.wrist_position().x - away_from).abs()
+            - (pose.wrist_position().x - away_from).abs();
+        if best.as_ref().is_none_or(|(g, _)| gained > *g) {
+            best = Some((gained, trial));
+        }
+    }
+    if let Some((gained, trial)) = best {
+        if gained > 0.0 {
+            *pose = trial;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1442,6 +1563,48 @@ mod tests {
                 >= alone[Hand::Left as usize].q[dof::WRIST_Z] - 1e-4,
             "the free hand was pushed down into the other one"
         );
+    }
+
+
+    /// Getting the hands apart must not take a finger off the key it is holding.
+    ///
+    /// The swing keeps the middle of the held fingers exactly and lets the outer ones
+    /// rotate about it, so the wider the shape the further they go — and a collision
+    /// fixed by dragging fingers off their notes is not fixed. The angle is scaled back
+    /// until the worst-moved finger is inside tolerance, and this is the guard on that.
+    #[test]
+    fn getting_clear_never_drags_a_finger_off_its_key() {
+        let q = TICKS_PER_QUARTER as i64;
+        // Two hands holding wide chords in nearly the same register: both busy, so
+        // neither can be lifted, and the swing is the only thing left.
+        let score = score_of(&[
+            (52, 0, 8 * q, Hand::Left),
+            (59, 0, 8 * q, Hand::Left),
+            (62, 0, 8 * q, Hand::Right),
+            (69, 0, 8 * q, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let keys = on_hand::keyboard::Keyboard::new();
+
+        let at = 1.0;
+        let posed = pose_both(&animators, at);
+        for hand in Hand::ALL {
+            let animator = &animators[hand as usize];
+            let Some(grip) = animator.grip_at(at) else { continue };
+            let swung = animator.skeleton().forward(&posed[hand as usize]);
+            let alone = animator.skeleton().forward(&animator.pose_at(at));
+            for (midi, finger) in &grip.keys {
+                let want = keys.centre_x(*midi);
+                let moved = (swung.chain[finger.index()][3].x - want).abs()
+                    - (alone.chain[finger.index()][3].x - want).abs();
+                assert!(
+                    moved <= SWING_TOLERANCE_MM,
+                    "{hand:?} finger {} on {midi} was dragged {moved:.1} mm further off                      its key to get the hands apart",
+                    finger.number()
+                );
+            }
+        }
     }
 
     /// Two hands that are nowhere near each other must be left exactly alone.

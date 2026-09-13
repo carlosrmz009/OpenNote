@@ -126,6 +126,9 @@ fn main() -> anyhow::Result<()> {
     let mut both_busy = 0usize;
     let mut one_free = 0usize;
     let mut worst_depth_overlap = 0.0f32;
+    let mut worst_off_key = 0.0f32;
+    let mut worst_off_key_alone = 0.0f32;
+    let keys_geom = on_hand::keyboard::Keyboard::new();
 
     for hand in Hand::ALL {
         let model = BiomechModel::new(options.profile.clone(), hand, options.biomech);
@@ -315,6 +318,29 @@ fn main() -> anyhow::Result<()> {
         at += COLLISION_STEP;
     }
 
+    // Every finger, at the moment its grip is taken, against the key it is meant to be
+    // on. That is the one instant the hand is not on its way somewhere, so it is the one
+    // instant the question has a clean answer — and it is where anything the collision
+    // handling does to a finger would show up.
+    for hand in Hand::ALL {
+        let animator = &animators[hand as usize];
+        for event in timeline.hand_grips(hand) {
+            if event.grip.keys.is_empty() {
+                continue;
+            }
+            let posed = on_viz::timeline::pose_both(&animators, event.time);
+            let posture = animator.skeleton().forward(&posed[hand as usize]);
+            let alone = animator.skeleton().forward(&animator.pose_at(event.time));
+            for (midi, finger) in &event.grip.keys {
+                let want = keys_geom.centre_x(*midi);
+                worst_off_key =
+                    worst_off_key.max((posture.chain[finger.index()][3].x - want).abs());
+                worst_off_key_alone =
+                    worst_off_key_alone.max((alone.chain[finger.index()][3].x - want).abs());
+            }
+        }
+    }
+
     println!("{path}");
     println!("  grips the hands are drawn holding:      {grips}");
     println!("  ...where a finger never reaches its key: {missed}  (worst {worst_miss:.1} mm)");
@@ -327,6 +353,9 @@ fn main() -> anyhow::Result<()> {
     println!("      of those, with a hand free to lift: {one_free}");
     println!("      of those, with BOTH hands holding:   {both_busy}");
     println!("      worst overlap along the keys:        {worst_depth_overlap:.0} mm");
+    println!(
+        "  furthest a held finger sits from its key: {worst_off_key:.1} mm posed for          collisions, {worst_off_key_alone:.1} mm without  (a white key is 23.5 mm wide)"
+    );
     for line in &collisions {
         println!("{line}");
     }
