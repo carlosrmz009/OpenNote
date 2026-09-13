@@ -17,6 +17,6 @@ pub mod train;
 pub mod video;
 
 pub use corpus::{Corpus, Piece};
-pub use eval::{evaluate, MatchRates};
+pub use eval::{evaluate, recombined, MatchRates};
 pub use train::{split, train, Split, TrainReport};
 pub use video::{Homography, Watched};
