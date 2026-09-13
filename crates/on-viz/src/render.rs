@@ -120,8 +120,13 @@ const BACK_GLOW_GLOW: f32 = 0.30;
 /// what says where "now" is at a glance.
 const HIT_LINE_GLOW: f32 = 4.4;
 
-/// How big the flash at a sounding key is, in millimetres across.
-const FLASH_SIZE_MM: f32 = 84.0;
+/// How big the flash at a sounding key is, in millimetres across, on a white key.
+///
+/// A black key gets a smaller one in proportion to its width, so the flash belongs to
+/// the key rather than washing over its neighbours. This was 84 mm — three and a half
+/// white keys — which put a struck note's light over the two keys either side of it and
+/// made a chord one continuous glare instead of three lit keys.
+const FLASH_SIZE_MM: f32 = 40.0;
 
 /// How far above the keys its centre sits. A little above the hit line, so the burst
 /// looks like it is coming off the key rather than out of the front of the instrument.
@@ -204,14 +209,37 @@ const BLACK_KEY_GLOW: f32 = 1.45;
 /// mote much past full scale simply clips every channel and the spray goes white,
 /// losing the one thing that says which hand threw it.
 ///
-/// Well past the bloom threshold, so each mote carries a halo rather than being a
-/// coloured dot. Dust this small — a pixel or three — contributes almost nothing to a
+/// Past the bloom threshold, so each mote carries a halo rather than being a coloured
+/// dot. Dust this small — a pixel or three — contributes almost nothing to a
 /// screen-space bloom unless it is genuinely bright, and the reference dust plainly
 /// glows: it lights the black around it.
-const SPARK_GLOW: f32 = 4.2;
+///
+/// Only just past it, though. This was nearly three times higher when the plume stood
+/// two hundred millimetres tall and the motes had room to be separate points of light.
+/// In a plume the width of one key their halos overlap completely, and a hundred
+/// overlapping halos is not dust, it is a lamp.
+const SPARK_GLOW: f32 = 1.9;
 
 /// How long one mote of dust lives, in seconds.
-const SPARK_LIFE: f32 = 1.05;
+const SPARK_LIFE: f32 = 0.50;
+
+/// How long the plume goes on after the key comes up, in seconds.
+///
+/// The dust does not stop when the note does — it is in the air, and air takes a moment
+/// to clear. But only a moment: a plume that outlives its note hangs over the keyboard
+/// and blocks the notes still falling towards it. Everything still in the air at the
+/// end of this has evaporated.
+const SPARK_TAIL_SECONDS: f32 = 0.10;
+
+/// How sharply the plume evaporates once its time is up.
+///
+/// Below one, so the dust holds most of its brightness through the first half of the
+/// tail and then goes. That is the wrong way round from what the number suggests and
+/// the right way round for what is seen: a mote is a point of light well past the bloom
+/// threshold, so it stops being drawn at all somewhat before its scale reaches zero.
+/// Shaped the other way it was gone in two frames, which is a cut rather than an
+/// evaporation however the arithmetic is written.
+const SPARK_EVAPORATE_SHAPE: f32 = 0.75;
 
 /// How long the full-rate burst at the strike lasts, in seconds.
 ///
@@ -235,21 +263,31 @@ const SPARK_SUSTAIN_SHARE: f32 = 0.34;
 /// some are being born, some are at the top of their arc and some are fading — which is
 /// what a fountain is, and what a single burst can never look like however many motes
 /// it has in it.
-const SPARKS_PER_NOTE: usize = 1_450;
+const SPARKS_PER_NOTE: usize = 150;
 
 /// The most that may be in the air at once, over all notes. A dense passage will exceed
 /// it and the excess is simply not drawn.
-const MAX_SPARKS: usize = 34_000;
+///
+/// Every one of these is an entity the system walks each frame whether it is visible or
+/// not, so the pool is sized for what can actually be sounding — eighty plumes at once
+/// is already more keys than a pianist has fingers and a pedal. It was three times this
+/// when a plume took ten times as many motes.
+const MAX_SPARKS: usize = 12_000;
 
 /// How fast a mote is thrown, in millimetres per second, and how hard it falls.
 ///
 /// Gently, on both counts. The dust in the reference is not thrown, it comes off the
-/// key and goes out — a plume about seven white keys tall that thins as it climbs. Hard
-/// enough to arc, and it reads as a firework instead.
-const SPARK_RISE_MM: f32 = 370.0;
+/// key and goes out. Hard enough to arc, and it reads as a firework instead.
+///
+/// Low enough to stay out of the way, too. The notes fall towards the keyboard through
+/// exactly the space the dust rises into, so a tall plume hides what is coming — which
+/// matters more than the plume does. A couple of white keys of height is plenty to read
+/// as dust coming off the key.
+const SPARK_RISE_MM: f32 = 170.0;
 const SPARK_GRAVITY_MM: f32 = 45.0;
 
-/// How far a mote wanders sideways by the end of its life, in millimetres.
+/// How far a mote wanders sideways by the end of its life, as a fraction of the width
+/// of the key that threw it.
 ///
 /// The plume is not thrown anywhere. It comes off the top of the note about as wide as
 /// the note is, widens as it climbs, and comes apart into a loose cloud near the top —
@@ -259,7 +297,12 @@ const SPARK_GRAVITY_MM: f32 = 45.0;
 /// by its own amount, and the plume widens because the filaments disagree, not because
 /// anything is pushing them apart. Two arms leaning away from each other give a V, and
 /// a V reads as spray.
-const SPARK_WANDER_MM: f32 = 37.0;
+///
+/// Measured in key widths rather than millimetres so the dust belongs to the key it
+/// came off: it stays within the margins of that key instead of drifting over its
+/// neighbours, and a black key — which is narrower — throws a narrower plume without
+/// anything having to say so.
+const SPARK_WANDER_KEYS: f32 = 0.40;
 
 /// How the wandering builds with time. Below one it is quick at first and then eases,
 /// which is what leaves the plume narrow at the key and open at the top.
@@ -279,21 +322,21 @@ const SPARK_WANDER_AT_BIRTH: f32 = 0.26;
 /// jitter between them, so the filaments hold together as they climb.
 const SPARK_FILAMENT: u32 = 13;
 
-/// How far the whole plume leans as it rises, in millimetres per second.
+/// How far the whole plume leans as it rises, in key widths per second squared.
 ///
-/// The old dust at the top of a plume has drifted well off to one side in the
-/// reference — there is air in the room. One direction per note, so a plume leans
-/// rather than blurring.
-const SPARK_DRIFT_MM: f32 = 26.0;
+/// There is air in the room, and the old dust at the top of a plume has drifted a
+/// little off to one side. One direction per note, so a plume leans rather than
+/// blurring — but not far enough to leave the key it came from.
+const SPARK_DRIFT_KEYS: f32 = 0.35;
 
-/// How far a mote wanders as it travels, and how tightly it curls.
-const SPARK_CURL_MM: f32 = 15.0;
+/// How far a mote wanders as it travels, in key widths, and how tightly it curls.
+const SPARK_CURL_KEYS: f32 = 0.10;
 const SPARK_CURL_RATE: f32 = 2.6;
 
 /// How big a mote is drawn, in millimetres. About a pixel at the usual framing: these
-/// read as dust because they are small and there are thousands, not because of anything
+/// read as dust because they are small and there are many, not because of anything
 /// drawn into them.
-const SPARK_SIZE_MM: std::ops::Range<f32> = 0.9..3.2;
+const SPARK_SIZE_MM: std::ops::Range<f32> = 0.7..2.4;
 
 /// How long a mote stays white before it takes the colour of the note that threw it.
 ///
@@ -546,6 +589,8 @@ struct NoteLight;
 #[derive(Component)]
 struct Flash {
     midi: u8,
+    /// How wide this key is against a white one, so a black key flashes narrower.
+    spread: f32,
 }
 
 /// The two colours sparks come in, one per hand.
@@ -1122,6 +1167,7 @@ fn setup_flashes(
         })
     });
 
+    // One quad, sized for a white key, and each flash scaled to the key it belongs to.
     let quad = meshes.add(Rectangle::new(FLASH_SIZE_MM, FLASH_SIZE_MM));
     for midi in layout.keys() {
         let (x0, x1, _, _) = layout.key_rect(midi);
@@ -1130,7 +1176,7 @@ fn setup_flashes(
             MeshMaterial3d(colours[0].clone()),
             Transform::from_xyz((x0 + x1) / 2.0, FLASH_HEIGHT_MM, LANE_Z + 1.0),
             Visibility::Hidden,
-            Flash { midi },
+            Flash { midi, spread: (x1 - x0) / on_hand::keyboard::WHITE_KEY_WIDTH },
         ));
     }
     commands.insert_resource(FlashColours(colours));
@@ -1155,15 +1201,17 @@ fn raise_flashes(
     let states = performance.timeline.key_depression(transport.position);
     for (flash, mut transform, mut visibility, mut material) in flashes {
         let depth = states.depth_of(flash.midi);
-        let Some(hand) = states.hand_on(flash.midi).filter(|_| depth > 0.02) else {
+        let Some(hand) = states.hand_on(flash.midi).filter(|_| depth > 0.0) else {
             if *visibility != Visibility::Hidden {
                 *visibility = Visibility::Hidden;
             }
             continue;
         };
-        // Biggest at the instant the key lands and shrinking as it is held, so a
-        // struck key flares and a held one keeps a glow rather than a flare.
-        transform.scale = Vec3::splat(0.35 + 0.65 * depth.powf(0.55));
+        // It follows the key exactly: up from nothing as the key goes down, steady
+        // while it is held, and back to nothing as it rises. There used to be a floor
+        // under this, so the flash never got smaller than a third of full size and then
+        // blinked out — which is what made a released note look cut off.
+        transform.scale = Vec3::splat(flash.spread * depth.powf(0.55));
         *visibility = Visibility::Visible;
 
         let wanted = &colours.0[hand as usize];
@@ -1278,15 +1326,33 @@ fn update_sparks(
     let stagger = SPARK_LIFE / SPARKS_PER_NOTE as f32;
 
     for (index, note) in performance.timeline.notes.iter().enumerate() {
-        let elapsed = (now - note.start) as f32;
-        // A key throws dust for as long as it is down, hardest at the strike.
-        let throwing = (note.end - note.start) as f32;
-        // Nothing yet, or the last mote thrown has already died.
-        if elapsed < 0.0 || elapsed > throwing + SPARK_LIFE {
+        // When this plume is gone: a moment after the key comes up, or the instant the
+        // same key is struck again, whichever is sooner. The second is what keeps a
+        // repeated note from stacking one plume on another — the old dust has to be
+        // gone before the new note throws any, so there is only ever one on a key.
+        let done = (note.end + f64::from(SPARK_TAIL_SECONDS))
+            .min(note.restruck.unwrap_or(f64::INFINITY));
+        if now < note.start || now >= done {
             continue;
         }
+        let elapsed = (now - note.start) as f32;
+        // A key throws dust for as long as it is down, hardest at the strike. Capped at
+        // the end of the plume, so a key struck again while it is somehow still held
+        // stops throwing rather than throwing into its successor.
+        let throwing = (note.end.min(done) - note.start) as f32;
+
+        // How much of the plume is left, as a fraction of the tail. One while the note
+        // is sounding, falling to zero as the dust evaporates — and falling faster than
+        // that when the key is struck again and there is less than a tail to do it in.
+        let evaporation = (((done - now) as f32) / SPARK_TAIL_SECONDS)
+            .clamp(0.0, 1.0)
+            .powf(SPARK_EVAPORATE_SHAPE);
+
         let (x0, x1, _, _) = layout.key_rect(note.midi);
         let centre = (x0 + x1) / 2.0;
+        // The dust belongs to the key that threw it, so everything sideways is measured
+        // against how wide that key is.
+        let width = x1 - x0;
 
         for spark in 0..SPARKS_PER_NOTE {
             let Some((mut transform, mut visibility, mut material)) = slots.next() else {
@@ -1332,7 +1398,8 @@ fn update_sparks(
             // Where this filament wanders to, and how fast it climbs. Both are its own,
             // and the plume opens out because they differ rather than because anything
             // is pushing.
-            let reach = SPARK_WANDER_MM * (2.0 * scramble(strand ^ 0x94d0_49bb) - 1.0);
+            let reach =
+                width * SPARK_WANDER_KEYS * (2.0 * scramble(strand ^ 0x94d0_49bb) - 1.0);
             let upward =
                 SPARK_RISE_MM * (0.40 + 0.60 * scramble(strand ^ 0x5bf0_3635).powf(1.7));
             let size = SPARK_SIZE_MM.start
@@ -1352,14 +1419,24 @@ fn update_sparks(
             // A slow curl, and the whole plume leaning as it goes: there is air in the
             // room, and the oldest dust at the top of one has drifted well off to the
             // side of the key that threw it.
-            let curl = (phase + age * SPARK_CURL_RATE).sin() * SPARK_CURL_MM * age;
+            let curl =
+                (phase + age * SPARK_CURL_RATE).sin() * width * SPARK_CURL_KEYS * age;
             let lean = if note.id.0 % 2 == 0 { 1.0 } else { -1.0 };
-            let drift = lean * SPARK_DRIFT_MM * age * age;
-            let fade = (1.0 - age / SPARK_LIFE).powf(1.3);
+            let drift = lean * width * SPARK_DRIFT_KEYS * age * age;
+
+            // A mote holds its size for most of its life and then goes, rather than
+            // shrinking steadily from the moment it is born. Reaching nothing matters:
+            // it used to bottom out at half size and then blink off, and a thousand
+            // motes blinking off is the pop this is meant not to do.
+            let taper = (1.0 - age / SPARK_LIFE).clamp(0.0, 1.0).powf(0.45);
+            let scale = size * taper * evaporation;
+            if scale <= 0.0 {
+                continue;
+            }
 
             transform.translation =
                 Vec3::new(centre + spread + curl + drift, height, LANE_Z + 2.0);
-            transform.scale = Vec3::splat(size * (0.5 + 0.5 * fade));
+            transform.scale = Vec3::splat(scale);
             *visibility = Visibility::Visible;
 
             let hand = note.hand as usize;

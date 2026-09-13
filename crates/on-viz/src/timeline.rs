@@ -71,6 +71,13 @@ pub struct TimelineNote {
     pub finger: Option<Finger>,
     /// Loudness, 1..=127.
     pub velocity: u8,
+    /// When this same key is struck again, if it ever is.
+    ///
+    /// A key throws dust while it sounds, and a repeated note must not stack a second
+    /// plume on top of the first: two of them cost twice the motes and look like one
+    /// plume that suddenly got denser. So the first is given until this moment to clear
+    /// away, and the effects on one key follow each other instead of piling up.
+    pub restruck: Option<f64>,
 }
 
 impl TimelineNote {
@@ -166,10 +173,20 @@ impl Timeline {
                     hand: n.hand?,
                     finger: by_note.get(&n.id).copied(),
                     velocity: n.velocity,
+                    // Filled in below, once the notes are in order.
+                    restruck: None,
                 })
             })
             .collect();
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.midi.cmp(&b.midi)));
+
+        // When each key is next struck. Walking backwards, the value already stored for
+        // a key is the start of the next note on it, which is exactly what this note
+        // needs to know and what `insert` hands back.
+        let mut next_on_key: BTreeMap<u8, f64> = BTreeMap::new();
+        for note in notes.iter_mut().rev() {
+            note.restruck = next_on_key.insert(note.midi, note.start);
+        }
 
         let spans = on_fingering::SpanModel::for_hand_size(profile.size()).table();
         let grips = Hand::ALL.map(|hand| {
@@ -391,9 +408,19 @@ impl Timeline {
                 (1.0 - t).max(0.0)
             };
             let slot = states.slot(note.midi);
-            states.depth[slot] = states.depth[slot].max(depth as f32);
-            if note.sounds_at(time) {
-                states.hand[slot] = Some(note.hand);
+            // Whichever note has the key furthest down owns it, and it keeps it for as
+            // long as the key is still moving — not only while it sounds.
+            //
+            // The key takes a moment to come back up, and everything drawn from this
+            // follows the key: the flash over it, the light it throws, the tint on the
+            // key itself. Dropping the hand at the instant the note ended switched all
+            // three off while the key was still visibly rising, which is the pop that
+            // made a released note look cut rather than let go.
+            if depth as f32 >= states.depth[slot] {
+                states.depth[slot] = depth as f32;
+                if depth > 0.0 {
+                    states.hand[slot] = Some(note.hand);
+                }
             }
         }
         states
@@ -775,6 +802,75 @@ mod tests {
 
     fn fingered(score: &Score) -> Vec<Fingering> {
         on_fingering::finger_score(score, &Default::default()).fingerings
+    }
+
+
+    /// A key struck twice has to know when it will be struck again, so the dust from
+    /// the first note can be cleared away before the second throws any of its own.
+    ///
+    /// Staccato repetitions are the case that matters: without this, every repeat lays
+    /// another plume of a thousand motes over the one already there, which costs the
+    /// frame rate twice over and looks like one plume abruptly getting denser.
+    #[test]
+    fn a_repeated_key_knows_when_it_is_struck_again() {
+        let quarter = i64::from(TICKS_PER_QUARTER);
+        // Middle C three times, with a D in between that must not be confused for it.
+        let score = score_of(&[
+            (60, 0, quarter, Hand::Right),
+            (62, quarter, quarter, Hand::Right),
+            (60, 2 * quarter, quarter, Hand::Right),
+            (60, 3 * quarter, quarter, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &[]);
+
+        let at = |midi: u8, nth: usize| {
+            timeline
+                .notes
+                .iter()
+                .filter(|n| n.midi == midi)
+                .nth(nth)
+                .expect("note is there")
+        };
+
+        // Each C points at the next C, not at the D that happens to fall between them.
+        let first = at(60, 0);
+        let second = at(60, 1);
+        let third = at(60, 2);
+        assert_eq!(first.restruck, Some(second.start), "{first:?}");
+        assert_eq!(second.restruck, Some(third.start), "{second:?}");
+        assert_eq!(third.restruck, None, "the last one is never struck again");
+
+        // And a key played once has nothing following it.
+        assert_eq!(at(62, 0).restruck, None);
+    }
+
+    /// The plume has to be gone before the next one starts, which is only true if the
+    /// moment it is told to clear away is the moment the next note begins.
+    #[test]
+    fn one_key_never_carries_two_plumes_at_once() {
+        let sixteenth = i64::from(TICKS_PER_QUARTER) / 4;
+        // Four fast repeats of one key, the way a staccato passage goes.
+        let score = score_of(&[
+            (60, 0, sixteenth, Hand::Right),
+            (60, sixteenth, sixteenth, Hand::Right),
+            (60, 2 * sixteenth, sixteenth, Hand::Right),
+            (60, 3 * sixteenth, sixteenth, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &[]);
+
+        // The window a plume occupies, matching what `update_sparks` computes.
+        let tail = 0.10_f64;
+        let window = |n: &TimelineNote| {
+            (n.start, (n.end + tail).min(n.restruck.unwrap_or(f64::INFINITY)))
+        };
+        for pair in timeline.notes.windows(2) {
+            let (_, ends) = window(&pair[0]);
+            let (starts, _) = window(&pair[1]);
+            assert!(
+                ends <= starts + 1e-9,
+                "a plume ending at {ends} overlaps the next starting at {starts}"
+            );
+        }
     }
 
     #[test]
