@@ -706,6 +706,51 @@ mod tests {
         );
     }
 
+
+    /// Ramoneda et al. augment their training data three ways: mirroring the hands,
+    /// reversing time, and transposing by octaves. The first two are the symmetries
+    /// above. The third needs no code at all, and this is the guard on that.
+    ///
+    /// A context is keyed on the interval between two notes and the colours of the two
+    /// keys, never on absolute pitch, and an octave changes neither. So a passage and
+    /// the same passage an octave away are already the same passage to this model, and
+    /// counting both would only count everything twice.
+    #[test]
+    fn an_octave_is_already_the_same_passage() {
+        let low = run(&[(60, 1), (62, 2), (64, 3), (65, 1)]);
+        let high: Vec<Placement> = low
+            .iter()
+            .map(|p| Placement::new(p.midi + 12, p.finger))
+            .collect();
+
+        let mut from_low = NgramPrior::new();
+        from_low.observe(Hand::Right, &low);
+        let mut from_high = NgramPrior::new();
+        from_high.observe(Hand::Right, &high);
+
+        // Ask each model about the passage it never saw, at every finger.
+        for finger in Finger::ALL {
+            let asked_high = Placement::new(76, finger);
+            let taught_by_low = from_low.log_probability(
+                Hand::Right,
+                Some(high[1]),
+                Some(high[2]),
+                asked_high,
+            );
+            let asked_low = Placement::new(64, finger);
+            let taught_by_high = from_high.log_probability(
+                Hand::Right,
+                Some(low[1]),
+                Some(low[2]),
+                asked_low,
+            );
+            assert!(
+                (taught_by_low - taught_by_high).abs() < 1e-6,
+                "{finger:?}: {taught_by_low} vs {taught_by_high}"
+            );
+        }
+    }
+
     /// An untrained model has no opinion, so every finger comes out equally likely.
     #[test]
     fn an_empty_model_has_no_opinion() {
