@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context as _, Result};
 use on_fingering::Placement;
+use on_fingering::playability::CHORD_SECONDS;
 use on_hand::{Finger, Hand};
 use serde::{Deserialize, Serialize};
 
@@ -109,16 +110,43 @@ pub struct Piece {
 }
 
 impl Piece {
-    /// One hand's notes, in time order, as the prior wants them.
-    pub fn placements(&self, hand: Hand) -> Vec<Placement> {
+    /// The line one hand plays, in time order, as the prior is asked about it.
+    ///
+    /// One note per moment, not one per note: the highest of any notes struck
+    /// together, which is the voice [`on_fingering::solver`] hands the prior when it
+    /// asks what finger should come next.
+    ///
+    /// It used to be every note, flattened. That taught the model that a C major triad
+    /// is a melodic step of a third followed by another third, because a chord read as
+    /// a list looks exactly like an arpeggio — the "flat chords as broken chords"
+    /// failure Ramoneda et al. (2022) identify as the standing weakness of sequence
+    /// models on polyphony. Since the prior is only ever *asked* about the top voice,
+    /// the rest was not merely unused but actively wrong: it filled the melodic
+    /// contexts with intervals nobody played melodically.
+    ///
+    /// What a chord's inner notes could teach — which voicings pianists favour — needs
+    /// a context of its own to learn and a corpus to learn it from, and has neither
+    /// yet. Dropping them loses nothing that was being used and stops the corruption.
+    pub fn voice(&self, hand: Hand) -> Vec<Placement> {
         let label = HandLabel::from(hand);
-        self.notes
-            .iter()
-            .filter(|note| note.hand == label)
-            .filter_map(|note| {
-                Some(Placement::new(note.midi, Finger::from_number(note.finger?)?))
-            })
-            .collect()
+        let mut out: Vec<(f64, Placement)> = Vec::new();
+        for note in self.notes.iter().filter(|note| note.hand == label) {
+            let Some(finger) = note.finger.and_then(Finger::from_number) else {
+                continue;
+            };
+            let placement = Placement::new(note.midi, finger);
+            match out.last_mut() {
+                // Struck with the one before it, so the two are a chord and only the
+                // higher of them is on the line.
+                Some((onset, last)) if (note.onset - *onset).abs() <= CHORD_SECONDS => {
+                    if placement.midi > last.midi {
+                        *last = placement;
+                    }
+                }
+                _ => out.push((note.onset, placement)),
+            }
+        }
+        out.into_iter().map(|(_, placement)| placement).collect()
     }
 }
 
@@ -519,7 +547,7 @@ mod tests {
         assert_eq!(piece.notes[3].hand, HandLabel::Left);
         assert_eq!(piece.notes[3].finger, Some(2));
 
-        let right = piece.placements(Hand::Right);
+        let right = piece.voice(Hand::Right);
         assert_eq!(right.len(), 2);
         assert_eq!(right[0].midi, 60);
         std::fs::remove_file(&path).ok();
@@ -576,6 +604,71 @@ mod tests {
         assert_eq!(note.duration, 2.0);
     }
 
+
+    /// A chord is one moment on the line, not a little melody.
+    ///
+    /// This is the bug that made the change worth making. Read as a flat list, a C
+    /// major triad is indistinguishable from an arpeggio of the same three notes, so
+    /// training on it taught the model that a third often follows a third — a melodic
+    /// habit nobody has, learned from notes struck together. Since the solver only ever
+    /// asks the prior about the top voice, those contexts were never consulted and
+    /// never corrected; they simply diluted the real ones.
+    #[test]
+    fn a_chord_contributes_one_note_to_the_line_and_an_arpeggio_contributes_three() {
+        let note = |midi: u8, finger: u8, onset: f64| FingeredNote {
+            midi,
+            onset,
+            duration: ASSUMED_DURATION,
+            hand: HandLabel::Right,
+            finger: Some(finger),
+        };
+
+        let chord = Piece {
+            piece: "chord".into(),
+            annotator: "1".into(),
+            source: "test".into(),
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.0), note(67, 5, 0.0)],
+        };
+        let line = chord.voice(Hand::Right);
+        assert_eq!(line.len(), 1, "one moment, one note on the line");
+        assert_eq!(line[0].midi, 67, "the top of the chord is the voice");
+        assert_eq!(line[0].finger.number(), 5);
+
+        // The same three pitches spread out in time are a real melodic line, and all
+        // three belong to it.
+        let arpeggio = Piece {
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.5), note(67, 5, 1.0)],
+            ..chord.clone()
+        };
+        let line = arpeggio.voice(Hand::Right);
+        assert_eq!(line.len(), 3, "an arpeggio is three moments");
+        assert_eq!(
+            line.iter().map(|p| p.midi).collect::<Vec<_>>(),
+            vec![60, 64, 67]
+        );
+    }
+
+    /// Notes struck a few milliseconds apart are a chord a pianist meant to be
+    /// together, not a very fast arpeggio, and a rolled chord should not become one
+    /// note per roll step either.
+    #[test]
+    fn a_chord_survives_being_played_slightly_unevenly() {
+        let note = |midi: u8, finger: u8, onset: f64| FingeredNote {
+            midi,
+            onset,
+            duration: ASSUMED_DURATION,
+            hand: HandLabel::Right,
+            finger: Some(finger),
+        };
+        let piece = Piece {
+            piece: "uneven".into(),
+            annotator: "1".into(),
+            source: "test".into(),
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.004), note(67, 5, 0.009)],
+        };
+        assert_eq!(piece.voice(Hand::Right).len(), 1);
+    }
+
     #[test]
     fn a_partly_annotated_source_keeps_the_notes_nobody_fingered() {
         // An edition fingers what the player needs told and leaves the rest bare, and
@@ -607,7 +700,7 @@ mod tests {
         assert_eq!(fingers, vec![None, Some(2), None, Some(4), None]);
 
         // And the ones nobody fingered contribute nothing to what the prior learns.
-        let placements = piece.placements(Hand::Right);
+        let placements = piece.voice(Hand::Right);
         assert_eq!(
             placements.len(),
             2,
