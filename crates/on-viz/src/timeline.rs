@@ -40,7 +40,7 @@ pub const APPROACH_SECONDS: f64 = 0.28;
 /// while the key goes down twice. Pianists do not play staccato from the knuckles;
 /// the wrist bounces, and the whole hand comes up with it.
 const LIFT_RATE_MM: f32 = 120.0;
-const LIFT_MAX_MM: f32 = 24.0;
+const LIFT_MAX_MM: f32 = 28.0;
 
 /// How long a key takes to travel down when struck, in seconds.
 const KEY_ATTACK_SECONDS: f64 = 0.035;
@@ -527,6 +527,50 @@ const STRIKE_LIFT_SECONDS: f64 = 0.16;
 /// keyboard rather than play it.
 const STRIKE_LIFT_DEG: (f32, f32) = (2.5, 9.0);
 
+/// How far the wrist sinks into a note, in millimetres, for the softest note and the
+/// hardest.
+///
+/// A key travels ten millimetres, and the hand goes down with it. Only the finger used
+/// to move here, which is what a keyboard diagram does rather than what a pianist does:
+/// the tone comes from arm weight arriving through the finger, so the wrist drops into
+/// the note and releases afterwards. Without it the hand hangs at a fixed height and the
+/// fingers peck at it.
+///
+/// A few millimetres. It is felt more than seen, and taken much further the hand starts
+/// pumping at the keyboard.
+const WRIST_DROP_MM: (f32, f32) = (1.6, 6.5);
+
+/// How long the wrist takes to go down into a note, and how long the whole sink and
+/// release lasts, in seconds.
+///
+/// Down with the key and back up more slowly, which is the asymmetry that makes it read
+/// as weight arriving rather than as a bounce.
+const WRIST_FALL_SECONDS: f64 = 0.045;
+const WRIST_SETTLE_SECONDS: f64 = 0.22;
+
+/// How far the hand drifts while it waits, in millimetres, and how many times a second.
+///
+/// A hand that is not doing anything is still attached to someone who is breathing. The
+/// amount is deliberately under what anyone would consciously notice — it is there to
+/// stop a held rest looking like the render has frozen, which is the single strongest
+/// cue that what you are watching is a machine.
+///
+/// Only while the hand is free. Holding a chord it stays where it is, because nothing
+/// re-solves the fingertips against the keys and a hand that breathed on a held note
+/// would breathe its fingers through the keybed.
+const BREATH_MM: f32 = 1.4;
+const BREATH_HZ: f64 = 0.23;
+
+/// How long the drift takes to come back after the keys are let go.
+const BREATH_EASE_SECONDS: f64 = 0.35;
+
+/// How much the height a note is approached from depends on how hard it is played.
+///
+/// A loud note is taken from higher up. At zero this is off and every approach is the
+/// same height regardless of what is coming, which is the thing that makes a crescendo
+/// look like it is being typed.
+const APPROACH_BY_FORCE: f32 = 0.6;
+
 /// How far through the window the finger is at the top of its lift, softest to hardest.
 ///
 /// A quiet note rises and settles in about the same time. A loud one is taken up most
@@ -602,6 +646,17 @@ impl HandAnimator {
             // Before the first note: hold the opening posture.
             return self.resting;
         };
+        // Where the hand would be if it were only getting from one chord to the next,
+        // and then the things that make it look like a hand doing it.
+        let mut pose = self.carried(index, time);
+        pose.q[dof::WRIST_Z] += self.wrist_settle(index, time) + self.breath(index, time);
+        self.raise_fingers_about_to_strike(&mut pose, index, time);
+        self.skeleton.clamp(&mut pose);
+        pose
+    }
+
+    /// The posture the interpolation alone puts the hand in.
+    fn carried(&self, index: usize, time: f64) -> HandPose {
         let current = &self.events[index];
         let pose = self.poses[index];
 
@@ -629,8 +684,56 @@ impl HandAnimator {
 
         let mut moved = pose.lerp(&next_pose, travel(t, resting_before, resting_after) as f32);
         moved.q[dof::WRIST_Z] += lift_between(current, next, time);
-        self.raise_fingers_about_to_strike(&mut moved, index, time);
         moved
+    }
+
+    /// How far the wrist has sunk into the note it just played, in millimetres.
+    ///
+    /// Negative, because it is going down. Down quickly with the key and back up more
+    /// slowly, and further for a louder note — which is where most of the difference
+    /// between a soft passage and a loud one actually shows, since the fingers
+    /// themselves barely move differently.
+    fn wrist_settle(&self, index: usize, time: f64) -> f32 {
+        let current = &self.events[index];
+        let since = time - current.time;
+        if since < 0.0 || since >= WRIST_SETTLE_SECONDS {
+            return 0.0;
+        }
+        let Some(hardest) = current.struck.iter().map(|(_, v)| *v).max() else {
+            return 0.0;
+        };
+        let hardness = f32::from(hardest) / 127.0;
+        let depth = WRIST_DROP_MM.0 + (WRIST_DROP_MM.1 - WRIST_DROP_MM.0) * hardness;
+
+        let shape = if since < WRIST_FALL_SECONDS {
+            (since / WRIST_FALL_SECONDS) as f32
+        } else {
+            let back =
+                ((since - WRIST_FALL_SECONDS) / (WRIST_SETTLE_SECONDS - WRIST_FALL_SECONDS)) as f32;
+            // Eased at both ends: the wrist lets go of the note rather than springing
+            // off it.
+            1.0 - back * back * (3.0 - 2.0 * back)
+        };
+        -depth * shape.clamp(0.0, 1.0)
+    }
+
+    /// The small drift of a hand that is waiting rather than playing.
+    ///
+    /// Zero while anything is held, and eased in afterwards so it does not start the
+    /// instant the keys are let go. The two hands are given different phases, because
+    /// two hands breathing in step is stranger than neither breathing at all.
+    fn breath(&self, index: usize, time: f64) -> f32 {
+        let current = &self.events[index];
+        if time <= current.release {
+            return 0.0;
+        }
+        let free = ((time - current.release) / BREATH_EASE_SECONDS).clamp(0.0, 1.0) as f32;
+        let offset = match self.hand {
+            Hand::Right => 0.0,
+            Hand::Left => 2.1,
+        };
+        let phase = (time * BREATH_HZ * std::f64::consts::TAU) as f32 + offset;
+        free * BREATH_MM * phase.sin()
     }
 
     /// Lift the fingers that are about to play, and drop them on the beat.
@@ -750,7 +853,14 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
     if gap <= 1e-3 || time <= current.release || time >= next.time {
         return 0.0;
     }
-    let height = (gap as f32 * LIFT_RATE_MM).min(LIFT_MAX_MM);
+    // Higher for a louder note. A pianist raises the hand further for a note they mean
+    // to land on, and the height they take it from is most of what tells you a loud one
+    // is coming before it arrives.
+    let hardest = next.struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
+    let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
+    // Scaled before the ceiling, not after, or a loud note sails straight past the
+    // height that is supposed to be the most the hand ever rises.
+    let height = (gap as f32 * LIFT_RATE_MM * force).min(LIFT_MAX_MM);
     let through = ((time - current.release) / gap).clamp(0.0, 1.0) as f32;
     height * (through * std::f32::consts::PI).sin()
 }
@@ -1071,6 +1181,137 @@ mod tests {
         );
     }
 
+
+    /// A note is played with the arm, not just the finger.
+    ///
+    /// The wrist goes down into the key and comes back up. Only the finger used to
+    /// move, which is what a keyboard diagram does rather than what a pianist does.
+    #[test]
+    fn the_wrist_sinks_into_a_note_and_comes_back() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+        let height = |t: f64| animator.pose_at(t).q[dof::WRIST_Z];
+
+        let settled = height(WRIST_SETTLE_SECONDS + 0.01);
+        let sinking = height(WRIST_FALL_SECONDS);
+        assert!(
+            sinking < settled - 0.5,
+            "the wrist should drop into the note: {settled:.2} settled, {sinking:.2} at \
+             the bottom"
+        );
+        // And it is back where it started once the note has been taken.
+        assert!(
+            (height(WRIST_SETTLE_SECONDS + 0.4) - settled).abs() < 0.01,
+            "the wrist should come back up"
+        );
+    }
+
+    /// How hard a note is played is most of what the movement should say about it.
+    ///
+    /// MIDI carries a velocity per note and MusicXML carries dynamics, so both know
+    /// this; a hand that moves identically for a pianissimo and a fortissimo is
+    /// throwing away the one thing the file is telling it about touch.
+    #[test]
+    fn a_louder_note_is_played_with_more_arm() {
+        let q = TICKS_PER_QUARTER as i64;
+        let sink = |velocity: u8| {
+            let mut score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+            score.notes[0].velocity = velocity;
+            let timeline = Timeline::build(&score, &fingered(&score));
+            let animator = HandAnimator::new(
+                Hand::Right,
+                BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+                timeline.hand_grips(Hand::Right).to_vec(),
+            );
+            let settled = animator.pose_at(WRIST_SETTLE_SECONDS + 0.01).q[dof::WRIST_Z];
+            settled - animator.pose_at(WRIST_FALL_SECONDS).q[dof::WRIST_Z]
+        };
+
+        let quiet = sink(20);
+        let loud = sink(120);
+        assert!(quiet > 0.0, "even a quiet note sinks a little: {quiet:.2}");
+        assert!(
+            loud > quiet * 1.8,
+            "a loud note should sink much further: {quiet:.2} quiet, {loud:.2} loud"
+        );
+    }
+
+    /// A hand waiting is not a hand switched off.
+    ///
+    /// It drifts, slightly, while it has nothing to hold — and not at all while it
+    /// does, because nothing re-solves the fingertips against the keys and a hand that
+    /// breathed on a held chord would breathe its fingers through the keybed.
+    ///
+    /// Measured on the drift itself rather than on the wrist height, which over a rest
+    /// is dominated by the much larger arc the hand makes on its way to the next note.
+    #[test]
+    fn a_waiting_hand_is_not_perfectly_still() {
+        let q = TICKS_PER_QUARTER as i64;
+        // One short note, then a long silence before the next.
+        let score = score_of(&[(60, 0, q / 4, Hand::Right), (60, 8 * q, q, Hand::Right)]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+
+        // Nothing at all while the key is still down.
+        let release = animator.events[0].release;
+        assert_eq!(animator.breath(0, release - 0.01), 0.0);
+
+        let mut lowest = f32::INFINITY;
+        let mut highest = f32::NEG_INFINITY;
+        for step in 0..60 {
+            let drift = animator.breath(0, release + 1.0 + step as f64 * 0.1);
+            lowest = lowest.min(drift);
+            highest = highest.max(drift);
+        }
+        assert!(
+            highest - lowest > 0.2,
+            "a hand waiting through a rest should drift: {lowest:.2} to {highest:.2}"
+        );
+        // But it is barely perceptible rather than a wobble.
+        assert!(
+            highest - lowest <= 2.0 * BREATH_MM + 1e-3,
+            "and only just: {lowest:.2} to {highest:.2}"
+        );
+    }
+
+    /// The two hands must not breathe in step, which is stranger than not breathing.
+    #[test]
+    fn the_two_hands_do_not_breathe_together() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[
+            (60, 0, q / 4, Hand::Right),
+            (48, 0, q / 4, Hand::Left),
+            (60, 8 * q, q, Hand::Right),
+            (48, 8 * q, q, Hand::Left),
+        ]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = |hand: Hand| {
+            HandAnimator::new(
+                hand,
+                BiomechModel::new(HandProfile::default(), hand, BiomechWeights::default()),
+                timeline.hand_grips(hand).to_vec(),
+            )
+        };
+        let (right, left) = (animator(Hand::Right), animator(Hand::Left));
+
+        // Their drifts differ somewhere across the rest.
+        let apart = (0..40).any(|step| {
+            let t = 1.0 + step as f64 * 0.1;
+            (right.breath(0, t) - left.breath(0, t)).abs() > 0.1
+        });
+        assert!(apart, "both hands drifted identically");
+    }
+
     /// The lift must never pull a finger off a key that is still held.
     #[test]
     fn a_held_note_is_never_lifted_off() {
@@ -1085,9 +1326,12 @@ mod tests {
             BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
             timeline.hand_grips(Hand::Right).to_vec(),
         );
-        let resting = animator.pose_at(0.05).q[dof::WRIST_Z];
+        // Measured once the wrist has finished sinking into the note it just played.
+        // Taken during the sink it would be the lowest point of the whole passage, and
+        // every later sample would read as a rise.
+        let resting = animator.pose_at(WRIST_SETTLE_SECONDS + 0.05).q[dof::WRIST_Z];
         for step in 0..20 {
-            let t = 0.05 + step as f64 * 0.09;
+            let t = WRIST_SETTLE_SECONDS + 0.05 + step as f64 * 0.09;
             let height = animator.pose_at(t).q[dof::WRIST_Z];
             assert!(
                 height <= resting + 0.01,

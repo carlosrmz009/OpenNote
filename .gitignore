@@ -16,8 +16,10 @@
 # (CC-BY for the good ones) attach to whoever redistributes them.
 /assets/soundfont/*.sf2
 
-# A local convenience script for building the exe; not part of the project.
+# Local convenience scripts for building the exe; not part of the project. The shell
+# one needs Git Bash; the .cmd runs straight from PowerShell.
 /build
+/build.cmd
 
 # Python bytecode from the tools/ scripts.
 __pycache__/
