@@ -201,6 +201,8 @@ pub struct BiomechModel {
     keyboard: Keyboard,
     weights: BiomechWeights,
     postures: RefCell<HashMap<GripKey, (GripOutcome, HandPose)>>,
+    /// Postures for the grips the octave cache cannot serve. See [`Self::grip_pose`].
+    moved: RefCell<HashMap<GripKey, HandPose>>,
     work: RefCell<HashMap<(GripKey, GripKey, i16), f32>>,
 }
 
@@ -212,6 +214,7 @@ impl BiomechModel {
             keyboard: Keyboard::new(),
             weights,
             postures: RefCell::new(HashMap::new()),
+            moved: RefCell::new(HashMap::new()),
             work: RefCell::new(HashMap::new()),
         }
     }
@@ -284,6 +287,28 @@ impl BiomechModel {
         result
     }
 
+    /// Whether the wrist's angle is one the arm can actually make from where it is.
+    ///
+    /// The window travels with the forearm — what the joint can do is measured from
+    /// wherever the arm is pointing, not from the keyboard — and that is what makes it
+    /// worth asking after a pose has been moved sideways.
+    fn wrist_is_legal(&self, pose: &HandPose) -> bool {
+        let relative = pose.q[dof::WRIST_DEVIATION] - self.skeleton.wrist_neutral(pose);
+        on_hand::skeleton::LIMITS[dof::WRIST_DEVIATION].violation(relative) <= 0.0
+    }
+
+    /// Solve a grip where the notes really are, rather than in the reference octave.
+    fn solved_where_it_is(&self, grip: &Grip) -> HandPose {
+        let key = GripKey(grip.keys.clone());
+        if let Some(hit) = self.moved.borrow().get(&key) {
+            return *hit;
+        }
+        let targets = self.targets(grip);
+        let pose = reach(&self.skeleton, &ReachRequest::new(&targets)).pose;
+        self.moved.borrow_mut().insert(key, pose);
+        pose
+    }
+
     /// What it costs the hand to hold this grip.
     pub fn grip_outcome(&self, grip: &Grip) -> GripOutcome {
         self.solve(grip).0
@@ -297,6 +322,9 @@ impl BiomechModel {
         let (_, cached) = self.solve(grip);
         let mut pose = cached;
         pose.q[dof::WRIST_X] += grip.octave_offset() as f32 * OCTAVE_MM;
+        if !self.wrist_is_legal(&pose) {
+            return self.solved_where_it_is(grip);
+        }
         pose
     }
 
@@ -438,6 +466,35 @@ mod tests {
         assert!((low - high).abs() < 1e-4, "{low} vs {high}");
         // And it should have been solved only once.
         assert_eq!(m.cached_postures(), 1);
+    }
+
+    /// A posture handed to the renderer has to be one the arm can actually hold.
+    ///
+    /// The cache solves a grip in a reference octave and slides the answer back to
+    /// where the notes are. The wrist's own window does not slide with it: what the
+    /// joint can do is measured from wherever the arm is pointing, so a shape that was
+    /// legal in the middle of the keyboard can be illegal three octaves down. The
+    /// renderer clamps whatever it is given, and the clamp moved a thumb most of a
+    /// white key off the note it was sounding.
+    #[test]
+    fn a_pose_moved_to_another_octave_is_still_one_the_arm_can_hold() {
+        let model = model(Hand::Right);
+        let skeleton = model.skeleton();
+        // Warm the cache in the middle of the keyboard, then ask for the same shape at
+        // the bottom, which is where the right hand's arm is turned furthest.
+        for base in [60u8, 24] {
+            let pose = model.grip_pose(&grip(&[(base, 1), (base + 4, 3)]));
+            let mut clamped = pose;
+            skeleton.clamp(&mut clamped);
+            let (before, after) = (skeleton.forward(&pose), skeleton.forward(&clamped));
+            for finger in 0..5 {
+                let moved = before.chain[finger][3].distance(after.chain[finger][3]);
+                assert!(
+                    moved < 1.0,
+                    "clamping the pose for {base} moved finger {finger} by {moved:.1} mm,                      so what is drawn is not what was solved"
+                );
+            }
+        }
     }
 
     #[test]
