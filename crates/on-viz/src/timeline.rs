@@ -40,7 +40,7 @@ pub const APPROACH_SECONDS: f64 = 0.28;
 /// while the key goes down twice. Pianists do not play staccato from the knuckles;
 /// the wrist bounces, and the whole hand comes up with it.
 const LIFT_RATE_MM: f32 = 120.0;
-const LIFT_MAX_MM: f32 = 24.0;
+const LIFT_MAX_MM: f32 = 28.0;
 
 /// How long a key takes to travel down when struck, in seconds.
 const KEY_ATTACK_SECONDS: f64 = 0.035;
@@ -71,6 +71,13 @@ pub struct TimelineNote {
     pub finger: Option<Finger>,
     /// Loudness, 1..=127.
     pub velocity: u8,
+    /// When this same key is struck again, if it ever is.
+    ///
+    /// A key throws dust while it sounds, and a repeated note must not stack a second
+    /// plume on top of the first: two of them cost twice the motes and look like one
+    /// plume that suddenly got denser. So the first is given until this moment to clear
+    /// away, and the effects on one key follow each other instead of piling up.
+    pub restruck: Option<f64>,
 }
 
 impl TimelineNote {
@@ -166,10 +173,20 @@ impl Timeline {
                     hand: n.hand?,
                     finger: by_note.get(&n.id).copied(),
                     velocity: n.velocity,
+                    // Filled in below, once the notes are in order.
+                    restruck: None,
                 })
             })
             .collect();
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.midi.cmp(&b.midi)));
+
+        // When each key is next struck. Walking backwards, the value already stored for
+        // a key is the start of the next note on it, which is exactly what this note
+        // needs to know and what `insert` hands back.
+        let mut next_on_key: BTreeMap<u8, f64> = BTreeMap::new();
+        for note in notes.iter_mut().rev() {
+            note.restruck = next_on_key.insert(note.midi, note.start);
+        }
 
         let spans = on_fingering::SpanModel::for_hand_size(profile.size()).table();
         let grips = Hand::ALL.map(|hand| {
@@ -181,7 +198,42 @@ impl Timeline {
         Self { notes, grips, duration, title: score.title.clone() }
     }
 
+    /// Both hands' animators, ready to pose.
+    ///
+    /// Built here rather than by each caller because of the parking: a hand the piece
+    /// never uses has no position of its own, and working out where to put it needs to
+    /// know what the *other* hand is doing. A caller that built one animator at a time
+    /// could not do that, and the diagnostics that measure the hands would be measuring
+    /// something the renderer does not draw.
+    pub fn animators(
+        &self,
+        profile: &HandProfile,
+        weights: on_fingering::biomech::BiomechWeights,
+    ) -> Vec<HandAnimator> {
+        let mut animators: Vec<HandAnimator> = Hand::ALL
+            .iter()
+            .map(|hand| {
+                let model = BiomechModel::new(profile.clone(), *hand, weights);
+                HandAnimator::new(*hand, model, self.hand_grips(*hand).to_vec())
+            })
+            .collect();
+
+        let keyboard = on_hand::keyboard::Keyboard::new();
+        let lowest = self.notes.iter().map(|n| n.midi).min().unwrap_or(60);
+        let highest = self.notes.iter().map(|n| n.midi).max().unwrap_or(60);
+        let (left_edge, right_edge) = (keyboard.centre_x(lowest), keyboard.centre_x(highest));
+        for animator in &mut animators {
+            animator.park_at(match animator.hand() {
+                Hand::Left => left_edge - IDLE_CLEARANCE_MM,
+                Hand::Right => right_edge + IDLE_CLEARANCE_MM,
+            });
+        }
+        animators
+    }
+
     /// What one hand is holding at each moment it strikes something.
+    ///
+    /// (See [`pose_both`] for the one thing a single hand's pose cannot decide.)
     ///
     /// A grip is everything the hand has *down*, not only what it has just played.
     /// Getting that wrong is very visible: a left hand holding two long bass notes
@@ -391,9 +443,19 @@ impl Timeline {
                 (1.0 - t).max(0.0)
             };
             let slot = states.slot(note.midi);
-            states.depth[slot] = states.depth[slot].max(depth as f32);
-            if note.sounds_at(time) {
-                states.hand[slot] = Some(note.hand);
+            // Whichever note has the key furthest down owns it, and it keeps it for as
+            // long as the key is still moving — not only while it sounds.
+            //
+            // The key takes a moment to come back up, and everything drawn from this
+            // follows the key: the flash over it, the light it throws, the tint on the
+            // key itself. Dropping the hand at the instant the note ended switched all
+            // three off while the key was still visibly rising, which is the pop that
+            // made a released note look cut rather than let go.
+            if depth as f32 >= states.depth[slot] {
+                states.depth[slot] = depth as f32;
+                if depth > 0.0 {
+                    states.hand[slot] = Some(note.hand);
+                }
             }
         }
         states
@@ -483,6 +545,87 @@ fn grip_event(
     GripEvent { time, release, grip, struck }
 }
 
+/// Where a waiting hand sits relative to the keys: back from the front edge, and above
+/// them.
+const PARK_Y_MM: f32 = -80.0;
+const PARK_Z_MM: f32 = 60.0;
+
+/// How far beyond the music a hand with nothing to play waits, in millimetres.
+///
+/// A hand is about a hundred and fifty millimetres across, so anything less than that
+/// leaves it standing in the other hand. It used to wait over middle C whatever the
+/// other hand was doing, which for anything written around middle C put the two models
+/// in the same place for the whole piece — they are drawn, not simulated, so they went
+/// straight through each other.
+pub const IDLE_CLEARANCE_MM: f32 = 170.0;
+
+/// How much the two hands may share before one is lifted clear, in millimetres.
+///
+/// Not zero. Hands sit close together and their outlines pass near each other all the
+/// time; what this is for is the models actually inside one another, which is the thing
+/// that cannot be explained away as two hands being near.
+pub const CLEARANCE_SLACK_MM: f32 = 3.0;
+
+/// How close two joints may come before the hands are drawn through each other, in
+/// millimetres.
+///
+/// A finger is about eighteen millimetres across, so two bones whose centre lines are
+/// nearer than that are sharing the same space on screen. The wrist and the back of the
+/// hand are thicker, which this does not distinguish.
+///
+/// It replaces a box round the whole hand. A hand is nothing like its box — a spread
+/// hand's box is mostly air — so two hands sitting side by side, which is most of piano
+/// playing, had overlapping boxes while being nowhere near each other. On one test
+/// piece only 320 of 859 reported collisions had any two joints even within twenty
+/// millimetres. The renderer was moving hands apart that were never touching.
+pub const HAND_THICKNESS_MM: f32 = 20.0;
+
+/// The most one hand will be lifted to get out of the other's way, in millimetres.
+///
+/// A hand coming from underneath has to rise by however far below it started as well as
+/// by the thickness it needs to clear, which is why this is not simply a hand's depth.
+/// It was sixty, sized when the hands were measured as boxes, and that was short: on two
+/// test pieces it left collisions that a hand was perfectly free to move out of, because
+/// the lift they needed was cut off before it got there. At eighty there are none left
+/// on any piece, and a hundred and forty finds nothing more.
+///
+/// Still a limit. A hand that cannot be got clear within it is one the fingering has
+/// sent somewhere it should not have, and flying the hand over the keyboard to hide
+/// that would be worse than showing it.
+const CLEARANCE_MAX_MM: f32 = 80.0;
+
+/// The most a hand's body will be swung aside to get clear of the other, in degrees.
+///
+/// Ulnar and radial deviation is the joint a player angles a wrist with, and its range
+/// is 30 degrees one way and 20 the other. This asks for the whole of the smaller of
+/// those, which is as far as the joint goes in the direction it goes least far; the
+/// tolerances below stop well short of it whenever the shape being held is a wide one.
+const SWING_MAX_DEG: f32 = 20.0;
+
+/// How far a held fingertip may be dragged off its key by that swing, in millimetres.
+///
+/// The swing keeps the *centroid* of the held fingers exactly, but the fingers either
+/// side of it rotate about that centroid, and the wider the shape the further they go:
+/// fourteen degrees across an octave would move the outer fingers twenty millimetres,
+/// which is most of a white key. So the angle is scaled back until the worst-moved
+/// finger is within this.
+///
+/// A quarter of a white key. A finger that far from where it was is still on the key it
+/// is holding, and a collision is worth that much; half a key is not.
+const SWING_TOLERANCE_MM: f32 = 6.0;
+
+/// How far a held fingertip may slide *along* its key, in millimetres.
+///
+/// A great deal further than across it, and that is the whole point of separating the
+/// two. A key is a lever: pressing it anywhere along its length sounds the same note, so
+/// sliding a finger up and down one costs nothing and is what a hand does all the time
+/// — a finger reaching between black keys sits a long way further in than one on the
+/// front of a white key. Sliding sideways, by contrast, is playing the wrong note.
+///
+/// Measuring both with one tolerance, which is what a straight distance does, held the
+/// swing to about a third of what it could safely do.
+const SWING_SLIDE_MM: f32 = 20.0;
+
 /// How long before a strike a finger starts to lift, in seconds.
 ///
 /// Short. It is a preparation, not a wind-up, and a run of quick notes has less time
@@ -499,6 +642,71 @@ const STRIKE_LIFT_SECONDS: f64 = 0.16;
 /// like a finger — it reads as long and loose, and the hand appears to flail at the
 /// keyboard rather than play it.
 const STRIKE_LIFT_DEG: (f32, f32) = (2.5, 9.0);
+
+/// How far the wrist sinks into a note, in millimetres, for the softest note and the
+/// hardest.
+///
+/// A key travels ten millimetres, and the hand goes down with it. Only the finger used
+/// to move here, which is what a keyboard diagram does rather than what a pianist does:
+/// the tone comes from arm weight arriving through the finger, so the wrist drops into
+/// the note and releases afterwards. Without it the hand hangs at a fixed height and the
+/// fingers peck at it.
+///
+/// A few millimetres. It is felt more than seen, and taken much further the hand starts
+/// pumping at the keyboard.
+///
+/// On its own this is not seen *at all*. The camera looks straight down and its
+/// projection is orthographic, so height is exactly the view axis and a wrist that only
+/// changes its height moves precisely zero pixels — and the forearm does not give it
+/// away either, because the shoulder it is aimed at tracks the wrist's own height. The
+/// translation is kept because it is what actually happens and because the fingertips
+/// have to travel with the key they are pressing; what makes it *visible* is the angle
+/// below.
+const WRIST_DROP_MM: (f32, f32) = (1.6, 6.5);
+
+/// How far the wrist extends as it sinks, in degrees, softest to hardest.
+///
+/// Dropping the wrist while the fingers stay on the keys opens the angle between the
+/// back of the hand and the forearm — anatomically an extension, which is why this is
+/// subtracted from the flexion. The joint has 35 degrees of extension available from
+/// its playing neutral, and this uses under a third of it.
+///
+/// This is the part that can be seen from overhead. Rotating the hand about the wrist
+/// shortens the distance from wrist to knuckles *as projected on the screen*, so the
+/// hand foreshortens as it takes the note and opens out again as it releases. The
+/// motion the camera cannot show becomes one it can.
+const WRIST_DROP_DEG: (f32, f32) = (3.5, 13.0);
+
+/// How long the wrist takes to go down into a note, and how long the whole sink and
+/// release lasts, in seconds.
+///
+/// Down with the key and back up more slowly, which is the asymmetry that makes it read
+/// as weight arriving rather than as a bounce.
+const WRIST_FALL_SECONDS: f64 = 0.045;
+const WRIST_SETTLE_SECONDS: f64 = 0.22;
+
+/// How far the hand drifts while it waits, in millimetres, and how many times a second.
+///
+/// A hand that is not doing anything is still attached to someone who is breathing. The
+/// amount is deliberately under what anyone would consciously notice — it is there to
+/// stop a held rest looking like the render has frozen, which is the single strongest
+/// cue that what you are watching is a machine.
+///
+/// Only while the hand is free. Holding a chord it stays where it is, because nothing
+/// re-solves the fingertips against the keys and a hand that breathed on a held note
+/// would breathe its fingers through the keybed.
+const BREATH_MM: f32 = 1.4;
+const BREATH_HZ: f64 = 0.23;
+
+/// How long the drift takes to come back after the keys are let go.
+const BREATH_EASE_SECONDS: f64 = 0.35;
+
+/// How much the height a note is approached from depends on how hard it is played.
+///
+/// A loud note is taken from higher up. At zero this is off and every approach is the
+/// same height regardless of what is coming, which is the thing that makes a crescendo
+/// look like it is being typed.
+const APPROACH_BY_FORCE: f32 = 0.6;
 
 /// How far through the window the finger is at the top of its lift, softest to hardest.
 ///
@@ -531,11 +739,16 @@ impl HandAnimator {
 
         // Before the music starts and after it ends the hand waits over the first
         // thing it has to play, rather than snapping in from nowhere.
+        //
+        // A hand that never plays anything has nowhere of its own to wait, and middle C
+        // is the worst available guess: it is where the other hand most often is. The
+        // caller fixes that with [`HandAnimator::park_at`], which is the only thing that
+        // can, since it is the only one that can see both hands.
         let resting = poses.first().copied().unwrap_or_else(|| {
             let centre = model.keyboard().centre_x(60);
             model
                 .skeleton()
-                .rest_pose(glam::Vec3::new(centre, -80.0, 60.0))
+                .rest_pose(glam::Vec3::new(centre, PARK_Y_MM, PARK_Z_MM))
         });
 
         let skeleton = model.skeleton().clone();
@@ -545,6 +758,21 @@ impl HandAnimator {
     /// Which hand this animates.
     pub fn hand(&self) -> Hand {
         self.hand
+    }
+
+    /// Tell a hand with nothing to play where to wait.
+    ///
+    /// Does nothing to a hand that has something to play: that one waits over its own
+    /// first chord, which is both the right place and clear of the other hand by
+    /// construction. This is for the hand a piece never uses, which would otherwise
+    /// stand wherever it was put — and where it was put was middle C.
+    pub fn park_at(&mut self, centre_x: f32) {
+        if !self.events.is_empty() {
+            return;
+        }
+        self.resting = self
+            .skeleton
+            .rest_pose(glam::Vec3::new(centre_x, PARK_Y_MM, PARK_Z_MM));
     }
 
     /// The kinematics, for placing the joints of the rendered model.
@@ -575,6 +803,18 @@ impl HandAnimator {
             // Before the first note: hold the opening posture.
             return self.resting;
         };
+        // Where the hand would be if it were only getting from one chord to the next,
+        // and then the things that make it look like a hand doing it.
+        let mut pose = self.carried(index, time);
+        pose.q[dof::WRIST_Z] += self.breath(index, time);
+        self.sink_into_note(&mut pose, index, time);
+        self.raise_fingers_about_to_strike(&mut pose, index, time);
+        self.skeleton.clamp(&mut pose);
+        pose
+    }
+
+    /// The posture the interpolation alone puts the hand in.
+    fn carried(&self, index: usize, time: f64) -> HandPose {
         let current = &self.events[index];
         let pose = self.poses[index];
 
@@ -602,8 +842,62 @@ impl HandAnimator {
 
         let mut moved = pose.lerp(&next_pose, travel(t, resting_before, resting_after) as f32);
         moved.q[dof::WRIST_Z] += lift_between(current, next, time);
-        self.raise_fingers_about_to_strike(&mut moved, index, time);
         moved
+    }
+
+    /// Sink the wrist into the note it just played.
+    ///
+    /// Down quickly with the key and back up more slowly, and further for a louder note
+    /// — which is where most of the difference between a soft passage and a loud one
+    /// shows, since the fingers themselves barely move differently.
+    ///
+    /// Both a drop and an extension. The drop is what happens; the extension is what
+    /// can be seen, for the reason given on [`WRIST_DROP_MM`].
+    fn sink_into_note(&self, pose: &mut HandPose, index: usize, time: f64) {
+        let current = &self.events[index];
+        let since = time - current.time;
+        if since < 0.0 || since >= WRIST_SETTLE_SECONDS {
+            return;
+        }
+        let Some(hardest) = current.struck.iter().map(|(_, v)| *v).max() else {
+            return;
+        };
+        let hardness = f32::from(hardest) / 127.0;
+
+        let shape = if since < WRIST_FALL_SECONDS {
+            (since / WRIST_FALL_SECONDS) as f32
+        } else {
+            let back =
+                ((since - WRIST_FALL_SECONDS) / (WRIST_SETTLE_SECONDS - WRIST_FALL_SECONDS)) as f32;
+            // Eased at both ends: the wrist lets go of the note rather than springing
+            // off it.
+            1.0 - back * back * (3.0 - 2.0 * back)
+        };
+        let shape = shape.clamp(0.0, 1.0);
+
+        let depth = WRIST_DROP_MM.0 + (WRIST_DROP_MM.1 - WRIST_DROP_MM.0) * hardness;
+        let angle = WRIST_DROP_DEG.0 + (WRIST_DROP_DEG.1 - WRIST_DROP_DEG.0) * hardness;
+        pose.q[dof::WRIST_Z] -= depth * shape;
+        pose.q[dof::WRIST_FLEXION] -= angle.to_radians() * shape;
+    }
+
+    /// The small drift of a hand that is waiting rather than playing.
+    ///
+    /// Zero while anything is held, and eased in afterwards so it does not start the
+    /// instant the keys are let go. The two hands are given different phases, because
+    /// two hands breathing in step is stranger than neither breathing at all.
+    fn breath(&self, index: usize, time: f64) -> f32 {
+        let current = &self.events[index];
+        if time <= current.release {
+            return 0.0;
+        }
+        let free = ((time - current.release) / BREATH_EASE_SECONDS).clamp(0.0, 1.0) as f32;
+        let offset = match self.hand {
+            Hand::Right => 0.0,
+            Hand::Left => 2.1,
+        };
+        let phase = (time * BREATH_HZ * std::f64::consts::TAU) as f32 + offset;
+        free * BREATH_MM * phase.sin()
     }
 
     /// Lift the fingers that are about to play, and drop them on the beat.
@@ -683,6 +977,17 @@ impl HandAnimator {
         start.min(latest.max(current.time))
     }
 
+    /// Every joint of this hand at a pose, in world space.
+    pub fn joints(&self, pose: &HandPose) -> Vec<glam::Vec3> {
+        let posture = self.skeleton.forward(pose);
+        let mut out = Vec::with_capacity(21);
+        out.push(posture.wrist);
+        for digit in &posture.chain {
+            out.extend_from_slice(digit);
+        }
+        out
+    }
+
     /// The grip the hand is holding at a moment, if any.
     pub fn grip_at(&self, time: f64) -> Option<&Grip> {
         let index = self.current_index(time)?;
@@ -723,9 +1028,231 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
     if gap <= 1e-3 || time <= current.release || time >= next.time {
         return 0.0;
     }
-    let height = (gap as f32 * LIFT_RATE_MM).min(LIFT_MAX_MM);
+    // Higher for a louder note. A pianist raises the hand further for a note they mean
+    // to land on, and the height they take it from is most of what tells you a loud one
+    // is coming before it arrives.
+    let hardest = next.struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
+    let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
+    // Scaled before the ceiling, not after, or a loud note sails straight past the
+    // height that is supposed to be the most the hand ever rises.
+    let height = (gap as f32 * LIFT_RATE_MM * force).min(LIFT_MAX_MM);
     let through = ((time - current.release) / gap).clamp(0.0, 1.0) as f32;
     height * (through * std::f32::consts::PI).sin()
+}
+
+/// Pose both hands at a moment, lifting one clear if they are inside each other.
+///
+/// Everything else about a hand is decided by that hand alone, which is right: what it
+/// plays, where it has to be, how it gets there. The one thing it cannot decide alone is
+/// whether the *other* hand is already there — and these are drawn models, not
+/// simulated ones, so when they are in the same place they simply pass through each
+/// other, which is the one failure a viewer notices immediately.
+///
+/// The way out is the one a player uses: lift a hand over. Only a hand that is holding
+/// nothing can be lifted — a hand with keys down has to stay on them, and lifting it
+/// would pull its fingers off the notes it is sounding. Between two chords a hand is
+/// usually free, which is exactly when it is travelling and exactly when it runs into
+/// the other one.
+///
+/// When both are free the lift is shared. When neither is, nothing is done: the
+/// fingering has sent two hands to one place while both are holding, and drawing that
+/// honestly is better than flying a hand off its keys to hide it.
+pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
+    let mut poses = [
+        animators[Hand::Left as usize].pose_at(time),
+        animators[Hand::Right as usize].pose_at(time),
+    ];
+    let joints = [
+        animators[Hand::Left as usize].joints(&poses[0]),
+        animators[Hand::Right as usize].joints(&poses[1]),
+    ];
+    if !overlapping(&joints[0], &joints[1]) {
+        return poses;
+    }
+
+    // How far the hand that goes up has to rise. Worked out per pair of joints rather
+    // than from a box: two joints already far apart along the keys need no height
+    // between them at all, and it is the ones directly above one another that decide.
+    let clearance = |up: usize| lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
+
+    let free = [
+        animators[Hand::Left as usize].grip_at(time).is_none(),
+        animators[Hand::Right as usize].grip_at(time).is_none(),
+    ];
+    // The hand already higher goes up, so a hand on its way over keeps going over
+    // rather than being swapped underneath halfway across.
+    let height = |side: usize| {
+        joints[side].iter().fold(f32::MIN, |a, j| a.max(j.z))
+    };
+    let higher = usize::from(height(1) > height(0));
+    match (free[0], free[1]) {
+        // Both free: still only one of them moves. Sharing it by pressing the other
+        // down looks even-handed and drives a hand into the keys.
+        (true, true) => poses[higher].q[dof::WRIST_Z] += clearance(higher),
+        (true, false) => poses[0].q[dof::WRIST_Z] += clearance(0),
+        (false, true) => poses[1].q[dof::WRIST_Z] += clearance(1),
+        (false, false) => {
+            let centre = |side: usize| {
+                let (lo, hi) = joints[side]
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
+                (lo + hi) / 2.0
+            };
+            let centres = [centre(0), centre(1)];
+            for side in 0..2 {
+                let animator = &animators[side];
+                let Some(grip) = animator.grip_at(time) else {
+                    continue;
+                };
+                swing_clear(animator, &mut poses[side], grip, centres[1 - side]);
+            }
+        }
+    }
+    poses
+}
+
+/// Whether two posed hands are drawn through each other.
+///
+/// Any two joints closer than a finger is wide. See [`HAND_THICKNESS_MM`] for why this
+/// is not a box, and for what it still misses: only the joints are tested, so two palms
+/// crossing with every joint clear would not be caught.
+pub fn overlapping(a: &[glam::Vec3], b: &[glam::Vec3]) -> bool {
+    a.iter()
+        .any(|p| b.iter().any(|q| p.distance_squared(*q) < HAND_THICKNESS_MM * HAND_THICKNESS_MM))
+}
+
+/// How deeply two posed hands are inside one another, in millimetres.
+///
+/// Zero when they are clear. Otherwise how far the closest pair of joints is inside
+/// [`HAND_THICKNESS_MM`], which is what a viewer sees as the hands sharing a space.
+pub fn overlap_depth(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
+    let closest = a
+        .iter()
+        .flat_map(|p| b.iter().map(move |q| p.distance(*q)))
+        .fold(f32::MAX, f32::min);
+    (HAND_THICKNESS_MM - closest).max(0.0)
+}
+
+/// How far `up` has to rise for none of its joints to be inside `down`.
+///
+/// Per pair, because the answer is not one number for the hand: two joints already a
+/// hand apart along the keyboard need no height between them whatever, and the ones
+/// sitting directly above one another are the only ones asking for any. Taking the
+/// depth the two shapes share instead over-lifts the easy cases and under-lifts this
+/// one.
+fn lift_to_clear(up: &[glam::Vec3], down: &[glam::Vec3]) -> f32 {
+    // Aim past the threshold, not at it. Lifting to exactly touching leaves the closest
+    // pair on the boundary, where rounding puts it back inside as often as not — which
+    // read as ninety-six unfixed collisions on one test piece, every one of them
+    // nineteen-point-nine millimetres apart.
+    let want_apart = HAND_THICKNESS_MM + CLEARANCE_SLACK_MM;
+    let mut needed = 0.0f32;
+    for p in up {
+        for q in down {
+            let flat = (p.x - q.x).hypot(p.y - q.y);
+            if flat >= want_apart {
+                continue;
+            }
+            // Height that pair needs, given how far apart they already are flat on.
+            let want = (want_apart * want_apart - flat * flat).sqrt();
+            needed = needed.max(want - (p.z - q.z));
+        }
+    }
+    needed
+}
+
+/// Swing a hand's body aside without taking its fingers off their keys.
+///
+/// The last resort, for when both hands are holding and neither can be lifted over the
+/// other. A hand is far wider than the notes it plays, so two hands working in one
+/// register meet at the palms long before the fingers do — and a player answers that by
+/// angling the wrists outward, not by moving the fingers.
+///
+/// The pose can do exactly that. Deviation swings the whole hand about the wrist, which
+/// takes the fingers with it; translating the wrist by however far the fingertips moved
+/// puts them back. The centroid of the held tips is restored exactly, because the wrist
+/// translation is a rigid shift of everything. Individual fingers rotate a little about
+/// that centroid, which for the narrow shapes this happens on is a millimetre or two —
+/// the price of getting a palm out of another hand.
+///
+/// Both directions are tried and the better kept, rather than reasoning about which
+/// sign of deviation swings which way for which hand: the answer depends on the hand,
+/// the shape and where the other hand is, and measuring it is both shorter and right.
+fn swing_clear(
+    animator: &HandAnimator,
+    pose: &mut HandPose,
+    grip: &Grip,
+    away_from: f32,
+) {
+    if grip.keys.is_empty() {
+        return;
+    }
+    // Where the held fingers are now, and where their middle is.
+    let tips = |p: &HandPose| -> Vec<glam::Vec3> {
+        let posture = animator.skeleton.forward(p);
+        grip.keys
+            .iter()
+            .map(|(_, finger)| posture.chain[finger.index()][3])
+            .collect()
+    };
+    let middle = |t: &[glam::Vec3]| t.iter().copied().sum::<glam::Vec3>() / t.len() as f32;
+
+    let before = tips(pose);
+    let held = middle(&before);
+
+    // Swing by an angle, then shift the wrist so the middle of the held fingers is back
+    // where it was. That shift is a rigid translation of the whole hand, so the middle
+    // is restored exactly; how far the *outer* fingers end up from their keys is what
+    // has to be watched.
+    let swung = |angle: f32| {
+        let mut trial = *pose;
+        trial.q[dof::WRIST_DEVIATION] += angle;
+        animator.skeleton.clamp(&mut trial);
+        let moved = middle(&tips(&trial));
+        trial.q[dof::WRIST_X] += held.x - moved.x;
+        trial.q[dof::WRIST_Y] += held.y - moved.y;
+        // How far out of tolerance the worst finger is, as a multiple of it: across the
+        // keys and along them are different questions with different answers.
+        let strayed = tips(&trial)
+            .iter()
+            .zip(&before)
+            .map(|(now, was)| {
+                ((now.x - was.x).abs() / SWING_TOLERANCE_MM)
+                    .max((now.y - was.y).abs() / SWING_SLIDE_MM)
+            })
+            .fold(0.0f32, f32::max);
+        (trial, strayed)
+    };
+
+    let mut best: Option<(f32, HandPose)> = None;
+    for sign in [1.0f32, -1.0] {
+        let full = sign * SWING_MAX_DEG.to_radians();
+        // Scale the angle back until the worst-moved finger is inside tolerance. The
+        // displacement is nearly but not quite linear in the angle, so twice.
+        let mut angle = full;
+        let (mut trial, mut strayed) = swung(full);
+        for _ in 0..2 {
+            if strayed <= 1.0 {
+                break;
+            }
+            angle /= strayed;
+            (trial, strayed) = swung(angle);
+        }
+        if strayed > 1.1 {
+            continue;
+        }
+        // Did the body actually end up further from the other hand?
+        let gained = (trial.wrist_position().x - away_from).abs()
+            - (pose.wrist_position().x - away_from).abs();
+        if best.as_ref().is_none_or(|(g, _)| gained > *g) {
+            best = Some((gained, trial));
+        }
+    }
+    if let Some((gained, trial)) = best {
+        if gained > 0.0 {
+            *pose = trial;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -775,6 +1302,75 @@ mod tests {
 
     fn fingered(score: &Score) -> Vec<Fingering> {
         on_fingering::finger_score(score, &Default::default()).fingerings
+    }
+
+
+    /// A key struck twice has to know when it will be struck again, so the dust from
+    /// the first note can be cleared away before the second throws any of its own.
+    ///
+    /// Staccato repetitions are the case that matters: without this, every repeat lays
+    /// another plume of a thousand motes over the one already there, which costs the
+    /// frame rate twice over and looks like one plume abruptly getting denser.
+    #[test]
+    fn a_repeated_key_knows_when_it_is_struck_again() {
+        let quarter = i64::from(TICKS_PER_QUARTER);
+        // Middle C three times, with a D in between that must not be confused for it.
+        let score = score_of(&[
+            (60, 0, quarter, Hand::Right),
+            (62, quarter, quarter, Hand::Right),
+            (60, 2 * quarter, quarter, Hand::Right),
+            (60, 3 * quarter, quarter, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &[]);
+
+        let at = |midi: u8, nth: usize| {
+            timeline
+                .notes
+                .iter()
+                .filter(|n| n.midi == midi)
+                .nth(nth)
+                .expect("note is there")
+        };
+
+        // Each C points at the next C, not at the D that happens to fall between them.
+        let first = at(60, 0);
+        let second = at(60, 1);
+        let third = at(60, 2);
+        assert_eq!(first.restruck, Some(second.start), "{first:?}");
+        assert_eq!(second.restruck, Some(third.start), "{second:?}");
+        assert_eq!(third.restruck, None, "the last one is never struck again");
+
+        // And a key played once has nothing following it.
+        assert_eq!(at(62, 0).restruck, None);
+    }
+
+    /// The plume has to be gone before the next one starts, which is only true if the
+    /// moment it is told to clear away is the moment the next note begins.
+    #[test]
+    fn one_key_never_carries_two_plumes_at_once() {
+        let sixteenth = i64::from(TICKS_PER_QUARTER) / 4;
+        // Four fast repeats of one key, the way a staccato passage goes.
+        let score = score_of(&[
+            (60, 0, sixteenth, Hand::Right),
+            (60, sixteenth, sixteenth, Hand::Right),
+            (60, 2 * sixteenth, sixteenth, Hand::Right),
+            (60, 3 * sixteenth, sixteenth, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &[]);
+
+        // The window a plume occupies, matching what `update_sparks` computes.
+        let tail = 0.10_f64;
+        let window = |n: &TimelineNote| {
+            (n.start, (n.end + tail).min(n.restruck.unwrap_or(f64::INFINITY)))
+        };
+        for pair in timeline.notes.windows(2) {
+            let (_, ends) = window(&pair[0]);
+            let (starts, _) = window(&pair[1]);
+            assert!(
+                ends <= starts + 1e-9,
+                "a plume ending at {ends} overlaps the next starting at {starts}"
+            );
+        }
     }
 
     #[test]
@@ -975,6 +1571,310 @@ mod tests {
         );
     }
 
+
+
+    /// A hand that has nothing to play must not stand where the other one is working.
+    ///
+    /// It used to wait over middle C whatever the other hand was doing, so any piece
+    /// written around middle C had one model standing inside the other for its whole
+    /// length. Nothing in the music decides where an unused hand goes, which is exactly
+    /// why it had to be decided somewhere.
+    #[test]
+    fn an_unused_hand_waits_out_of_the_way() {
+        let q = TICKS_PER_QUARTER as i64;
+        // Everything in the right hand, around middle C, and nothing for the left.
+        let mut score = score_of(&[
+            (60, 0, q, Hand::Right),
+            (64, q, q, Hand::Right),
+            (67, 2 * q, q, Hand::Right),
+        ]);
+        for note in &mut score.notes {
+            note.hand = Some(Hand::Right);
+        }
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+
+        let left = animators[Hand::Left as usize].pose_at(1.0).wrist_position().x;
+        let right = animators[Hand::Right as usize].pose_at(1.0).wrist_position().x;
+        assert!(
+            right - left > IDLE_CLEARANCE_MM,
+            "the idle left hand is standing in the right one: left at {left:.0} mm, \
+             right at {right:.0} mm"
+        );
+    }
+
+    /// Two hands in one place is the failure a viewer notices first, because the models
+    /// are drawn rather than simulated and simply pass through each other.
+    ///
+    /// A free hand is lifted over. A hand holding keys is not — it has to stay on them,
+    /// and taking it off the notes it is sounding to tidy up the picture would be a
+    /// worse lie than the one being fixed.
+    #[test]
+    fn a_free_hand_is_lifted_over_the_other_and_a_busy_one_is_not() {
+        let q = TICKS_PER_QUARTER as i64;
+        // The right hand holds a long chord; the left has one short note and then
+        // nothing, so it is free for the rest.
+        let score = score_of(&[
+            (60, 0, 8 * q, Hand::Right),
+            (64, 0, 8 * q, Hand::Right),
+            (62, 0, q / 4, Hand::Left),
+        ]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+
+        let at = 1.0;
+        let alone = [
+            animators[Hand::Left as usize].pose_at(at),
+            animators[Hand::Right as usize].pose_at(at),
+        ];
+        let together = pose_both(&animators, at);
+
+        // The right hand is holding its chord throughout and must not have been moved.
+        assert_eq!(
+            together[Hand::Right as usize].q[dof::WRIST_Z],
+            alone[Hand::Right as usize].q[dof::WRIST_Z],
+            "a hand holding keys was lifted off them"
+        );
+        // And whatever happened to the left, it is not below where it would have been.
+        assert!(
+            together[Hand::Left as usize].q[dof::WRIST_Z]
+                >= alone[Hand::Left as usize].q[dof::WRIST_Z] - 1e-4,
+            "the free hand was pushed down into the other one"
+        );
+    }
+
+
+    /// Getting the hands apart must not take a finger off the key it is holding.
+    ///
+    /// The swing keeps the middle of the held fingers exactly and lets the outer ones
+    /// rotate about it, so the wider the shape the further they go — and a collision
+    /// fixed by dragging fingers off their notes is not fixed. The angle is scaled back
+    /// until the worst-moved finger is inside tolerance, and this is the guard on that.
+    #[test]
+    fn getting_clear_never_drags_a_finger_off_its_key() {
+        let q = TICKS_PER_QUARTER as i64;
+        // Two hands holding wide chords in nearly the same register: both busy, so
+        // neither can be lifted, and the swing is the only thing left.
+        let score = score_of(&[
+            (52, 0, 8 * q, Hand::Left),
+            (59, 0, 8 * q, Hand::Left),
+            (62, 0, 8 * q, Hand::Right),
+            (69, 0, 8 * q, Hand::Right),
+        ]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let keys = on_hand::keyboard::Keyboard::new();
+
+        let at = 1.0;
+        let posed = pose_both(&animators, at);
+        for hand in Hand::ALL {
+            let animator = &animators[hand as usize];
+            let Some(grip) = animator.grip_at(at) else { continue };
+            let swung = animator.skeleton().forward(&posed[hand as usize]);
+            let alone = animator.skeleton().forward(&animator.pose_at(at));
+            for (midi, finger) in &grip.keys {
+                let want = keys.centre_x(*midi);
+                let moved = (swung.chain[finger.index()][3].x - want).abs()
+                    - (alone.chain[finger.index()][3].x - want).abs();
+                assert!(
+                    moved <= SWING_TOLERANCE_MM,
+                    "{hand:?} finger {} on {midi} was dragged {moved:.1} mm further off                      its key to get the hands apart",
+                    finger.number()
+                );
+            }
+        }
+    }
+
+    /// Two hands that are nowhere near each other must be left exactly alone.
+    #[test]
+    fn hands_at_opposite_ends_are_not_touched() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[(30, 0, 4 * q, Hand::Left), (95, 0, 4 * q, Hand::Right)]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+
+        for hand in Hand::ALL {
+            let alone = animators[hand as usize].pose_at(0.5);
+            let together = pose_both(&animators, 0.5)[hand as usize];
+            assert_eq!(
+                alone.q[dof::WRIST_Z], together.q[dof::WRIST_Z],
+                "{hand:?} was moved for a collision that is not there"
+            );
+        }
+    }
+
+    /// A note is played with the arm, not just the finger.
+    ///
+    /// The wrist goes down into the key and comes back up. Only the finger used to
+    /// move, which is what a keyboard diagram does rather than what a pianist does.
+    #[test]
+    fn the_wrist_sinks_into_a_note_and_comes_back() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+        let height = |t: f64| animator.pose_at(t).q[dof::WRIST_Z];
+
+        let settled = height(WRIST_SETTLE_SECONDS + 0.01);
+        let sinking = height(WRIST_FALL_SECONDS);
+        assert!(
+            sinking < settled - 0.5,
+            "the wrist should drop into the note: {settled:.2} settled, {sinking:.2} at \
+             the bottom"
+        );
+        // And it is back where it started once the note has been taken.
+        assert!(
+            (height(WRIST_SETTLE_SECONDS + 0.4) - settled).abs() < 0.01,
+            "the wrist should come back up"
+        );
+    }
+
+
+    /// The sink has to be visible, and height alone is not.
+    ///
+    /// The camera looks straight down through an orthographic projection, so the height
+    /// of anything is exactly the view axis: a wrist that only drops moves zero pixels,
+    /// and the forearm does not give it away either because the shoulder it is aimed at
+    /// tracks the wrist's own height. The first version of this was correct and
+    /// completely invisible.
+    ///
+    /// What reaches the screen is the hand flattened onto the keyboard plane, so the
+    /// test is on that: the distance from wrist to fingertip with height thrown away
+    /// must actually change while the note is being taken.
+    #[test]
+    fn the_sink_moves_something_the_camera_can_see() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+        score.notes[0].velocity = 120;
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+
+        // Wrist to fingertip as the camera gets it: height thrown away.
+        let flat = |t: f64| {
+            let pose = animator.pose_at(t);
+            let posture = animator.skeleton().forward(&pose);
+            (posture.chain[Finger::Middle.index()][3].truncate() - posture.wrist.truncate())
+                .length()
+        };
+
+        let settled = flat(WRIST_SETTLE_SECONDS + 0.05);
+        let sunk = flat(WRIST_FALL_SECONDS);
+        assert!(
+            (settled - sunk).abs() > 2.0,
+            "the hand has to visibly foreshorten as it takes the note: {settled:.2} mm \
+             settled against {sunk:.2} mm sunk, on a keyboard whose white keys are \
+             23.5 mm wide"
+        );
+    }
+
+    /// How hard a note is played is most of what the movement should say about it.
+    ///
+    /// MIDI carries a velocity per note and MusicXML carries dynamics, so both know
+    /// this; a hand that moves identically for a pianissimo and a fortissimo is
+    /// throwing away the one thing the file is telling it about touch.
+    #[test]
+    fn a_louder_note_is_played_with_more_arm() {
+        let q = TICKS_PER_QUARTER as i64;
+        let sink = |velocity: u8| {
+            let mut score = score_of(&[(60, 0, 4 * q, Hand::Right)]);
+            score.notes[0].velocity = velocity;
+            let timeline = Timeline::build(&score, &fingered(&score));
+            let animator = HandAnimator::new(
+                Hand::Right,
+                BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+                timeline.hand_grips(Hand::Right).to_vec(),
+            );
+            let settled = animator.pose_at(WRIST_SETTLE_SECONDS + 0.01).q[dof::WRIST_Z];
+            settled - animator.pose_at(WRIST_FALL_SECONDS).q[dof::WRIST_Z]
+        };
+
+        let quiet = sink(20);
+        let loud = sink(120);
+        assert!(quiet > 0.0, "even a quiet note sinks a little: {quiet:.2}");
+        assert!(
+            loud > quiet * 1.8,
+            "a loud note should sink much further: {quiet:.2} quiet, {loud:.2} loud"
+        );
+    }
+
+    /// A hand waiting is not a hand switched off.
+    ///
+    /// It drifts, slightly, while it has nothing to hold — and not at all while it
+    /// does, because nothing re-solves the fingertips against the keys and a hand that
+    /// breathed on a held chord would breathe its fingers through the keybed.
+    ///
+    /// Measured on the drift itself rather than on the wrist height, which over a rest
+    /// is dominated by the much larger arc the hand makes on its way to the next note.
+    #[test]
+    fn a_waiting_hand_is_not_perfectly_still() {
+        let q = TICKS_PER_QUARTER as i64;
+        // One short note, then a long silence before the next.
+        let score = score_of(&[(60, 0, q / 4, Hand::Right), (60, 8 * q, q, Hand::Right)]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = HandAnimator::new(
+            Hand::Right,
+            BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
+            timeline.hand_grips(Hand::Right).to_vec(),
+        );
+
+        // Nothing at all while the key is still down.
+        let release = animator.events[0].release;
+        assert_eq!(animator.breath(0, release - 0.01), 0.0);
+
+        let mut lowest = f32::INFINITY;
+        let mut highest = f32::NEG_INFINITY;
+        for step in 0..60 {
+            let drift = animator.breath(0, release + 1.0 + step as f64 * 0.1);
+            lowest = lowest.min(drift);
+            highest = highest.max(drift);
+        }
+        assert!(
+            highest - lowest > 0.2,
+            "a hand waiting through a rest should drift: {lowest:.2} to {highest:.2}"
+        );
+        // But it is barely perceptible rather than a wobble.
+        assert!(
+            highest - lowest <= 2.0 * BREATH_MM + 1e-3,
+            "and only just: {lowest:.2} to {highest:.2}"
+        );
+    }
+
+    /// The two hands must not breathe in step, which is stranger than not breathing.
+    #[test]
+    fn the_two_hands_do_not_breathe_together() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[
+            (60, 0, q / 4, Hand::Right),
+            (48, 0, q / 4, Hand::Left),
+            (60, 8 * q, q, Hand::Right),
+            (48, 8 * q, q, Hand::Left),
+        ]);
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let animator = |hand: Hand| {
+            HandAnimator::new(
+                hand,
+                BiomechModel::new(HandProfile::default(), hand, BiomechWeights::default()),
+                timeline.hand_grips(hand).to_vec(),
+            )
+        };
+        let (right, left) = (animator(Hand::Right), animator(Hand::Left));
+
+        // Their drifts differ somewhere across the rest.
+        let apart = (0..40).any(|step| {
+            let t = 1.0 + step as f64 * 0.1;
+            (right.breath(0, t) - left.breath(0, t)).abs() > 0.1
+        });
+        assert!(apart, "both hands drifted identically");
+    }
+
     /// The lift must never pull a finger off a key that is still held.
     #[test]
     fn a_held_note_is_never_lifted_off() {
@@ -989,9 +1889,12 @@ mod tests {
             BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default()),
             timeline.hand_grips(Hand::Right).to_vec(),
         );
-        let resting = animator.pose_at(0.05).q[dof::WRIST_Z];
+        // Measured once the wrist has finished sinking into the note it just played.
+        // Taken during the sink it would be the lowest point of the whole passage, and
+        // every later sample would read as a rise.
+        let resting = animator.pose_at(WRIST_SETTLE_SECONDS + 0.05).q[dof::WRIST_Z];
         for step in 0..20 {
-            let t = 0.05 + step as f64 * 0.09;
+            let t = WRIST_SETTLE_SECONDS + 0.05 + step as f64 * 0.09;
             let height = animator.pose_at(t).q[dof::WRIST_Z];
             assert!(
                 height <= resting + 0.01,

@@ -148,7 +148,7 @@ pub fn train(
     let mut prior = NgramPrior::new();
     for piece in &train {
         for hand in Hand::ALL {
-            let placements = piece.placements(hand);
+            let placements = piece.voice(hand);
             if placements.len() >= 2 {
                 prior.observe(hand, &placements);
             }

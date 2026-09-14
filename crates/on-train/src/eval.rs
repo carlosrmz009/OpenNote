@@ -13,10 +13,14 @@
 //! * **soft** — a note counts if any annotation used that finger. Generous, and the
 //!   one that moves least, but it catches a model that is right about every note
 //!   while disagreeing with each individual annotator somewhere.
+//! * **recombined** — agreement with the best sequence that can be stitched together
+//!   out of the annotations, charging for each stitch. See [`recombined`].
 //!
 //! Reported together, they say different things: general going up with soft flat
 //! means the model is settling onto one tradition; soft going up means it is finding
-//! fingerings nobody used.
+//! fingerings nobody used. Recombined going up while soft stays put means the fingering
+//! is becoming more *coherent* — the same choices in the same order somebody made —
+//! rather than merely more often locally defensible.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -35,6 +39,8 @@ pub struct MatchRates {
     pub highest: f32,
     /// Notes matching at least one annotation, over all notes.
     pub soft: f32,
+    /// Agreement with the cheapest recombination of the annotations.
+    pub recombined: f32,
     /// How many notes were compared.
     pub notes: usize,
     /// How many pieces they came from.
@@ -45,10 +51,12 @@ impl std::fmt::Display for MatchRates {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "general {:.1}%   highest {:.1}%   soft {:.1}%   ({} notes, {} pieces)",
+            "general {:.1}%   highest {:.1}%   soft {:.1}%   recombined {:.1}%   \
+             ({} notes, {} pieces)",
             self.general * 100.0,
             self.highest * 100.0,
             self.soft * 100.0,
+            self.recombined * 100.0,
             self.notes,
             self.pieces
         )
@@ -67,6 +75,8 @@ pub fn evaluate(
     let mut highest_total = 0.0;
     let mut soft_matched = 0usize;
     let mut soft_notes = 0usize;
+    let mut recombined_total = 0.0;
+    let mut recombined_pieces = 0usize;
     let mut counted_pieces = 0usize;
     let mut notes_compared = 0usize;
 
@@ -90,10 +100,14 @@ pub fn evaluate(
         let mut best = 0.0f32;
         // Which fingers any annotator used for each note, for the soft rate.
         let mut acceptable: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
+        // The same thing kept per annotator rather than pooled, which is what the
+        // recombination needs: it has to know whose choice each finger was.
+        let mut truths: Vec<Vec<Option<u8>>> = Vec::new();
 
         for annotation in annotations {
             let mut agreed = 0usize;
             let mut compared = 0usize;
+            let mut row = vec![None; annotation.notes.len()];
             for (index, note) in annotation.notes.iter().enumerate() {
                 let Some(id) = keys.get(index) else { continue };
                 let Some(ours) = chosen.get(id) else { continue };
@@ -103,6 +117,7 @@ pub fn evaluate(
                 let Some(theirs) = note.finger else { continue };
                 compared += 1;
                 acceptable.entry(index).or_default().push(theirs);
+                row[index] = Some(theirs);
                 if *ours == theirs {
                     agreed += 1;
                 }
@@ -110,6 +125,7 @@ pub fn evaluate(
             if compared == 0 {
                 continue;
             }
+            truths.push(row);
             let rate = agreed as f32 / compared as f32;
             general_total += rate;
             general_count += 1;
@@ -121,6 +137,30 @@ pub fn evaluate(
         }
         highest_total += best;
         counted_pieces += 1;
+
+        // The recombination needs every annotator to have an opinion at every note it
+        // walks through: following one of them across a note they left blank is not
+        // defined. So it runs on the notes they all filled in, which for a fully
+        // annotated corpus is all of them, and for a partial one is the part where the
+        // question can be asked at all.
+        if let Some(first) = truths.first() {
+            let shared: Vec<usize> = (0..first.len())
+                .filter(|i| truths.iter().all(|row| row[*i].is_some()))
+                .filter(|i| keys.get(*i).and_then(|id| chosen.get(id)).is_some())
+                .collect();
+            if !shared.is_empty() {
+                let rows: Vec<Vec<u8>> = truths
+                    .iter()
+                    .map(|row| shared.iter().map(|i| row[*i].expect("filtered")).collect())
+                    .collect();
+                let mine: Vec<u8> = shared
+                    .iter()
+                    .map(|i| chosen[&keys[*i]])
+                    .collect();
+                recombined_total += recombined(&rows, &mine);
+                recombined_pieces += 1;
+            }
+        }
 
         for (index, fingers) in acceptable {
             let Some(id) = keys.get(index) else { continue };
@@ -136,9 +176,75 @@ pub fn evaluate(
         general: ratio(general_total, general_count),
         highest: ratio(highest_total, counted_pieces),
         soft: ratio(soft_matched as f32, soft_notes),
+        recombined: ratio(recombined_total, recombined_pieces),
         notes: soft_notes,
         pieces: counted_pieces,
     }
+}
+
+/// Agreement with the best sequence stitched together out of several annotations.
+///
+/// Nakamura, Saito & Yoshii (2020, sec. 6.2 and Appendix A). The other three rates
+/// judge each note on its own, and fingering does not work that way: there are usually
+/// several defensible fingers for a note, but choosing one commits the hand to what
+/// follows. A model can match some annotator at every single note and still be
+/// incoherent, by taking its choices from a different pianist each time.
+///
+/// So the estimate is compared against a *recombined* reference: a sequence that may
+/// follow one annotation for a while and then switch to another, but only where the
+/// two agree at the switching point, and paying a cost for each switch. Formally, with
+/// `z[n]` the annotation being followed at note `n`:
+///
+/// * switching costs `C_rec` where the two annotations agree at that note, and is
+///   forbidden where they do not — an abrupt change no pianist made is not evidence of
+///   anything;
+/// * disagreeing with the recombined reference costs `C_sub` per note.
+///
+/// The cheapest total is the error, and `M_rec = (N - E_rec) / N`. Both costs are 1,
+/// as in the paper: a recombination is charged the same as a local mismatch, so the
+/// measure never prefers an implausible stitch to simply being wrong once. Finding the
+/// cheapest is a Viterbi over which annotation is being followed.
+///
+/// `truths` is one row per annotation, all the same length, and `ours` is the
+/// estimate. Notes nobody fingered are the caller's to strip: following an annotation
+/// through a note it does not fill in is not defined.
+///
+/// The score can be negative in principle — an estimate that forces a switch at every
+/// note costs more than the notes it gets right — so it is clamped at zero, which is
+/// what a rate means.
+pub fn recombined(truths: &[Vec<u8>], ours: &[u8]) -> f32 {
+    let notes = ours.len();
+    if truths.is_empty() || notes == 0 {
+        return 0.0;
+    }
+    debug_assert!(truths.iter().all(|t| t.len() == notes));
+
+    const RECOMBINATION: f32 = 1.0;
+    const SUBSTITUTION: f32 = 1.0;
+
+    // Cost so far of following each annotation, having just placed note `n`.
+    let mut cost: Vec<f32> = truths
+        .iter()
+        .map(|t| if t[0] == ours[0] { 0.0 } else { SUBSTITUTION })
+        .collect();
+
+    for n in 1..notes {
+        let previous = cost.clone();
+        for (g, truth) in truths.iter().enumerate() {
+            // Staying with the same annotation is free; moving to it from another is
+            // allowed only where that other one agrees here, and costs a recombination.
+            let mut best = previous[g];
+            for (h, other) in truths.iter().enumerate() {
+                if h != g && other[n] == truth[n] {
+                    best = best.min(previous[h] + RECOMBINATION);
+                }
+            }
+            cost[g] = best + if truth[n] == ours[n] { 0.0 } else { SUBSTITUTION };
+        }
+    }
+
+    let error = cost.iter().copied().fold(f32::INFINITY, f32::min);
+    ((notes as f32 - error) / notes as f32).max(0.0)
 }
 
 /// A rate, or zero if there was nothing to average.
@@ -227,6 +333,101 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+
+    /// Matching one annotation exactly costs nothing: no switches, no substitutions.
+    #[test]
+    fn following_one_annotation_all_the_way_is_free() {
+        let truths = vec![vec![1, 2, 3, 1, 2], vec![1, 3, 4, 1, 2]];
+        assert!((recombined(&truths, &[1, 2, 3, 1, 2]) - 1.0).abs() < 1e-6);
+        assert!((recombined(&truths, &[1, 3, 4, 1, 2]) - 1.0).abs() < 1e-6);
+    }
+
+    /// The point of the measure, and what separates it from the soft rate.
+    ///
+    /// Two estimates can match *some* annotator at every single note and still be
+    /// quite different things. One changes its mind where the two pianists happen to
+    /// agree, which is a fingering a third pianist could have arrived at and played.
+    /// The other changes its mind where they disagree, repeatedly, which is not a
+    /// fingering at all but a shuffle of two incompatible plans — the hand would have
+    /// to be in two places. The soft rate scores both a perfect 100%. This one does
+    /// not, and that is the whole reason Nakamura et al. added it.
+    #[test]
+    fn a_coherent_stitch_beats_a_shuffle() {
+        // The two annotators agree only at note 2, so that is the only place a
+        // fingering can cross from one to the other.
+        let a = vec![1, 2, 5, 3, 3];
+        let b = vec![4, 4, 5, 2, 2];
+        let truths = vec![a.clone(), b.clone()];
+
+        // Follows the first pianist, then the second, crossing where they agree.
+        let coherent = vec![1, 2, 5, 2, 2];
+        // Takes whichever finger it likes at each note, crossing four times.
+        let shuffled = vec![4, 2, 5, 3, 2];
+
+        // Every note of both matches one of the two, so the soft rate is 100% for
+        // each and cannot tell them apart.
+        for note in 0..5 {
+            assert!(coherent[note] == a[note] || coherent[note] == b[note]);
+            assert!(shuffled[note] == a[note] || shuffled[note] == b[note]);
+        }
+
+        let stitched = recombined(&truths, &coherent);
+        let shuffle = recombined(&truths, &shuffled);
+        assert!(
+            stitched > shuffle,
+            "one crossing scored {stitched}, four scored {shuffle}"
+        );
+        // One legal crossing and nothing else wrong, out of five notes.
+        assert!((stitched - 0.8).abs() < 1e-6, "{stitched}");
+    }
+
+    /// A recombination costs the same as being wrong once, so the measure never
+    /// prefers an elaborate stitch to a single mistake. This is the paper's choice of
+    /// C_rec = C_sub = 1, and it is what stops the reference bending to fit anything.
+    #[test]
+    fn a_stitch_costs_what_a_mistake_costs() {
+        let truths = vec![vec![1, 2, 3, 2, 1], vec![1, 4, 3, 5, 1]];
+        // Five notes, one note wrong and no switching needed.
+        let one_error = recombined(&truths, &[1, 2, 3, 2, 5]);
+        // Five notes, all matching an annotator, but needing one switch at note 2.
+        let one_switch = recombined(&truths, &[1, 2, 3, 5, 1]);
+        assert!((one_error - one_switch).abs() < 1e-6, "{one_error} vs {one_switch}");
+        assert!((one_error - 0.8).abs() < 1e-6, "{one_error}");
+    }
+
+    /// With one annotation there is nothing to recombine, so it is the plain match
+    /// rate.
+    #[test]
+    fn one_annotation_gives_the_plain_match_rate() {
+        let truths = vec![vec![1, 2, 3, 4]];
+        assert!((recombined(&truths, &[1, 2, 3, 4]) - 1.0).abs() < 1e-6);
+        assert!((recombined(&truths, &[1, 2, 3, 1]) - 0.75).abs() < 1e-6);
+        assert!((recombined(&truths, &[5, 5, 5, 5]) - 0.0).abs() < 1e-6);
+    }
+
+    /// Nothing to measure is not a division by zero or a negative rate.
+    #[test]
+    fn recombining_nothing_is_zero() {
+        assert_eq!(recombined(&[], &[1, 2]), 0.0);
+        assert_eq!(recombined(&[vec![]], &[]), 0.0);
+    }
+
+    /// The recombined rate sits between the highest and the soft ones: it can do at
+    /// least as well as staying with the best single annotation, and no better than
+    /// taking whatever finger anybody used, since it pays for the changes.
+    #[test]
+    fn the_recombined_rate_sits_between_the_highest_and_the_soft() {
+        let notes: Vec<(u8, u8)> = vec![(60, 1), (62, 2), (64, 3), (65, 1), (67, 2)];
+        let other: Vec<(u8, u8)> = vec![(60, 1), (62, 3), (64, 4), (65, 1), (67, 2)];
+        let pieces = vec![
+            piece("c-major", "1", &notes),
+            piece("c-major", "2", &other),
+        ];
+        let rates = evaluate(&pieces, &FingeringOptions::default(), None);
+        assert!(rates.recombined >= rates.highest - 1e-6, "{rates}");
+        assert!(rates.soft >= rates.recombined - 1e-6, "{rates}");
     }
 
     /// A C major scale is what the solver already gets right, so agreement with the

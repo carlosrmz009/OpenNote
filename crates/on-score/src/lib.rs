@@ -245,6 +245,7 @@ impl Score {
     /// Everything downstream assumes this ordering, so importers call it once they
     /// have collected every note.
     pub fn finalise(&mut self) {
+        self.drop_unplayable();
         self.notes.sort_by(|a, b| {
             a.onset
                 .cmp(&b.onset)
@@ -255,6 +256,25 @@ impl Score {
             note.id = NoteId(i as u32);
         }
         self.recompute_seconds();
+    }
+
+    /// Drop notes no piano has a key for.
+    ///
+    /// MIDI carries 128 pitches and a piano has 88 of them, so a file can perfectly
+    /// legally ask for notes that do not exist — arrangements transposed out of range,
+    /// percussion left on a piano track, or the bottom and top of a synthesised part
+    /// that was never meant for hands. Everything downstream of here assumes a real
+    /// keyboard: the geometry, the span tables and the hand model all index by key.
+    ///
+    /// Dropping them is the only honest answer. Clamping would move a note to a pitch
+    /// the composer did not write, and transposing it by octaves would change the
+    /// music; an instrument that cannot play a note cannot play it. They are removed
+    /// here rather than in each reader because every path into a score ends in
+    /// [`Score::finalise`], and a guard in one place is a guard that cannot be
+    /// forgotten in the next reader somebody writes.
+    fn drop_unplayable(&mut self) {
+        let range = on_hand::keyboard::MIDI_LOWEST..=on_hand::keyboard::MIDI_HIGHEST;
+        self.notes.retain(|note| range.contains(&note.midi));
     }
 
     /// Refresh every note's wall-clock timing from the tempo map.

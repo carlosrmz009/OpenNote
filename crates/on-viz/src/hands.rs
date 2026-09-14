@@ -637,7 +637,10 @@ pub fn pose_hands(
             continue;
         }
         let animator = &performance.animators[rig.hand as usize];
-        let pose = animator.pose_at(transport.position);
+        // Both hands at once: whether this one has to be lifted over the other is the
+        // one thing about its pose that it cannot decide by itself.
+        let pose = crate::timeline::pose_both(&performance.animators, transport.position)
+            [rig.hand as usize];
         let skeleton = animator.skeleton();
         let posture = skeleton.forward(&pose);
 

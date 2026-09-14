@@ -106,6 +106,16 @@ impl Span {
     pub fn is_relaxed(&self, semitones: i32) -> bool {
         (self.min_rel..=self.max_rel).contains(&semitones)
     }
+
+    /// Whether the pair spans this interval comfortably.
+    ///
+    /// Wider than relaxed and narrower than practical: the range a hand will hold for
+    /// a passage rather than for one chord. Parncutt's position-change rules take
+    /// leaving this range as the definition of having moved the hand, and so does
+    /// [`crate::playability`].
+    pub fn is_comfortable(&self, semitones: i32) -> bool {
+        (self.min_comf..=self.max_comf).contains(&semitones)
+    }
 }
 
 /// A full set of spans for all 25 ordered finger pairs of the right hand.

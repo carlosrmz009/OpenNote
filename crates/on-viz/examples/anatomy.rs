@@ -11,16 +11,20 @@
 //! * whether the solved posture sits inside the joint ranges, and by how many degrees
 //!   it does not
 //! * whether any part of the hand ends up below the keys it is supposed to be playing
+//! * whether the two hands ever end up in the same place at the same time
 //!
-//! The right answer to all three is zero. A miss means the drawn hand is somewhere the
+//! The right answer to all four is zero. A miss means the drawn hand is somewhere the
 //! fingering did not ask for; a joint out of range means the drawn hand is doing
-//! something no hand does; and a hand under the keyboard is the one anybody notices.
+//! something no hand does; a hand under the keyboard is the one anybody notices; and
+//! two hands in one place is the other one anybody notices, because hands are solid and
+//! these ones will draw straight through each other.
 //!
 //!     cargo run -p on-viz --example anatomy -- path/to/piece.mid
 
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::FingeringOptions;
 use on_hand::skeleton::{HandPose, DOF, LIMITS};
+use on_hand::keyboard::KEY_DIP;
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
@@ -37,6 +41,14 @@ const THROUGH_THE_KEYS_MM: f32 = 12.0;
 /// it, in seconds. A rolled chord is the reason there is any window at all; it wants a
 /// little more than the roll itself.
 const LATE_ARRIVAL: f64 = 0.12;
+
+/// How often the two hands are checked against each other, in seconds.
+///
+/// They are posed by interpolation, so a collision can happen between two grips rather
+/// than at either of them. It has to be sampled, and this is finer than a rendered
+/// frame at sixty a second.
+const COLLISION_STEP: f64 = 1.0 / 90.0;
+
 
 fn main() -> anyhow::Result<()> {
     let Some(path) = std::env::args().nth(1) else {
@@ -71,6 +83,19 @@ fn main() -> anyhow::Result<()> {
     let mut through_but_reached = 0usize;
     let mut struck_unplayed = 0usize;
     let mut silent_strikes: Vec<String> = Vec::new();
+    let mut colliding = 0usize;
+    let mut sunk = 0usize;
+    let mut deepest_moving = 0.0f32;
+    let mut unhandled = 0usize;
+    let mut sampled = 0usize;
+    let mut worst_overlap = 0.0f32;
+    let mut collisions: Vec<String> = Vec::new();
+    let mut both_busy = 0usize;
+    let mut one_free = 0usize;
+    let mut worst_depth_overlap = 0.0f32;
+    let mut worst_off_key = 0.0f32;
+    let mut worst_off_key_alone = 0.0f32;
+    let keys_geom = on_hand::keyboard::Keyboard::new();
 
     for hand in Hand::ALL {
         let model = BiomechModel::new(options.profile.clone(), hand, options.biomech);
@@ -104,7 +129,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let violation = worst_joint(&pose);
+            let violation = worst_joint(model.skeleton(), &pose);
             if violation > 1e-3 {
                 out_of_range += 1;
                 worst_violation = worst_violation.max(violation);
@@ -210,11 +235,139 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Do the two hands ever end up in the same place? Sampled rather than taken at the
+    // grips, because the hands are posed by interpolation and can meet on the way
+    // between two postures that are each perfectly fine on their own.
+    // The same builder the renderer uses, so this measures what is actually drawn.
+    let animators = timeline.animators(&options.profile, options.biomech);
+    let mut at = 0.0;
+    while at <= timeline.duration {
+        sampled += 1;
+        // Posed the way the renderer poses them, lifting included, or this measures
+        // something that is never drawn.
+        let posed = on_viz::timeline::pose_both(&animators, at);
+
+        // And how far into the keys the hands get while they are moving, which the
+        // check on the grips above cannot see: a grip is solved with the fingertips on
+        // the key bottoms, and everything that happens afterwards — the wrist sinking
+        // into the note, the roll, being lifted over the other hand — moves them again.
+        for hand in Hand::ALL {
+            let posture = animators[hand as usize]
+                .skeleton()
+                .forward(&posed[hand as usize]);
+            let below = posture
+                .chain
+                .iter()
+                .flatten()
+                .map(|joint| -joint.z)
+                .fold(-posture.wrist.z, f32::max);
+            // A pressed key is itself KEY_DIP down, so a fingertip that far in is
+            // resting on the key rather than through it.
+            if below > KEY_DIP {
+                sunk += 1;
+                deepest_moving = deepest_moving.max(below - KEY_DIP);
+            }
+        }
+        // The renderer's own geometry, so this measures what is drawn. It had a box per
+        // hand and its own idea of how close is too close, and both were wrong: a
+        // spread hand's box is mostly air, so two hands side by side — most of piano
+        // playing — counted as inside each other.
+        let left = animators[Hand::Left as usize].joints(&posed[0]);
+        let right = animators[Hand::Right as usize].joints(&posed[1]);
+        let overlap = on_viz::timeline::overlap_depth(&left, &right);
+        // What it would have been with no collision handling at all, which is the
+        // only honest way to say what the handling is worth.
+        let bare = [
+            animators[Hand::Left as usize].pose_at(at),
+            animators[Hand::Right as usize].pose_at(at),
+        ];
+        if on_viz::timeline::overlap_depth(
+            &animators[Hand::Left as usize].joints(&bare[0]),
+            &animators[Hand::Right as usize].joints(&bare[1]),
+        ) > 0.0
+        {
+            unhandled += 1;
+        }
+        let span = |j: &[glam::Vec3]| {
+            j.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)))
+        };
+        let ((left_low, left_high), (right_low, right_high)) = (span(&left), span(&right));
+        if overlap > 0.0 {
+            colliding += 1;
+            // Why was it not got out of? A hand holding keys cannot be lifted off them.
+            let free = [
+                animators[Hand::Left as usize].grip_at(at).is_none(),
+                animators[Hand::Right as usize].grip_at(at).is_none(),
+            ];
+            if free[0] || free[1] {
+                one_free += 1;
+            } else {
+                both_busy += 1;
+            }
+            // How much room is left along the keys — the axis a busy hand can still
+            // move along, since a finger can slide up and down a key it is holding.
+            worst_depth_overlap =
+                worst_depth_overlap.max(left_high.min(right_high) - left_low.max(right_low));
+            worst_overlap = worst_overlap.max(overlap);
+            if collisions.len() < 6 && collisions.last().is_none_or(|last: &String| {
+                // One line per episode rather than one per sample.
+                !last.starts_with(&format!("  {:.1}", at.floor()))
+            }) {
+                collisions.push(format!(
+                    "  {at:.2}s the hands overlap by {overlap:.0} mm  \
+                     (left {left_low:.0}..{left_high:.0}, right {right_low:.0}..{right_high:.0})"
+                ));
+            }
+        }
+        at += COLLISION_STEP;
+    }
+
+    // Every finger, at the moment its grip is taken, against the key it is meant to be
+    // on. That is the one instant the hand is not on its way somewhere, so it is the one
+    // instant the question has a clean answer — and it is where anything the collision
+    // handling does to a finger would show up.
+    for hand in Hand::ALL {
+        let animator = &animators[hand as usize];
+        for event in timeline.hand_grips(hand) {
+            if event.grip.keys.is_empty() {
+                continue;
+            }
+            let posed = on_viz::timeline::pose_both(&animators, event.time);
+            let posture = animator.skeleton().forward(&posed[hand as usize]);
+            let alone = animator.skeleton().forward(&animator.pose_at(event.time));
+            for (midi, finger) in &event.grip.keys {
+                let want = keys_geom.centre_x(*midi);
+                worst_off_key =
+                    worst_off_key.max((posture.chain[finger.index()][3].x - want).abs());
+                worst_off_key_alone =
+                    worst_off_key_alone.max((alone.chain[finger.index()][3].x - want).abs());
+            }
+        }
+    }
+
     println!("{path}");
     println!("  grips the hands are drawn holding:      {grips}");
     println!("  ...where a finger never reaches its key: {missed}  (worst {worst_miss:.1} mm)");
     println!("  ...where a joint is outside its range:   {out_of_range}  (worst {worst_violation:.1}°)");
     println!("  ...where the hand is through the keys:   {through}  (deepest {deepest:.1} mm)");
+    println!(
+        "  ...and while they are moving:            {sunk} of {}  (deepest {deepest_moving:.1} mm past the key bottom)",
+        sampled * 2
+    );
+    println!(
+        "  moments the two hands share a space:     {colliding} of {sampled}  \
+         (worst {worst_overlap:.0} mm)"
+    );
+    println!("      ...before any of them are moved apart: {unhandled}");
+    println!("      of those, with a hand free to lift: {one_free}");
+    println!("      of those, with BOTH hands holding:   {both_busy}");
+    println!("      worst overlap along the keys:        {worst_depth_overlap:.0} mm");
+    println!(
+        "  furthest a held finger sits from its key: {worst_off_key:.1} mm posed for          collisions, {worst_off_key_alone:.1} mm without  (a white key is 23.5 mm wide)"
+    );
+    for line in &collisions {
+        println!("{line}");
+    }
     println!("  notes struck with no finger on them:     {struck_unplayed}");
     for line in &silent_strikes {
         println!("{line}");
@@ -257,9 +410,23 @@ fn shape(grip: &Grip) -> Vec<u8> {
 }
 
 /// How far outside its range the worst joint of a pose is, in degrees.
-fn worst_joint(pose: &HandPose) -> f32 {
+///
+/// The wrist's own window travels with the forearm — what the joint can do is measured
+/// from wherever the arm is pointing — so its deviation has to be asked about the same
+/// way [`on_hand::Skeleton::clamp`] asks. Measuring it against the bare limits said
+/// every posture was fine while the renderer was quietly clamping some of them and
+/// dragging a finger off its key.
+fn worst_joint(skeleton: &on_hand::Skeleton, pose: &HandPose) -> f32 {
+    let neutral = skeleton.wrist_neutral(pose);
     (0..DOF)
-        .map(|i| LIMITS[i].violation(pose.q[i]).to_degrees())
+        .map(|i| {
+            let q = if i == on_hand::skeleton::dof::WRIST_DEVIATION {
+                pose.q[i] - neutral
+            } else {
+                pose.q[i]
+            };
+            LIMITS[i].violation(q).to_degrees()
+        })
         .fold(0.0, f32::max)
 }
 

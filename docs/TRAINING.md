@@ -84,8 +84,8 @@ opennote train
 ```
 Training on 309 fingerings…
 Learned from 120 pieces, held 30 back.
-  rules only:  general 57.1%   highest 61.8%   soft 64.9%   (39218 notes, 30 pieces)
-  with model:  general 63.4%   highest 68.0%   soft 71.2%   (39218 notes, 30 pieces)
+  rules only:  general 57.1%   highest 61.8%   soft 64.9%   recombined 69.2%   (39218 notes, 30 pieces)
+  with model:  general 63.4%   highest 68.0%   soft 71.2%   recombined 76.1%   (39218 notes, 30 pieces)
 The model helped: agreement went up 6.3 points. Keep it.
 
 Model written to models/prior.json.
@@ -104,16 +104,81 @@ whose judgement, not whether the answer is good.
 For reference, the published results on PIG: a second-order statistical model reaches
 64.3%, a constraint-based search 56.7%, and human against human 71.4%.
 
-### The three rates
+### The four rates
 
 - **general** — agreement with each pianist's fingering separately, averaged. The
   strictest, and the one to watch.
 - **highest** — agreement with whichever pianist it matched best, per piece. Answers
   "did it find *an* answer a pianist would recognise?"
 - **soft** — a note counts if *any* pianist used that finger. The most generous.
+- **recombined** — agreement with the best fingering that can be stitched out of
+  several pianists' answers, charging for each change of mind and allowing one only
+  where two of them agree.
 
 General going up while soft stays flat means the model is settling on one tradition.
 Soft going up means it is finding fingerings nobody used — which is worth looking at.
+
+Recombined is the one that notices *incoherence*. The first three judge each note on
+its own, and fingering does not work that way: there are usually two or three
+defensible fingers for a note, but picking one commits the hand to what comes next. A
+model can match some pianist at every single note and still be unplayable, by taking
+its choices from a different pianist each time. Recombined going up while soft stays
+put means the fingering has become a plan rather than a sequence of locally reasonable
+guesses.
+
+### Measuring without a corpus
+
+Everything above needs annotations. Two more measures need none, and so can be run on
+whatever you are actually fingering:
+
+```bash
+opennote eval path/to/score.mid
+```
+
+```
+Piano: 1604 notes fingered
+  unplayable 0 (0.00%)   IFR 0.39%   position changes 47.3% (60 crossing, 676 shift, 1557 transitions)
+```
+
+- **unplayable** — transitions no hand could make *in the time the music allows*. Zero
+  is the only good answer. A number above zero is either a bug in the search or a part
+  that cannot be played by one hand as the hands have been split; `opennote annotate`
+  will tell you which, by reporting the same passage out of reach.
+- **IFR**, the incapable-performing fingering rate — the same crossings counted the way
+  Zhao et al. define them, so the figure can be read against their published ones.
+  Their corpus records no durations, so their test has to assume the hand never moves,
+  and on real music most of what it flags is simply a hand that did. Expect it to be
+  larger than the unplayable count, and do not read it as a fault count.
+- **position changes** — how often the hand leaves the position it was in, by crossing
+  the thumb or by shifting bodily. There is no right answer; pianists minimise it, but
+  a fingering that never moves the hand has usually stopped playing the music. It is
+  for comparing two runs over the same piece.
+- **travel** — how far the hand goes in total, in metres. Position changes counts them;
+  this measures them. Gao et al. (2023) build an entire reward function on minimal
+  motion, and it is the one ergonomic quantity that accumulates over a piece instead of
+  averaging out.
+- **stretch** — how near its limit the hand is held, averaged over every pair of fingers
+  in every chord, with the percentage held beyond comfortable alongside. Zero is a hand
+  at rest and one is a hand at the end of its reach.
+
+These last two respond to the hand you tell it about, which is the point:
+
+```
+--hand-size small    travel 55.8 m   stretch 0.31 (mean), 5.8% beyond comfortable
+--hand-size medium   travel 51.5 m   stretch 0.12 (mean), 5.2% beyond comfortable
+--hand-size large    travel 52.1 m   stretch 0.12 (mean), 4.3% beyond comfortable
+```
+
+A small hand has to move further and reach harder to play the same notes. No
+score-symbolic fingering system can say that, because none of them has a hand.
+
+The difference between the first two is worth understanding, because it is the one
+place this engine can answer a question the literature cannot. To uncross two fingers
+the hand has to travel far enough to bring them back inside what they can span, and
+that takes a knowable time at a hand's top speed — about two octaves in an eighth of a
+second, which is the figure the biomechanical model is already calibrated against. A
+crossing with 350 ms in front of it is a hand that moved. A crossing with 38 ms in
+front of it, where the move needs 47, is not a fingering at all.
 
 ### Seeing what it learned
 
@@ -287,5 +352,30 @@ nothing you could check.
 Contexts nobody has played are not forbidden, only made unlikely: estimates back off from
 specific contexts to general ones, weighted by how much was actually seen (Witten-Bell
 smoothing). The rules, not the corpus, are what rule a fingering out.
+
+### Why a small corpus goes further than you would expect
+
+A fingering is the same fingering seen in a mirror, and the same fingering played
+backwards. So every passage you add is really four: as played, mirrored into the other
+hand, reversed in time, and both at once. Those images fill a second table that an
+estimate is shrunk toward before it falls back to a more general context, which means
+the model can answer questions about a hand it has barely seen.
+
+The effect is largest exactly where you need it. Measured against the taught scale
+tables — `cargo run -p on-fingering --example symmetry` — the symmetries are worth
+**+11.5 points** to a model trained on one key and **+4.1** to one trained on six,
+fading as real data arrives, which is what should happen. Trained on the right hand
+alone, they take the left hand from **0% to 89.5%**; trained on ascending scales alone,
+they take descending ones from **0% to 87.9%**.
+
+That matters for a practical reason. Editors finger the hand that needs telling and
+leave the other bare, so a corpus built from real editions is lopsided — ThumbSet, the
+largest public one, has 742 pieces with only the left hand marked and 153 with only the
+right. Without the mirror, half of that teaches the wrong hand nothing.
+
+Nakamura, Saito & Yoshii found the same symmetries *hurt* on a large corpus, because a
+real pianist is not quite symmetric and enough data eventually shows it. Putting them in
+the backoff chain rather than into the model gets both halves of that: a thin table lets
+the pooled estimate carry, and a thick one drowns it out. There is nothing to switch.
 
 See `crates/on-fingering/src/prior.rs` if you want the details.

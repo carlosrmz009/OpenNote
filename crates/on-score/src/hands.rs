@@ -101,6 +101,8 @@ struct Simultaneity {
     /// When each note stops sounding, so the search can tell a note the hand has let go
     /// of from one it is still holding.
     until: Vec<f64>,
+    /// Which pitch the hands divide around here. See [`set_pivots`].
+    pivot: f32,
 }
 
 /// Assign hands by Viterbi over pitch splits.
@@ -112,6 +114,9 @@ fn assign_by_search(score: &mut Score, options: &HandAssignment) {
     // A hand that is still holding something is not free to go elsewhere, and the
     // search cannot know that unless each event says what is still down.
     hold_sustained(&mut events);
+    // Where the hands divide is a property of the passage, and has to be worked out
+    // before anything can be charged for being on the wrong side of it.
+    set_pivots(&mut events, options.profile.comfortable_span_mm());
     // When the foot is holding the strings, in seconds.
     //
     // A hand is only obliged to stay on a key while the key is what is holding the note.
@@ -278,6 +283,7 @@ fn collect_simultaneities(score: &Score) -> Vec<Simultaneity> {
                 notes: vec![note.id],
                 pitches: vec![note.midi],
                 until: vec![note.offset_seconds()],
+                pivot: HAND_DIVIDER_MIDI,
             }),
         }
     }
@@ -332,19 +338,121 @@ fn split_cost(
     // would flip back and forth arbitrarily through a one-line passage.
     for (i, pitch) in event.pitches.iter().enumerate() {
         let hand = if i < split { Hand::Left } else { Hand::Right };
-        cost += register_cost(*pitch, hand, options.register_weight);
+        cost += register_cost(*pitch, hand, event.pivot, options.register_weight);
     }
     cost
 }
 
-/// Pitch class of the keyboard's midpoint between the hands: middle C.
+/// Where the hands divide when there is nothing better to go on: middle C.
 const HAND_DIVIDER_MIDI: f32 = 60.0;
 
-/// What it costs a hand to reach across to the other side of the keyboard, per
-/// octave. Zero on its own side, so it never fights a genuine hand crossing that
-/// the travel and span terms have already paid for.
-fn register_cost(midi: u8, hand: Hand, weight: f32) -> f32 {
-    let octaves = (midi as f32 - HAND_DIVIDER_MIDI) / 12.0;
+/// Work out which pitch the hands divide around, at each instant.
+///
+/// [`register_cost`] charges a hand for being on the wrong side of a line, and the line
+/// was middle C everywhere. That is where the hands divide in music written around
+/// middle C and nowhere near it in music that is not — and a great deal of music is not,
+/// for a stretch at a time. Both hands are then charged for being the wrong side of a
+/// line neither is anywhere near, and because the other terms are frequently flat across
+/// several splits, that charge is what decides the close calls. A right hand holding a
+/// chord whose lower notes fall below middle C is an ordinary thing to write, and was
+/// being charged half a point for it, which was enough to pull those notes into the
+/// left hand.
+///
+/// So the line follows the music: the mean of what is sounding, over a few seconds
+/// either side. The window is what makes it describe a passage rather than a chord, and
+/// four seconds measures better than one or than twenty — a line that tracks every bar
+/// is no line at all, and one fixed for the whole piece is back where we started.
+///
+/// Two better-sounding ideas measure worse and are not here. The midpoint of the range
+/// is moved a long way by one stray bass note. Asking the search itself — running it
+/// once with middle C, taking the boundary it chose and running it again — sounds
+/// self-consistent but carries the first pass's mistakes into the second, and lands a
+/// half point below this.
+fn set_pivots(events: &mut [Simultaneity], span_mm: f32) {
+    /// How far either side of an instant the passage is taken to extend, in seconds.
+    const WINDOW_SECONDS: f64 = 4.0;
+
+    // A hand's reach as an interval, which is what says whether a passage needs two.
+    /// How much of a hand's reach a passage must fit inside before it is taken to be
+    /// one hand's work.
+    ///
+    /// Not all of it. A hand playing a figure has to move about inside it, and the
+    /// window is short of one side at the start and end of a piece, which makes a
+    /// two-octave scale look narrow just as it begins. Three quarters is comfortably
+    /// clear of both: everything from a half to nine tenths behaves the same.
+    /// How much of a hand's reach a single instant may need before the passage is
+    /// taken to need two hands.
+    ///
+    /// Not quite all of it: a hand holding a shape at its absolute limit has nothing
+    /// left to move with. Anything from four fifths to nine tenths measures the same.
+    const ONE_HAND_FRACTION: f32 = 0.85;
+
+    let semitone = 7.0 * on_hand::keyboard::WHITE_KEY_WIDTH / 12.0;
+    let span = ONE_HAND_FRACTION * span_mm / semitone;
+
+    let middles: Vec<(f64, f32, f32, f32)> = events
+        .iter()
+        .map(|event| {
+            let sum: f32 = event.pitches.iter().map(|p| f32::from(*p)).sum();
+            (
+                event.onset_seconds,
+                sum / event.pitches.len() as f32,
+                f32::from(event.pitches[0]),
+                f32::from(*event.pitches.last().unwrap()),
+            )
+        })
+        .collect();
+
+    // One pass with a window sliding over it, rather than a scan per event.
+    let (mut lo, mut hi) = (0usize, 0usize);
+    let mut sum = 0.0f32;
+    for event in events.iter_mut() {
+        let at = event.onset_seconds;
+        while hi < middles.len() && middles[hi].0 <= at + WINDOW_SECONDS {
+            sum += middles[hi].1;
+            hi += 1;
+        }
+        while lo < hi && middles[lo].0 < at - WINDOW_SECONDS {
+            sum -= middles[lo].1;
+            lo += 1;
+        }
+        let mean = sum / (hi - lo) as f32;
+
+        // Unless one hand could hold the whole passage, in which case there is no
+        // divide to find and putting one in the middle of the notes is worse than
+        // useless: it is the instruction to tear a figure in half and give a piece to
+        // each hand, which is the thing this is all trying to avoid. Put the line past
+        // the end of the music instead, on the side that leaves it in the hand whose
+        // side of the player it is on.
+        let low = middles[lo..hi].iter().fold(f32::MAX, |a, m| a.min(m.2));
+        let high = middles[lo..hi].iter().fold(f32::MIN, |a, m| a.max(m.3));
+        // The widest it ever gets *at a single instant*, which is the question that
+        // decides whether one hand could do this. Not the range of the passage: a
+        // stride bass covers three octaves in a bar and never more than a sixth at
+        // once, because the bass note is released before the chord is struck. Judged on
+        // its range it looks like two hands' work and the line lands in the middle of
+        // it, which is how the left hand of a rag ended up sharing its chords with a
+        // right hand that had nothing else to do.
+        let widest = middles[lo..hi].iter().fold(0.0f32, |a, m| a.max(m.3 - m.2));
+        event.pivot = if widest <= span {
+            // A hand's reach past the end of the music, which is about where the hand
+            // that is not playing would be waiting.
+            if mean < HAND_DIVIDER_MIDI {
+                high + span
+            } else {
+                low - span
+            }
+        } else {
+            mean
+        };
+    }
+}
+
+/// What it costs a hand to reach across to the other side of the music, per octave.
+/// Zero on its own side, so it never fights a genuine hand crossing that the travel and
+/// span terms have already paid for.
+fn register_cost(midi: u8, hand: Hand, pivot: f32, weight: f32) -> f32 {
+    let octaves = (midi as f32 - pivot) / 12.0;
     let wrong_way = match hand {
         Hand::Right => -octaves,
         Hand::Left => octaves,
@@ -704,6 +812,7 @@ mod tests {
             pitches: vec![48, 52, 79],
             // The left hand's two notes ring on; the right hand's has stopped.
             until: vec![4.0, 4.0, 0.5],
+            pivot: HAND_DIVIDER_MIDI,
         };
 
         let held = still_held(&event, 2, Hand::Left, &keyboard, 1.0)

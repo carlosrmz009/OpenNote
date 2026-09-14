@@ -25,6 +25,18 @@ pub const MIDI_HIGHEST: u8 = 108;
 /// Number of keys on a standard piano.
 pub const KEY_COUNT: usize = (MIDI_HIGHEST - MIDI_LOWEST + 1) as usize;
 
+/// A MIDI number as a pianist would say it: `60` is `C4`, `61` is `C#4`.
+///
+/// Sharps throughout, because a MIDI number carries no spelling — whether 61 is a C
+/// sharp or a D flat is a fact about the key signature, which lives in the score and
+/// not on the keyboard.
+pub fn name(midi: u8) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!("{}{}", NAMES[usize::from(midi) % 12], i32::from(midi) / 12 - 1)
+}
+
 /// Centre-line distance in millimetres from each pitch class to the semitone above it.
 ///
 /// The values are asymmetric on purpose: C# sits 9.5 mm right of C but D# sits 14 mm

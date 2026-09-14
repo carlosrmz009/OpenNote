@@ -16,9 +16,18 @@
 # (CC-BY for the good ones) attach to whoever redistributes them.
 /assets/soundfont/*.sf2
 
-# A local convenience script for building the exe; not part of the project.
+# Local convenience scripts for building the exe; not part of the project. The shell
+# one needs Git Bash; the .cmd runs straight from PowerShell.
 /build
+/build.cmd
 
 # Python bytecode from the tools/ scripts.
 __pycache__/
 *.pyc
+
+# Local working files: the generated README and benchmark report, and the images they
+# reference. Carlos's own README.md is the one in the repo; these are drafts that live
+# on one machine and are not part of the project.
+/README.draft.md
+/BENCHMARK.draft.md
+/docs/images/
