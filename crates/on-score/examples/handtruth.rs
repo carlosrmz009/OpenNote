@@ -8,6 +8,14 @@
 //! Neither is infallible — an arranger decides where to put a note that could go
 //! either way, and sometimes decides oddly. What the number is good for is movement:
 //! a change to the search that sends it down has broken something.
+//!
+//! A MIDI's tracks are a sequencer's, not a pianist's, and they show it: one file has
+//! the right hand playing G1. Engraved staves are the trustworthy half. Nothing here is
+//! committed with the repository — point it at your own scores.
+//!
+//! Held-out scores matter more than the number, because the search has been tuned
+//! against the same handful of files for a while now. Two-track piano MIDI is common
+//! enough that they are not hard to come by.
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::{MidiDocument, MusicXmlDocument, Score, SourceRef};
@@ -44,6 +52,7 @@ fn main() -> anyhow::Result<()> {
         // cluster in one passage or are scattered.
         if std::env::var("ON_SHOW").is_ok() {
             for (note, want) in score.notes.iter().zip(&truth) {
+                let Some(want) = want else { continue };
                 if note.hand != Some(*want) {
                     println!(
                         "DIFF {:8.2} {:3} got {:?} want {want:?}",
@@ -52,13 +61,14 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        let wrong = score
+        let judged: Vec<_> = score
             .notes
             .iter()
             .zip(&truth)
-            .filter(|(note, want)| note.hand != Some(**want))
-            .count();
-        let n = score.notes.len();
+            .filter_map(|(note, want)| want.map(|w| (note, w)))
+            .collect();
+        let wrong = judged.iter().filter(|(note, want)| note.hand != Some(*want)).count();
+        let n = judged.len();
         total = (total.0 + n - wrong, total.1 + n);
         println!(
             "{name:<28} {n:5} notes  {wrong:4} disagree  {:6.2}% right",
@@ -84,7 +94,7 @@ fn main() -> anyhow::Result<()> {
 /// exactly two tracks is read that way, the higher-sounding track being the right
 /// hand. Anything else (one track, a sequencer's dozen) is not a hand split and is
 /// not treated as one.
-fn truth_hands(score: &Score) -> Option<Vec<Hand>> {
+fn truth_hands(score: &Score) -> Option<Vec<Option<Hand>>> {
     if score.notes.iter().all(|n| n.staff.is_some()) {
         let mut staves: Vec<u8> = score.notes.iter().filter_map(|n| n.staff).collect();
         staves.sort_unstable();
@@ -95,7 +105,7 @@ fn truth_hands(score: &Score) -> Option<Vec<Hand>> {
                 score
                     .notes
                     .iter()
-                    .map(|n| if n.staff == Some(upper) { Hand::Right } else { Hand::Left })
+                    .map(|n| Some(if n.staff == Some(upper) { Hand::Right } else { Hand::Left }))
                     .collect(),
             );
         }
@@ -105,12 +115,24 @@ fn truth_hands(score: &Score) -> Option<Vec<Hand>> {
         SourceRef::Midi { track, .. } => Some(track),
         _ => None,
     };
-    let mut tracks: Vec<usize> = score.notes.iter().filter_map(track_of).collect();
-    if tracks.len() != score.notes.len() {
+    let all: Vec<usize> = score.notes.iter().filter_map(track_of).collect();
+    if all.len() != score.notes.len() {
         return None;
     }
-    tracks.sort_unstable();
-    tracks.dedup();
+    // Tracks holding a handful of notes are not a hand. Sequencers leave them behind —
+    // a stray pair of notes on a third track was enough to disqualify a whole rag —
+    // and the notes on them are left unjudged rather than guessed at.
+    let mut tracks: Vec<usize> = Vec::new();
+    for track in {
+        let mut seen = all.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    } {
+        if all.iter().filter(|t| **t == track).count() * 100 >= all.len() {
+            tracks.push(track);
+        }
+    }
     if tracks.len() != 2 {
         return None;
     }
@@ -128,7 +150,11 @@ fn truth_hands(score: &Score) -> Option<Vec<Hand>> {
         score
             .notes
             .iter()
-            .map(|n| if track_of(n) == Some(right) { Hand::Right } else { Hand::Left })
+            .map(|n| match track_of(n) {
+                Some(t) if t == right => Some(Hand::Right),
+                Some(t) if tracks.contains(&t) => Some(Hand::Left),
+                _ => None,
+            })
             .collect(),
     )
 }
