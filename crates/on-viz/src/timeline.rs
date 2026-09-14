@@ -591,9 +591,10 @@ const CLEARANCE_MAX_MM: f32 = 60.0;
 /// The most a hand's body will be swung aside to get clear of the other, in degrees.
 ///
 /// Ulnar and radial deviation is the joint a player angles a wrist with, and its range
-/// is 30 degrees one way and 20 the other. This asks for a fraction of that: enough to
-/// take a palm out of the other hand, not enough to look like the hand is being wrung.
-const SWING_MAX_DEG: f32 = 14.0;
+/// is 30 degrees one way and 20 the other. This asks for the whole of the smaller of
+/// those, which is as far as the joint goes in the direction it goes least far; the
+/// tolerances below stop well short of it whenever the shape being held is a wide one.
+const SWING_MAX_DEG: f32 = 20.0;
 
 /// How far a held fingertip may be dragged off its key by that swing, in millimetres.
 ///
@@ -606,6 +607,18 @@ const SWING_MAX_DEG: f32 = 14.0;
 /// A quarter of a white key. A finger that far from where it was is still on the key it
 /// is holding, and a collision is worth that much; half a key is not.
 const SWING_TOLERANCE_MM: f32 = 6.0;
+
+/// How far a held fingertip may slide *along* its key, in millimetres.
+///
+/// A great deal further than across it, and that is the whole point of separating the
+/// two. A key is a lever: pressing it anywhere along its length sounds the same note, so
+/// sliding a finger up and down one costs nothing and is what a hand does all the time
+/// — a finger reaching between black keys sits a long way further in than one on the
+/// front of a white key. Sliding sideways, by contrast, is playing the wrong note.
+///
+/// Measuring both with one tolerance, which is what a straight distance does, held the
+/// swing to about a third of what it could safely do.
+const SWING_SLIDE_MM: f32 = 20.0;
 
 /// How long before a strike a finger starts to lift, in seconds.
 ///
@@ -1192,10 +1205,15 @@ fn swing_clear(
         let moved = middle(&tips(&trial));
         trial.q[dof::WRIST_X] += held.x - moved.x;
         trial.q[dof::WRIST_Y] += held.y - moved.y;
+        // How far out of tolerance the worst finger is, as a multiple of it: across the
+        // keys and along them are different questions with different answers.
         let strayed = tips(&trial)
             .iter()
             .zip(&before)
-            .map(|(now, was)| now.distance(*was))
+            .map(|(now, was)| {
+                ((now.x - was.x).abs() / SWING_TOLERANCE_MM)
+                    .max((now.y - was.y).abs() / SWING_SLIDE_MM)
+            })
             .fold(0.0f32, f32::max);
         (trial, strayed)
     };
@@ -1203,17 +1221,18 @@ fn swing_clear(
     let mut best: Option<(f32, HandPose)> = None;
     for sign in [1.0f32, -1.0] {
         let full = sign * SWING_MAX_DEG.to_radians();
-        let (_, strayed) = swung(full);
         // Scale the angle back until the worst-moved finger is inside tolerance. The
-        // displacement is very nearly linear in the angle over this range, so one step
-        // is enough.
-        let angle = if strayed > SWING_TOLERANCE_MM {
-            full * (SWING_TOLERANCE_MM / strayed)
-        } else {
-            full
-        };
-        let (trial, strayed) = swung(angle);
-        if strayed > SWING_TOLERANCE_MM * 1.5 {
+        // displacement is nearly but not quite linear in the angle, so twice.
+        let mut angle = full;
+        let (mut trial, mut strayed) = swung(full);
+        for _ in 0..2 {
+            if strayed <= 1.0 {
+                break;
+            }
+            angle /= strayed;
+            (trial, strayed) = swung(angle);
+        }
+        if strayed > 1.1 {
             continue;
         }
         // Did the body actually end up further from the other hand?
