@@ -178,8 +178,12 @@ are the traps:
 
 ## Getting started
 
+Clone the tag, not the default branch. Development happens on a working branch and the
+default branch can be a long way behind it; a tag is a fixed point that is known to pass
+its own harnesses.
+
 ```bash
-git clone https://github.com/carlosrmz009/OpenNote
+git clone --branch v0.1.0 https://github.com/carlosrmz009/OpenNote
 cd OpenNote
 cargo run --release -p on-viz --no-default-features --example frame -- path/to/score.mid 8.0
 ```
@@ -187,3 +191,7 @@ cargo run --release -p on-viz --no-default-features --example frame -- path/to/s
 That builds 50 crates, no graphics stack, and prints a frame. If it prints keys, note
 rectangles and two hands' worth of joints, you have everything the renderer needs and the
 rest is drawing.
+
+You do not need the clone to build an app — the dependency declaration above fetches what
+it needs on its own. Clone it to read the source, run the harnesses, and see what changed
+between tags.
