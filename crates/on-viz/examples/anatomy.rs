@@ -24,6 +24,7 @@
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::FingeringOptions;
 use on_hand::skeleton::{HandPose, DOF, LIMITS};
+use on_hand::keyboard::KEY_DIP;
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
@@ -83,6 +84,8 @@ fn main() -> anyhow::Result<()> {
     let mut struck_unplayed = 0usize;
     let mut silent_strikes: Vec<String> = Vec::new();
     let mut colliding = 0usize;
+    let mut sunk = 0usize;
+    let mut deepest_moving = 0.0f32;
     let mut unhandled = 0usize;
     let mut sampled = 0usize;
     let mut worst_overlap = 0.0f32;
@@ -243,6 +246,28 @@ fn main() -> anyhow::Result<()> {
         // Posed the way the renderer poses them, lifting included, or this measures
         // something that is never drawn.
         let posed = on_viz::timeline::pose_both(&animators, at);
+
+        // And how far into the keys the hands get while they are moving, which the
+        // check on the grips above cannot see: a grip is solved with the fingertips on
+        // the key bottoms, and everything that happens afterwards — the wrist sinking
+        // into the note, the roll, being lifted over the other hand — moves them again.
+        for hand in Hand::ALL {
+            let posture = animators[hand as usize]
+                .skeleton()
+                .forward(&posed[hand as usize]);
+            let below = posture
+                .chain
+                .iter()
+                .flatten()
+                .map(|joint| -joint.z)
+                .fold(-posture.wrist.z, f32::max);
+            // A pressed key is itself KEY_DIP down, so a fingertip that far in is
+            // resting on the key rather than through it.
+            if below > KEY_DIP {
+                sunk += 1;
+                deepest_moving = deepest_moving.max(below - KEY_DIP);
+            }
+        }
         // The renderer's own geometry, so this measures what is drawn. It had a box per
         // hand and its own idea of how close is too close, and both were wrong: a
         // spread hand's box is mostly air, so two hands side by side — most of piano
@@ -325,6 +350,10 @@ fn main() -> anyhow::Result<()> {
     println!("  ...where a finger never reaches its key: {missed}  (worst {worst_miss:.1} mm)");
     println!("  ...where a joint is outside its range:   {out_of_range}  (worst {worst_violation:.1}°)");
     println!("  ...where the hand is through the keys:   {through}  (deepest {deepest:.1} mm)");
+    println!(
+        "  ...and while they are moving:            {sunk} of {}  (deepest {deepest_moving:.1} mm past the key bottom)",
+        sampled * 2
+    );
     println!(
         "  moments the two hands share a space:     {colliding} of {sampled}  \
          (worst {worst_overlap:.0} mm)"
