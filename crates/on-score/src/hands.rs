@@ -380,7 +380,12 @@ fn set_pivots(events: &mut [Simultaneity], span_mm: f32) {
     /// window is short of one side at the start and end of a piece, which makes a
     /// two-octave scale look narrow just as it begins. Three quarters is comfortably
     /// clear of both: everything from a half to nine tenths behaves the same.
-    const ONE_HAND_FRACTION: f32 = 0.75;
+    /// How much of a hand's reach a single instant may need before the passage is
+    /// taken to need two hands.
+    ///
+    /// Not quite all of it: a hand holding a shape at its absolute limit has nothing
+    /// left to move with. Anything from four fifths to nine tenths measures the same.
+    const ONE_HAND_FRACTION: f32 = 0.85;
 
     let semitone = 7.0 * on_hand::keyboard::WHITE_KEY_WIDTH / 12.0;
     let span = ONE_HAND_FRACTION * span_mm / semitone;
@@ -421,11 +426,21 @@ fn set_pivots(events: &mut [Simultaneity], span_mm: f32) {
         // side of the player it is on.
         let low = middles[lo..hi].iter().fold(f32::MAX, |a, m| a.min(m.2));
         let high = middles[lo..hi].iter().fold(f32::MIN, |a, m| a.max(m.3));
-        event.pivot = if high - low <= span {
+        // The widest it ever gets *at a single instant*, which is the question that
+        // decides whether one hand could do this. Not the range of the passage: a
+        // stride bass covers three octaves in a bar and never more than a sixth at
+        // once, because the bass note is released before the chord is struck. Judged on
+        // its range it looks like two hands' work and the line lands in the middle of
+        // it, which is how the left hand of a rag ended up sharing its chords with a
+        // right hand that had nothing else to do.
+        let widest = middles[lo..hi].iter().fold(0.0f32, |a, m| a.max(m.3 - m.2));
+        event.pivot = if widest <= span {
+            // A hand's reach past the end of the music, which is about where the hand
+            // that is not playing would be waiting.
             if mean < HAND_DIVIDER_MIDI {
-                high + 0.5
+                high + span
             } else {
-                low - 0.5
+                low - span
             }
         } else {
             mean
