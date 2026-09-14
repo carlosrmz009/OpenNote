@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let violation = worst_joint(&pose);
+            let violation = worst_joint(model.skeleton(), &pose);
             if violation > 1e-3 {
                 out_of_range += 1;
                 worst_violation = worst_violation.max(violation);
@@ -381,9 +381,23 @@ fn shape(grip: &Grip) -> Vec<u8> {
 }
 
 /// How far outside its range the worst joint of a pose is, in degrees.
-fn worst_joint(pose: &HandPose) -> f32 {
+///
+/// The wrist's own window travels with the forearm — what the joint can do is measured
+/// from wherever the arm is pointing — so its deviation has to be asked about the same
+/// way [`on_hand::Skeleton::clamp`] asks. Measuring it against the bare limits said
+/// every posture was fine while the renderer was quietly clamping some of them and
+/// dragging a finger off its key.
+fn worst_joint(skeleton: &on_hand::Skeleton, pose: &HandPose) -> f32 {
+    let neutral = skeleton.wrist_neutral(pose);
     (0..DOF)
-        .map(|i| LIMITS[i].violation(pose.q[i]).to_degrees())
+        .map(|i| {
+            let q = if i == on_hand::skeleton::dof::WRIST_DEVIATION {
+                pose.q[i] - neutral
+            } else {
+                pose.q[i]
+            };
+            LIMITS[i].violation(q).to_degrees()
+        })
         .fold(0.0, f32::max)
 }
 
