@@ -566,6 +566,20 @@ pub const IDLE_CLEARANCE_MM: f32 = 170.0;
 /// that cannot be explained away as two hands being near.
 pub const CLEARANCE_SLACK_MM: f32 = 3.0;
 
+/// How close two joints may come before the hands are drawn through each other, in
+/// millimetres.
+///
+/// A finger is about eighteen millimetres across, so two bones whose centre lines are
+/// nearer than that are sharing the same space on screen. The wrist and the back of the
+/// hand are thicker, which this does not distinguish.
+///
+/// It replaces a box round the whole hand. A hand is nothing like its box — a spread
+/// hand's box is mostly air — so two hands sitting side by side, which is most of piano
+/// playing, had overlapping boxes while being nowhere near each other. On one test
+/// piece only 320 of 859 reported collisions had any two joints even within twenty
+/// millimetres. The renderer was moving hands apart that were never touching.
+pub const HAND_THICKNESS_MM: f32 = 20.0;
+
 /// The most one hand will be lifted to get out of the other's way, in millimetres.
 ///
 /// Enough to clear a hand — they are about fifty millimetres thick — and no more. A
@@ -944,21 +958,13 @@ impl HandAnimator {
         start.min(latest.max(current.time))
     }
 
-    /// The box this hand occupies at a moment, as (min, max) on each axis.
-    fn extent(&self, pose: &HandPose) -> [(f32, f32); 3] {
+    /// Every joint of this hand at a pose, in world space.
+    pub fn joints(&self, pose: &HandPose) -> Vec<glam::Vec3> {
         let posture = self.skeleton.forward(pose);
-        let mut out = [
-            (posture.wrist.x, posture.wrist.x),
-            (posture.wrist.y, posture.wrist.y),
-            (posture.wrist.z, posture.wrist.z),
-        ];
+        let mut out = Vec::with_capacity(21);
+        out.push(posture.wrist);
         for digit in &posture.chain {
-            for joint in digit {
-                for (axis, value) in [joint.x, joint.y, joint.z].into_iter().enumerate() {
-                    out[axis].0 = out[axis].0.min(value);
-                    out[axis].1 = out[axis].1.max(value);
-                }
-            }
+            out.extend_from_slice(digit);
         }
         out
     }
@@ -1037,30 +1043,18 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         animators[Hand::Left as usize].pose_at(time),
         animators[Hand::Right as usize].pose_at(time),
     ];
-    let extents = [
-        animators[Hand::Left as usize].extent(&poses[0]),
-        animators[Hand::Right as usize].extent(&poses[1]),
+    let joints = [
+        animators[Hand::Left as usize].joints(&poses[0]),
+        animators[Hand::Right as usize].joints(&poses[1]),
     ];
-
-    // Boxes intersect only where they overlap on every axis, so the shallowest of the
-    // three says whether they are inside each other at all.
-    let reach = |axis: usize| {
-        extents[0][axis].1.min(extents[1][axis].1) - extents[0][axis].0.max(extents[1][axis].0)
-    };
-    if (0..3).map(reach).fold(f32::INFINITY, f32::min) <= CLEARANCE_SLACK_MM {
+    if !overlapping(&joints[0], &joints[1]) {
         return poses;
     }
-    // How far one hand has to rise to be clear over the other: from its own underside
-    // to the other's top, not the depth they currently share.
-    //
-    // Those are the same number only when the hand being lifted is already the upper
-    // one. When it is underneath, the depth they share is barely half the journey, and
-    // lifting by it carries the hand up *through* the other one to sit overlapping just
-    // as much on the way out — which is what it did, and why so many collisions with a
-    // hand free to move survived being lifted.
-    let clearance = |up: usize| {
-        (extents[1 - up][2].1 - extents[up][2].0 + CLEARANCE_SLACK_MM).min(CLEARANCE_MAX_MM)
-    };
+
+    // How far the hand that goes up has to rise. Worked out per pair of joints rather
+    // than from a box: two joints already far apart along the keys need no height
+    // between them at all, and it is the ones directly above one another that decide.
+    let clearance = |up: usize| lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
 
     let free = [
         animators[Hand::Left as usize].grip_at(time).is_none(),
@@ -1068,20 +1062,24 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
     ];
     // The hand already higher goes up, so a hand on its way over keeps going over
     // rather than being swapped underneath halfway across.
-    let higher = usize::from(extents[1][2].1 > extents[0][2].1);
+    let height = |side: usize| {
+        joints[side].iter().fold(f32::MIN, |a, j| a.max(j.z))
+    };
+    let higher = usize::from(height(1) > height(0));
     match (free[0], free[1]) {
         // Both free: still only one of them moves. Sharing it by pressing the other
         // down looks even-handed and drives a hand into the keys.
         (true, true) => poses[higher].q[dof::WRIST_Z] += clearance(higher),
         (true, false) => poses[0].q[dof::WRIST_Z] += clearance(0),
         (false, true) => poses[1].q[dof::WRIST_Z] += clearance(1),
-        // Neither can be lifted: both are holding keys and have to stay on them. Swing
-        // the bodies apart instead, which keeps every finger where it is.
         (false, false) => {
-            let centres = [
-                (extents[0][0].0 + extents[0][0].1) / 2.0,
-                (extents[1][0].0 + extents[1][0].1) / 2.0,
-            ];
+            let centre = |side: usize| {
+                let (lo, hi) = joints[side]
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
+                (lo + hi) / 2.0
+            };
+            let centres = [centre(0), centre(1)];
             for side in 0..2 {
                 let animator = &animators[side];
                 let Some(grip) = animator.grip_at(time) else {
@@ -1092,6 +1090,56 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         }
     }
     poses
+}
+
+/// Whether two posed hands are drawn through each other.
+///
+/// Any two joints closer than a finger is wide. See [`HAND_THICKNESS_MM`] for why this
+/// is not a box, and for what it still misses: only the joints are tested, so two palms
+/// crossing with every joint clear would not be caught.
+pub fn overlapping(a: &[glam::Vec3], b: &[glam::Vec3]) -> bool {
+    a.iter()
+        .any(|p| b.iter().any(|q| p.distance_squared(*q) < HAND_THICKNESS_MM * HAND_THICKNESS_MM))
+}
+
+/// How deeply two posed hands are inside one another, in millimetres.
+///
+/// Zero when they are clear. Otherwise how far the closest pair of joints is inside
+/// [`HAND_THICKNESS_MM`], which is what a viewer sees as the hands sharing a space.
+pub fn overlap_depth(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
+    let closest = a
+        .iter()
+        .flat_map(|p| b.iter().map(move |q| p.distance(*q)))
+        .fold(f32::MAX, f32::min);
+    (HAND_THICKNESS_MM - closest).max(0.0)
+}
+
+/// How far `up` has to rise for none of its joints to be inside `down`.
+///
+/// Per pair, because the answer is not one number for the hand: two joints already a
+/// hand apart along the keyboard need no height between them whatever, and the ones
+/// sitting directly above one another are the only ones asking for any. Taking the
+/// depth the two shapes share instead over-lifts the easy cases and under-lifts this
+/// one.
+fn lift_to_clear(up: &[glam::Vec3], down: &[glam::Vec3]) -> f32 {
+    // Aim past the threshold, not at it. Lifting to exactly touching leaves the closest
+    // pair on the boundary, where rounding puts it back inside as often as not — which
+    // read as ninety-six unfixed collisions on one test piece, every one of them
+    // nineteen-point-nine millimetres apart.
+    let want_apart = HAND_THICKNESS_MM + CLEARANCE_SLACK_MM;
+    let mut needed = 0.0f32;
+    for p in up {
+        for q in down {
+            let flat = (p.x - q.x).hypot(p.y - q.y);
+            if flat >= want_apart {
+                continue;
+            }
+            // Height that pair needs, given how far apart they already are flat on.
+            let want = (want_apart * want_apart - flat * flat).sqrt();
+            needed = needed.max(want - (p.z - q.z));
+        }
+    }
+    needed
 }
 
 /// Swing a hand's body aside without taking its fingers off their keys.

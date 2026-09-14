@@ -27,7 +27,7 @@ use on_hand::skeleton::{HandPose, DOF, LIMITS};
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
-use on_viz::timeline::{HandAnimator, Timeline};
+use on_viz::timeline::Timeline;
 
 /// How far below the top of the keys a joint may sit before it is inside them.
 ///
@@ -48,49 +48,6 @@ const LATE_ARRIVAL: f64 = 0.12;
 /// frame at sixty a second.
 const COLLISION_STEP: f64 = 1.0 / 90.0;
 
-/// How much the two hands may overlap along the keyboard before it counts, in
-/// millimetres.
-///
-/// Not zero. Real hands sit close together and a player's fingers interleave; what is
-/// being looked for is the drawn models passing through each other, not two hands being
-/// near. A couple of millimetres of slack keeps the ordinary close position from being
-/// reported as a fault.
-/// How much the hands may share before this counts it, in millimetres.
-///
-/// The renderer's own figure, not one of its own. It had one of its own, two
-/// millimetres against the renderer's three, so every graze between the two was
-/// reported as a collision the renderer had deliberately decided to leave alone. A
-/// check that does not measure what is drawn is worse than no check.
-use on_viz::timeline::CLEARANCE_SLACK_MM as COLLISION_SLACK_MM;
-
-/// The patch of keyboard one posed hand covers, in millimetres: along the keys and
-/// into them.
-///
-/// Every joint it has, not only the fingertips: what collides is the backs of the hands
-/// and the wrists, which is exactly the part no fingering model has an opinion about.
-///
-/// All three axes. Two hands at the same place along the keyboard are not necessarily
-/// in each other: one can be further onto the keys than the other, which is what a
-/// player does to get two hands into one register, and one can be lifted over the other,
-/// which is what a player does to cross them. A check on the keyboard plane alone calls
-/// both of those a collision.
-fn hand_box(animator: &HandAnimator, pose: &on_hand::skeleton::HandPose) -> [(f32, f32); 3] {
-    let posture = animator.skeleton().forward(pose);
-    let mut box_ = [
-        (posture.wrist.x, posture.wrist.x),
-        (posture.wrist.y, posture.wrist.y),
-        (posture.wrist.z, posture.wrist.z),
-    ];
-    for digit in &posture.chain {
-        for joint in digit {
-            for (axis, value) in [joint.x, joint.y, joint.z].into_iter().enumerate() {
-                box_[axis].0 = box_[axis].0.min(value);
-                box_[axis].1 = box_[axis].1.max(value);
-            }
-        }
-    }
-    box_
-}
 
 fn main() -> anyhow::Result<()> {
     let Some(path) = std::env::args().nth(1) else {
@@ -126,6 +83,7 @@ fn main() -> anyhow::Result<()> {
     let mut struck_unplayed = 0usize;
     let mut silent_strikes: Vec<String> = Vec::new();
     let mut colliding = 0usize;
+    let mut unhandled = 0usize;
     let mut sampled = 0usize;
     let mut worst_overlap = 0.0f32;
     let mut collisions: Vec<String> = Vec::new();
@@ -285,16 +243,31 @@ fn main() -> anyhow::Result<()> {
         // Posed the way the renderer poses them, lifting included, or this measures
         // something that is never drawn.
         let posed = on_viz::timeline::pose_both(&animators, at);
-        let left = hand_box(&animators[Hand::Left as usize], &posed[0]);
-        let right = hand_box(&animators[Hand::Right as usize], &posed[1]);
-        // Two boxes intersect only where they overlap on every axis, and the shallowest
-        // of the three overlaps is how far one would have to move to be clear.
-        let overlap = (0..3)
-            .map(|axis| left[axis].1.min(right[axis].1) - left[axis].0.max(right[axis].0))
-            .fold(f32::INFINITY, f32::min);
-        let (left_low, left_high, right_low, right_high) =
-            (left[0].0, left[0].1, right[0].0, right[0].1);
-        if overlap > COLLISION_SLACK_MM {
+        // The renderer's own geometry, so this measures what is drawn. It had a box per
+        // hand and its own idea of how close is too close, and both were wrong: a
+        // spread hand's box is mostly air, so two hands side by side — most of piano
+        // playing — counted as inside each other.
+        let left = animators[Hand::Left as usize].joints(&posed[0]);
+        let right = animators[Hand::Right as usize].joints(&posed[1]);
+        let overlap = on_viz::timeline::overlap_depth(&left, &right);
+        // What it would have been with no collision handling at all, which is the
+        // only honest way to say what the handling is worth.
+        let bare = [
+            animators[Hand::Left as usize].pose_at(at),
+            animators[Hand::Right as usize].pose_at(at),
+        ];
+        if on_viz::timeline::overlap_depth(
+            &animators[Hand::Left as usize].joints(&bare[0]),
+            &animators[Hand::Right as usize].joints(&bare[1]),
+        ) > 0.0
+        {
+            unhandled += 1;
+        }
+        let span = |j: &[glam::Vec3]| {
+            j.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)))
+        };
+        let ((left_low, left_high), (right_low, right_high)) = (span(&left), span(&right));
+        if overlap > 0.0 {
             colliding += 1;
             // Why was it not got out of? A hand holding keys cannot be lifted off them.
             let free = [
@@ -308,8 +281,8 @@ fn main() -> anyhow::Result<()> {
             }
             // How much room is left along the keys — the axis a busy hand can still
             // move along, since a finger can slide up and down a key it is holding.
-            worst_depth_overlap = worst_depth_overlap
-                .max(left[1].1.min(right[1].1) - left[1].0.max(right[1].0));
+            worst_depth_overlap =
+                worst_depth_overlap.max(left_high.min(right_high) - left_low.max(right_low));
             worst_overlap = worst_overlap.max(overlap);
             if collisions.len() < 6 && collisions.last().is_none_or(|last: &String| {
                 // One line per episode rather than one per sample.
@@ -356,6 +329,7 @@ fn main() -> anyhow::Result<()> {
         "  moments the two hands share a space:     {colliding} of {sampled}  \
          (worst {worst_overlap:.0} mm)"
     );
+    println!("      ...before any of them are moved apart: {unhandled}");
     println!("      of those, with a hand free to lift: {one_free}");
     println!("      of those, with BOTH hands holding:   {both_busy}");
     println!("      worst overlap along the keys:        {worst_depth_overlap:.0} mm");
