@@ -55,7 +55,13 @@ const COLLISION_STEP: f64 = 1.0 / 90.0;
 /// being looked for is the drawn models passing through each other, not two hands being
 /// near. A couple of millimetres of slack keeps the ordinary close position from being
 /// reported as a fault.
-const COLLISION_SLACK_MM: f32 = 2.0;
+/// How much the hands may share before this counts it, in millimetres.
+///
+/// The renderer's own figure, not one of its own. It had one of its own, two
+/// millimetres against the renderer's three, so every graze between the two was
+/// reported as a collision the renderer had deliberately decided to leave alone. A
+/// check that does not measure what is drawn is worse than no check.
+use on_viz::timeline::CLEARANCE_SLACK_MM as COLLISION_SLACK_MM;
 
 /// The patch of keyboard one posed hand covers, in millimetres: along the keys and
 /// into them.

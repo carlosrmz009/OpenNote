@@ -564,7 +564,7 @@ pub const IDLE_CLEARANCE_MM: f32 = 170.0;
 /// Not zero. Hands sit close together and their outlines pass near each other all the
 /// time; what this is for is the models actually inside one another, which is the thing
 /// that cannot be explained away as two hands being near.
-const CLEARANCE_SLACK_MM: f32 = 3.0;
+pub const CLEARANCE_SLACK_MM: f32 = 3.0;
 
 /// The most one hand will be lifted to get out of the other's way, in millimetres.
 ///
@@ -1050,11 +1050,17 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
     if (0..3).map(reach).fold(f32::INFINITY, f32::min) <= CLEARANCE_SLACK_MM {
         return poses;
     }
-    // How far to lift is the overlap *in height*, not the shallowest one. Lifting only
-    // separates them vertically, so clearing by the smallest overlap on some other axis
-    // leaves them exactly as tangled as they were — which is what it did, and why half
-    // the collisions with a hand free to move were still there afterwards.
-    let lift = (reach(2) + CLEARANCE_SLACK_MM).min(CLEARANCE_MAX_MM);
+    // How far one hand has to rise to be clear over the other: from its own underside
+    // to the other's top, not the depth they currently share.
+    //
+    // Those are the same number only when the hand being lifted is already the upper
+    // one. When it is underneath, the depth they share is barely half the journey, and
+    // lifting by it carries the hand up *through* the other one to sit overlapping just
+    // as much on the way out — which is what it did, and why so many collisions with a
+    // hand free to move survived being lifted.
+    let clearance = |up: usize| {
+        (extents[1 - up][2].1 - extents[up][2].0 + CLEARANCE_SLACK_MM).min(CLEARANCE_MAX_MM)
+    };
 
     let free = [
         animators[Hand::Left as usize].grip_at(time).is_none(),
@@ -1064,12 +1070,11 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
     // rather than being swapped underneath halfway across.
     let higher = usize::from(extents[1][2].1 > extents[0][2].1);
     match (free[0], free[1]) {
-        (true, true) => {
-            poses[higher].q[dof::WRIST_Z] += lift / 2.0;
-            poses[1 - higher].q[dof::WRIST_Z] -= lift / 2.0;
-        }
-        (true, false) => poses[0].q[dof::WRIST_Z] += lift,
-        (false, true) => poses[1].q[dof::WRIST_Z] += lift,
+        // Both free: still only one of them moves. Sharing it by pressing the other
+        // down looks even-handed and drives a hand into the keys.
+        (true, true) => poses[higher].q[dof::WRIST_Z] += clearance(higher),
+        (true, false) => poses[0].q[dof::WRIST_Z] += clearance(0),
+        (false, true) => poses[1].q[dof::WRIST_Z] += clearance(1),
         // Neither can be lifted: both are holding keys and have to stay on them. Swing
         // the bodies apart instead, which keeps every finger where it is.
         (false, false) => {
