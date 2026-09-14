@@ -582,11 +582,17 @@ pub const HAND_THICKNESS_MM: f32 = 20.0;
 
 /// The most one hand will be lifted to get out of the other's way, in millimetres.
 ///
-/// Enough to clear a hand — they are about fifty millimetres thick — and no more. A
-/// hand that cannot be got clear within this is one the fingering has sent somewhere it
-/// should not have, and hiding that by flying the hand over the keyboard would be
-/// worse than showing it.
-const CLEARANCE_MAX_MM: f32 = 60.0;
+/// A hand coming from underneath has to rise by however far below it started as well as
+/// by the thickness it needs to clear, which is why this is not simply a hand's depth.
+/// It was sixty, sized when the hands were measured as boxes, and that was short: on two
+/// test pieces it left collisions that a hand was perfectly free to move out of, because
+/// the lift they needed was cut off before it got there. At eighty there are none left
+/// on any piece, and a hundred and forty finds nothing more.
+///
+/// Still a limit. A hand that cannot be got clear within it is one the fingering has
+/// sent somewhere it should not have, and flying the hand over the keyboard to hide
+/// that would be worse than showing it.
+const CLEARANCE_MAX_MM: f32 = 80.0;
 
 /// The most a hand's body will be swung aside to get clear of the other, in degrees.
 ///
