@@ -19,6 +19,8 @@ pub mod layout;
 pub mod export;
 #[cfg(feature = "render")]
 pub mod glove;
+// The ECS glue that poses the drawn rig, which only the renderer has.
+#[cfg(feature = "render")]
 mod hands;
 #[cfg(feature = "render")]
 pub mod render;
@@ -41,6 +43,7 @@ pub use render::{capture, run, Audio, Capture, NoteColours, Performance, Transpo
 
 /// The colour type a note is given, re-exported so callers need not depend on Bevy
 /// only to name a colour.
+#[cfg(feature = "render")]
 pub use bevy::color::Color as NoteColour;
 pub use rig::{BoneRole, RigBone};
 #[cfg(feature = "render")]
