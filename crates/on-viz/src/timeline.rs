@@ -988,6 +988,32 @@ impl HandAnimator {
         out
     }
 
+    /// The two grips a moment falls between, and how far between them it is.
+    ///
+    /// The same blend [`Self::carried`] uses to interpolate the postures themselves. It
+    /// is public because anything computed per frame from *which keys are held* has to
+    /// cross a grip boundary the same way the posture does, or it steps where the posture
+    /// glides — and a step in the middle of a movement is what a flicker is.
+    pub fn grips_around(&self, time: f64) -> Option<(&Grip, Option<&Grip>, f32)> {
+        let index = self.current_index(time)?;
+        let current = &self.events[index].grip;
+        let Some(next) = self.events.get(index + 1) else {
+            return Some((current, None, 0.0));
+        };
+        let start = self.departure(index);
+        if time <= start {
+            return Some((current, Some(&next.grip), 0.0));
+        }
+        let span = (next.time - start).max(1e-4);
+        let t = ((time - start) / span).clamp(0.0, 1.0);
+        let resting_before = start > self.events[index].time + 1e-4;
+        let resting_after = self
+            .events
+            .get(index + 2)
+            .is_none_or(|_| self.departure(index + 1) > next.time + 1e-4);
+        Some((current, Some(&next.grip), travel(t, resting_before, resting_after) as f32))
+    }
+
     /// The grip the hand is holding at a moment, if any.
     pub fn grip_at(&self, time: f64) -> Option<&Grip> {
         let index = self.current_index(time)?;
@@ -1101,10 +1127,33 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
             let centres = [centre(0), centre(1)];
             for side in 0..2 {
                 let animator = &animators[side];
-                let Some(grip) = animator.grip_at(time) else {
+                if animator.grip_at(time).is_none() {
+                    continue;
+                }
+                let Some((current, next, blend)) = animator.grips_around(time) else {
                     continue;
                 };
-                swing_clear(animator, &mut poses[side], grip, centres[1 - side]);
+                // Swing for the grip being left and for the one being taken, and cross
+                // between them on the same curve the posture crosses on.
+                //
+                // Which fingers are down changes all at once at a grip boundary, and the
+                // swing is measured against them: the angle that keeps them on their keys
+                // either side of that boundary is a different angle, so computing it from
+                // whichever grip happens to be current put a step in the middle of a
+                // movement. Blended, the two sides agree at the boundary — the outgoing
+                // grip's weight has reached one exactly where the incoming grip's starts
+                // at zero — and the hand crosses it without a jump.
+                let mut a = poses[side];
+                swing_clear(animator, &mut a, current, centres[1 - side]);
+                let swung = match next {
+                    Some(next) if blend > 0.0 => {
+                        let mut b = poses[side];
+                        swing_clear(animator, &mut b, next, centres[1 - side]);
+                        a.lerp(&b, blend)
+                    }
+                    _ => a,
+                };
+                poses[side] = swung;
             }
         }
     }
