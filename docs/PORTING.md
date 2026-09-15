@@ -33,20 +33,22 @@ certainly cannot ship one — again, see [Licensing](#licensing).
 ## Depending on it
 
 Your app has a Rust layer even if your app is not a Rust app. That layer depends on
-OpenNote by tag, and taking a fix upstream is bumping the tag:
+OpenNote, and `main` is the branch to take:
 
 ```toml
 [dependencies]
-on-hand      = { git = "https://github.com/carlosrmz009/OpenNote", tag = "v0.1.0" }
-on-score     = { git = "https://github.com/carlosrmz009/OpenNote", tag = "v0.1.0" }
-on-fingering = { git = "https://github.com/carlosrmz009/OpenNote", tag = "v0.1.0" }
-on-viz       = { git = "https://github.com/carlosrmz009/OpenNote", tag = "v0.1.0", default-features = false }
+on-hand      = { git = "https://github.com/carlosrmz009/OpenNote", branch = "main" }
+on-score     = { git = "https://github.com/carlosrmz009/OpenNote", branch = "main" }
+on-fingering = { git = "https://github.com/carlosrmz009/OpenNote", branch = "main" }
+on-viz       = { git = "https://github.com/carlosrmz009/OpenNote", branch = "main", default-features = false }
 ```
 
 `default-features = false` on `on-viz` is what leaves Bevy out. Do not omit it: the
 default feature is the desktop renderer.
 
-Pin a tag rather than a branch. You want to choose when the engine changes under you.
+Naming a branch does not mean the engine moves under you. Commit `Cargo.lock`: it pins
+the exact commit, and nothing changes until somebody runs `cargo update`. The engine
+moves when you decide it does, not when upstream pushes.
 
 ## The seam
 
@@ -95,6 +97,10 @@ hand instead will draw the hands through each other.
 
 ## What you build
 
+You are given the hands themselves: `assets/hands/hand-left.glb` and `hand-right.glb`
+are rigged models, and `on-viz`'s `rig` module — also free of Bevy — maps their bone
+names onto the skeleton's joints. What you supply is a glTF loader and a skinning shader.
+
 **The renderer.** `render.rs` is 1 900 lines of Bevy scene graph and is the part that does
 not port. Rewrite it against `wgpu`, which is what Bevy draws through anyway, targets
 Metal and Vulkan/GLES, and — unlike Bevy — is built to draw into a surface the host hands
@@ -116,7 +122,19 @@ with `default-features = false` to leave `cpal` out.
 
 ## Keeping up with upstream
 
-Bump the tag and read the commit messages; they say what moved and what it measured.
+Do not chase it. The engine is maintained separately and you will be told when to take a
+new one; until then your `Cargo.lock` holds you still, which is correct.
+
+When you are told:
+
+```bash
+cargo update -p on-hand -p on-score -p on-fingering -p on-viz
+```
+
+Bugs in the engine are not yours to fix. Report them with the score that shows them, and
+a fixed engine will be handed back to you. Patching it locally means the next drop either
+overwrites your fix or conflicts with it, and the harnesses that vouch for the engine
+stop describing what you are shipping.
 
 What moves most is the hand-assignment search and the animation in `timeline.rs` — the
 `pose_both` contract and the collision handling changed several times in one week. What
@@ -178,12 +196,10 @@ are the traps:
 
 ## Getting started
 
-Clone the tag, not the default branch. Development happens on a working branch and the
-default branch can be a long way behind it; a tag is a fixed point that is known to pass
-its own harnesses.
+`main` is the branch. Everything lands there.
 
 ```bash
-git clone --branch v0.1.0 https://github.com/carlosrmz009/OpenNote
+git clone https://github.com/carlosrmz009/OpenNote
 cd OpenNote
 cargo run --release -p on-viz --no-default-features --example frame -- path/to/score.mid 8.0
 ```
@@ -194,4 +210,4 @@ rest is drawing.
 
 You do not need the clone to build an app — the dependency declaration above fetches what
 it needs on its own. Clone it to read the source, run the harnesses, and see what changed
-between tags.
+between one engine drop and the next.
