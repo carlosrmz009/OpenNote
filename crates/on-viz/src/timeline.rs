@@ -580,6 +580,28 @@ pub const CLEARANCE_SLACK_MM: f32 = 3.0;
 /// millimetres. The renderer was moving hands apart that were never touching.
 pub const HAND_THICKNESS_MM: f32 = 20.0;
 
+/// How long the hands take to move out of each other's way, in seconds either side.
+///
+/// The swing that angles two wrists apart is a large movement, and it used to appear and
+/// disappear whole in the frame the hands happened to be touching. A correction that big
+/// arriving in a sixtieth of a second is not a hand moving, it is a hand flickering —
+/// which is exactly what widening the swing to clear more collisions bought.
+///
+/// So it is brought in over a window instead. Nothing here keeps state: the pose at any
+/// moment is still a pure function of that moment, worked out by asking how close the
+/// hands come during the window rather than only at its centre.
+const SWING_LEAD_SECONDS: f64 = 0.08;
+
+/// How close the hands have to come before they begin moving apart, in millimetres.
+///
+/// A little more than a hand's thickness, so the movement is under way before they would
+/// otherwise touch rather than starting once they already have.
+/// How close the hands have to come before they begin moving apart, in millimetres.
+///
+/// A little more than a hand's thickness, so the movement is under way before they would
+/// otherwise touch rather than starting once they already have.
+const ENGAGE_MM: f32 = 30.0;
+
 /// The most one hand will be lifted to get out of the other's way, in millimetres.
 ///
 /// A hand coming from underneath has to rise by however far below it started as well as
@@ -596,11 +618,15 @@ const CLEARANCE_MAX_MM: f32 = 80.0;
 
 /// The most a hand's body will be swung aside to get clear of the other, in degrees.
 ///
-/// Ulnar and radial deviation is the joint a player angles a wrist with, and its range
-/// is 30 degrees one way and 20 the other. This asks for the whole of the smaller of
-/// those, which is as far as the joint goes in the direction it goes least far; the
-/// tolerances below stop well short of it whenever the shape being held is a wide one.
-const SWING_MAX_DEG: f32 = 20.0;
+/// Ulnar and radial deviation is the joint a player angles a wrist with, and its range is
+/// 30 degrees one way and 20 the other. This asks for the whole of the larger, and the
+/// clamp holds the other side to its own smaller limit — the two directions are not
+/// symmetric in a wrist and there is no reason to pretend they are here.
+///
+/// Both the tolerances below and the ramps in [`pose_both`] stop well short of this most
+/// of the time. Asking for the joint's full travel is what lets a moment that genuinely
+/// needs it have it, now that what is asked for arrives gradually rather than at once.
+const SWING_MAX_DEG: f32 = 30.0;
 
 /// How far a held fingertip may be dragged off its key by that swing, in millimetres.
 ///
@@ -1014,6 +1040,37 @@ impl HandAnimator {
         Some((current, Some(&next.grip), travel(t, resting_before, resting_after) as f32))
     }
 
+    /// How committed the hand is to keys, from nothing to entirely.
+    ///
+    /// One while it is holding, nothing while it is free, and a ramp of
+    /// [`SWING_LEAD_SECONDS`] on either side rather than a step.
+    ///
+    /// What is done about two hands in one place depends on whether they can be moved: a
+    /// free hand is lifted over, a holding one can only be angled aside. Asked as a
+    /// yes-or-no, that choice changes the instant a hand takes or lets go of a key, and
+    /// swaps one sizeable correction for a different one inside a single frame. On one
+    /// test piece the two swapped thirty-nine times and the hands jumped forty-four, and
+    /// the flicker that was reported is mostly this.
+    ///
+    /// Asked as a degree, the two corrections cross over instead of swapping.
+    pub fn holding(&self, time: f64, ramp: f64) -> f32 {
+        let Some(index) = self.current_index(time) else {
+            return 0.0;
+        };
+        let mut held = 0.0f32;
+        // The event either side as well, since a ramp reaches back into the last grip and
+        // forward into the next.
+        for event in &self.events[index.saturating_sub(1)..(index + 2).min(self.events.len())] {
+            if event.grip.keys.is_empty() {
+                continue;
+            }
+            // Positive inside the time the keys are down, negative outside it.
+            let inside = (time - event.time).min(event.release - time);
+            held = held.max(((inside + ramp) / ramp).clamp(0.0, 1.0) as f32);
+        }
+        held
+    }
+
     /// The grip the hand is holding at a moment, if any.
     pub fn grip_at(&self, time: f64) -> Option<&Grip> {
         let index = self.current_index(time)?;
@@ -1092,72 +1149,127 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         animators[Hand::Left as usize].joints(&poses[0]),
         animators[Hand::Right as usize].joints(&poses[1]),
     ];
-    if !overlapping(&joints[0], &joints[1]) {
+    // How near the hands come around this moment, not merely at it. See [`closing`].
+    let closing = closing(animators, time);
+    if closing <= 0.0 && !overlapping(&joints[0], &joints[1]) {
         return poses;
     }
 
-    // How far the hand that goes up has to rise. Worked out per pair of joints rather
-    // than from a box: two joints already far apart along the keys need no height
-    // between them at all, and it is the ones directly above one another that decide.
-    let clearance = |up: usize| lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
-
+    // How much each hand can be moved, and how much it can only be angled. These are
+    // degrees rather than a yes or no, so the two corrections cross over where they used
+    // to swap. See [`HandAnimator::holding`].
+    let hold = [
+        animators[Hand::Left as usize].holding(time, SWING_LEAD_SECONDS),
+        animators[Hand::Right as usize].holding(time, SWING_LEAD_SECONDS),
+    ];
     let free = [
         animators[Hand::Left as usize].grip_at(time).is_none(),
         animators[Hand::Right as usize].grip_at(time).is_none(),
     ];
-    // The hand already higher goes up, so a hand on its way over keeps going over
-    // rather than being swapped underneath halfway across.
-    let height = |side: usize| {
-        joints[side].iter().fold(f32::MIN, |a, j| a.max(j.z))
+
+    // Lifting raises one hand over the other; raising both would separate neither. The
+    // one that goes is whichever is freer, and the higher of the two when that is level,
+    // so a hand on its way over keeps going over rather than being swapped underneath
+    // halfway across.
+    let height = |side: usize| joints[side].iter().fold(f32::MIN, |a, j| a.max(j.z));
+    // The hand already higher goes up when both are free, so one on its way over keeps
+    // going over rather than being swapped underneath halfway across.
+    let up = match (free[0], free[1]) {
+        (true, true) => Some(usize::from(height(1) > height(0))),
+        (true, false) => Some(0),
+        (false, true) => Some(1),
+        (false, false) => None,
     };
-    let higher = usize::from(height(1) > height(0));
-    match (free[0], free[1]) {
-        // Both free: still only one of them moves. Sharing it by pressing the other
-        // down looks even-handed and drives a hand into the keys.
-        (true, true) => poses[higher].q[dof::WRIST_Z] += clearance(higher),
-        (true, false) => poses[0].q[dof::WRIST_Z] += clearance(0),
-        (false, true) => poses[1].q[dof::WRIST_Z] += clearance(1),
-        (false, false) => {
-            let centre = |side: usize| {
-                let (lo, hi) = joints[side]
-                    .iter()
-                    .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
-                (lo + hi) / 2.0
-            };
-            let centres = [centre(0), centre(1)];
-            for side in 0..2 {
-                let animator = &animators[side];
-                if animator.grip_at(time).is_none() {
-                    continue;
-                }
-                let Some((current, next, blend)) = animator.grips_around(time) else {
-                    continue;
-                };
-                // Swing for the grip being left and for the one being taken, and cross
-                // between them on the same curve the posture crosses on.
-                //
-                // Which fingers are down changes all at once at a grip boundary, and the
-                // swing is measured against them: the angle that keeps them on their keys
-                // either side of that boundary is a different angle, so computing it from
-                // whichever grip happens to be current put a step in the middle of a
-                // movement. Blended, the two sides agree at the boundary — the outgoing
-                // grip's weight has reached one exactly where the incoming grip's starts
-                // at zero — and the hand crosses it without a jump.
-                let mut a = poses[side];
-                swing_clear(animator, &mut a, current, centres[1 - side]);
-                let swung = match next {
-                    Some(next) if blend > 0.0 => {
-                        let mut b = poses[side];
-                        swing_clear(animator, &mut b, next, centres[1 - side]);
-                        a.lerp(&b, blend)
-                    }
-                    _ => a,
-                };
-                poses[side] = swung;
-            }
+    if let Some(up) = up {
+        // Not faded by anything. The distance a hand has to rise is already the distance
+        // it has to rise, and it already falls to nothing on its own as they part;
+        // fading it as well only means never quite clearing.
+        poses[up].q[dof::WRIST_Z] += lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
+    }
+
+    // And angle the wrists apart, by however much each hand is committed to its keys.
+    let centre = |side: usize| {
+        let (lo, hi) = joints[side]
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
+        (lo + hi) / 2.0
+    };
+    let centres = [centre(0), centre(1)];
+    for side in 0..2 {
+        let animator = &animators[side];
+        // Both hands, not just this one: angling the wrists apart is what is left when
+        // neither can be lifted over the other. While the other hand is free and being
+        // lifted, swinging this one as well only moves it somewhere the lift did not
+        // account for.
+        let strength = closing * hold[side] * hold[1 - side];
+        if strength <= 0.0 {
+            continue;
         }
+        let Some((current, next, blend)) = animator.grips_around(time) else {
+            continue;
+        };
+        // Swing for the grip being left and for the one being taken, and cross between
+        // them on the same curve the posture crosses on: which fingers are down changes
+        // all at once at a grip boundary, and the angle that keeps them on their keys is
+        // a different angle either side of it.
+        let mut a = poses[side];
+        swing_clear(animator, &mut a, current, centres[1 - side], strength);
+        poses[side] = match next {
+            Some(next) if blend > 0.0 => {
+                let mut b = poses[side];
+                swing_clear(animator, &mut b, next, centres[1 - side], strength);
+                a.lerp(&b, blend)
+            }
+            _ => a,
+        };
     }
     poses
+}
+
+/// How near the two hands come around a moment, from not at all to touching.
+///
+/// Looks across a window either side rather than at the instant, and weights a sample by
+/// how near the middle it is. A meeting a tenth of a second off therefore already counts
+/// for something, and one just past still does.
+///
+/// It has to look ahead. Hands close the last thirty millimetres inside a single frame in
+/// a fast passage, so anything judged only on where they are *now* goes from nothing to
+/// everything between one frame and the next — which is a correction appearing whole, and
+/// a hand flickering. On one fast piece, judging it at the instant leaves 183 frames where
+/// a joint outruns a hand; judging it across the window leaves 22.
+///
+/// Stateless, so seeking and replaying give what playing through gives.
+fn closing(animators: &[HandAnimator], time: f64) -> f32 {
+    /// How far either side to look, in seconds.
+    const WINDOW: f64 = 0.12;
+    /// Samples either side. About one per two frames at sixty a second.
+    const SAMPLES: usize = 4;
+
+    let mut nearness = 0.0f32;
+    for step in 0..=SAMPLES * 2 {
+        let offset = (step as f64 / SAMPLES as f64 - 1.0) * WINDOW;
+        let at = time + offset;
+        if at < 0.0 {
+            continue;
+        }
+        let left = animators[Hand::Left as usize].pose_at(at);
+        let right = animators[Hand::Right as usize].pose_at(at);
+        let apart = nearest(
+            &animators[Hand::Left as usize].joints(&left),
+            &animators[Hand::Right as usize].joints(&right),
+        );
+        let want = ((ENGAGE_MM - apart) / (ENGAGE_MM - HAND_THICKNESS_MM)).clamp(0.0, 1.0);
+        let weight = 1.0 - (offset.abs() / WINDOW) as f32;
+        nearness = nearness.max(want * weight);
+    }
+    nearness
+}
+
+/// How close the two hands come, in millimetres, joint to joint.
+pub fn nearest(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
+    a.iter()
+        .flat_map(|p| b.iter().map(move |q| p.distance(*q)))
+        .fold(f32::MAX, f32::min)
 }
 
 /// Whether two posed hands are drawn through each other.
@@ -1175,11 +1287,7 @@ pub fn overlapping(a: &[glam::Vec3], b: &[glam::Vec3]) -> bool {
 /// Zero when they are clear. Otherwise how far the closest pair of joints is inside
 /// [`HAND_THICKNESS_MM`], which is what a viewer sees as the hands sharing a space.
 pub fn overlap_depth(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
-    let closest = a
-        .iter()
-        .flat_map(|p| b.iter().map(move |q| p.distance(*q)))
-        .fold(f32::MAX, f32::min);
-    (HAND_THICKNESS_MM - closest).max(0.0)
+    (HAND_THICKNESS_MM - nearest(a, b)).max(0.0)
 }
 
 /// How far `up` has to rise for none of its joints to be inside `down`.
@@ -1232,6 +1340,7 @@ fn swing_clear(
     pose: &mut HandPose,
     grip: &Grip,
     away_from: f32,
+    urgency: f32,
 ) {
     if grip.keys.is_empty() {
         return;
@@ -1275,7 +1384,7 @@ fn swing_clear(
 
     let mut best: Option<(f32, HandPose)> = None;
     for sign in [1.0f32, -1.0] {
-        let full = sign * SWING_MAX_DEG.to_radians();
+        let full = sign * SWING_MAX_DEG.to_radians() * urgency;
         // Scale the angle back until the worst-moved finger is inside tolerance. The
         // displacement is nearly but not quite linear in the angle, so twice.
         let mut angle = full;

@@ -66,6 +66,14 @@ fn main() -> anyhow::Result<()> {
             animators[Hand::Left as usize].joints(&poses[0]),
             animators[Hand::Right as usize].joints(&poses[1]),
         ];
+        if std::env::var("ON_MODE").is_ok() {
+            let raw = [animators[0].pose_at(at), animators[1].pose_at(at)];
+            let j = [animators[0].joints(&raw[0]), animators[1].joints(&raw[1])];
+            let near = on_viz::timeline::nearest(&j[0], &j[1]) < 30.0;
+            let f0 = animators[0].grip_at(at).is_none();
+            let f1 = animators[1].grip_at(at).is_none();
+            println!("MODE {} {}{}", if near { 1 } else { 0 }, i32::from(f0), i32::from(f1));
+        }
         if let Some(before) = &previous {
             for hand in Hand::ALL {
                 let side = hand as usize;
