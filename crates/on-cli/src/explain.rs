@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use on_hand::Hand;
-use on_score::hands::HandAssignment;
 
 use crate::ModelArgs;
 
@@ -47,10 +46,7 @@ pub fn run(args: ExplainArgs) -> Result<()> {
     let options = args.model.options()?;
     let mut input = on_score::Document::open(&args.input)
         .with_context(|| format!("reading {}", args.input.display()))?;
-    let assignment = HandAssignment {
-        profile: options.profile.clone(),
-        ..Default::default()
-    };
+    let assignment = args.model.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
 
     let score = input.score();

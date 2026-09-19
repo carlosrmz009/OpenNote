@@ -41,6 +41,15 @@ pub struct HandAssignment {
     /// pedal is for, and it is often the right answer. It is charged rather than
     /// forbidden so the search weighs it against what the other hand would have to do.
     pub abandon_weight: f32,
+    /// How far either side of an instant the passage is taken to extend, in seconds,
+    /// when working out where the hands divide. See `set_pivots`.
+    pub pivot_window_seconds: f64,
+    /// How much of a hand's reach a single instant may need before the passage is
+    /// taken to need two hands.
+    ///
+    /// Not quite all of it: a hand holding a shape at its absolute limit has nothing
+    /// left to move with. Anything from four fifths to nine tenths measures the same.
+    pub one_hand_fraction: f32,
 }
 
 impl Default for HandAssignment {
@@ -51,6 +60,8 @@ impl Default for HandAssignment {
             travel_weight: 0.004,
             register_weight: 0.6,
             abandon_weight: 0.4,
+            pivot_window_seconds: 4.0,
+            one_hand_fraction: 0.85,
         }
     }
 }
@@ -64,6 +75,97 @@ pub fn assign_hands(score: &mut Score, options: &HandAssignment) {
         return;
     }
     assign_by_search(score, options);
+}
+
+/// The hand each note belongs to according to the source, if the source says.
+///
+/// Ground truth for the search, which only runs when a source does not say. Engraved
+/// music says outright: staff 1 is the right hand, staff 2 the left. A MIDI says it by
+/// putting the hands on separate tracks, which is what a piano transcription does — so
+/// a file whose notes live on exactly two tracks is read that way, the higher-sounding
+/// track being the right hand. Anything else (one track, a sequencer's dozen) is not a
+/// hand split and is not treated as one.
+///
+/// Tracks holding under one note in a hundred are not a hand. Sequencers leave them
+/// behind — a stray pair of notes on a third track was enough to disqualify a whole
+/// rag — and the notes on them are left unjudged rather than guessed at.
+pub fn truth_hands(score: &Score) -> Option<Vec<Option<Hand>>> {
+    if score.notes.iter().all(|n| n.staff.is_some()) {
+        let mut staves: Vec<u8> = score.notes.iter().filter_map(|n| n.staff).collect();
+        staves.sort_unstable();
+        staves.dedup();
+        if staves.len() == 2 {
+            let upper = staves[0];
+            return Some(
+                score
+                    .notes
+                    .iter()
+                    .map(|n| Some(if n.staff == Some(upper) { Hand::Right } else { Hand::Left }))
+                    .collect(),
+            );
+        }
+    }
+
+    let track_of = |note: &crate::Note| match note.source {
+        crate::SourceRef::Midi { track, .. } => Some(track),
+        _ => None,
+    };
+    let all: Vec<usize> = score.notes.iter().filter_map(track_of).collect();
+    if all.is_empty() || all.len() != score.notes.len() {
+        return None;
+    }
+    let mut seen = all.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    let tracks: Vec<usize> = seen
+        .into_iter()
+        .filter(|track| all.iter().filter(|t| *t == track).count() * 100 >= all.len())
+        .collect();
+    if tracks.len() != 2 {
+        return None;
+    }
+    let mean = |track: usize| {
+        let pitches: Vec<f32> = score
+            .notes
+            .iter()
+            .filter(|n| track_of(n) == Some(track))
+            .map(|n| f32::from(n.midi))
+            .collect();
+        pitches.iter().sum::<f32>() / pitches.len() as f32
+    };
+    let right = if mean(tracks[0]) > mean(tracks[1]) { tracks[0] } else { tracks[1] };
+    Some(
+        score
+            .notes
+            .iter()
+            .map(|n| match track_of(n) {
+                Some(t) if t == right => Some(Hand::Right),
+                Some(t) if tracks.contains(&t) => Some(Hand::Left),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Take the source's answer away, run the search, and count how often it agrees.
+///
+/// Returns the notes it agreed on and the notes that were judged. `None` when the
+/// source does not say which hand plays what, so there is nothing to judge against.
+pub fn agreement(score: &Score, options: &HandAssignment) -> Option<(usize, usize)> {
+    let truth = truth_hands(score)?;
+    let mut blind = score.clone();
+    for note in &mut blind.notes {
+        note.staff = None;
+        note.hand = None;
+    }
+    assign_by_search(&mut blind, options);
+    let (mut right, mut judged) = (0, 0);
+    for (note, want) in blind.notes.iter().zip(&truth) {
+        let Some(want) = want else { continue };
+        judged += 1;
+        right += usize::from(note.hand == Some(*want));
+    }
+    Some((right, judged))
 }
 
 /// Use staff numbers if they are present and describe a two-staff piano part.
@@ -116,7 +218,7 @@ fn assign_by_search(score: &mut Score, options: &HandAssignment) {
     hold_sustained(&mut events);
     // Where the hands divide is a property of the passage, and has to be worked out
     // before anything can be charged for being on the wrong side of it.
-    set_pivots(&mut events, options.profile.comfortable_span_mm());
+    set_pivots(&mut events, options);
     // When the foot is holding the strings, in seconds.
     //
     // A hand is only obliged to stay on a key while the key is what is holding the note.
@@ -368,27 +470,10 @@ const HAND_DIVIDER_MIDI: f32 = 60.0;
 /// once with middle C, taking the boundary it chose and running it again — sounds
 /// self-consistent but carries the first pass's mistakes into the second, and lands a
 /// half point below this.
-fn set_pivots(events: &mut [Simultaneity], span_mm: f32) {
-    /// How far either side of an instant the passage is taken to extend, in seconds.
-    const WINDOW_SECONDS: f64 = 4.0;
-
-    // A hand's reach as an interval, which is what says whether a passage needs two.
-    /// How much of a hand's reach a passage must fit inside before it is taken to be
-    /// one hand's work.
-    ///
-    /// Not all of it. A hand playing a figure has to move about inside it, and the
-    /// window is short of one side at the start and end of a piece, which makes a
-    /// two-octave scale look narrow just as it begins. Three quarters is comfortably
-    /// clear of both: everything from a half to nine tenths behaves the same.
-    /// How much of a hand's reach a single instant may need before the passage is
-    /// taken to need two hands.
-    ///
-    /// Not quite all of it: a hand holding a shape at its absolute limit has nothing
-    /// left to move with. Anything from four fifths to nine tenths measures the same.
-    const ONE_HAND_FRACTION: f32 = 0.85;
-
+fn set_pivots(events: &mut [Simultaneity], options: &HandAssignment) {
+    let window = options.pivot_window_seconds;
     let semitone = 7.0 * on_hand::keyboard::WHITE_KEY_WIDTH / 12.0;
-    let span = ONE_HAND_FRACTION * span_mm / semitone;
+    let span = options.one_hand_fraction * options.profile.comfortable_span_mm() / semitone;
 
     let middles: Vec<(f64, f32, f32, f32)> = events
         .iter()
@@ -408,11 +493,11 @@ fn set_pivots(events: &mut [Simultaneity], span_mm: f32) {
     let mut sum = 0.0f32;
     for event in events.iter_mut() {
         let at = event.onset_seconds;
-        while hi < middles.len() && middles[hi].0 <= at + WINDOW_SECONDS {
+        while hi < middles.len() && middles[hi].0 <= at + window {
             sum += middles[hi].1;
             hi += 1;
         }
-        while lo < hi && middles[lo].0 < at - WINDOW_SECONDS {
+        while lo < hi && middles[lo].0 < at - window {
             sum -= middles[lo].1;
             lo += 1;
         }

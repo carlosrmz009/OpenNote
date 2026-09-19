@@ -432,10 +432,7 @@ fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
     let options = args.weights.options()?;
     let mut input = on_score::Document::open(path)
         .with_context(|| format!("reading {}", path.display()))?;
-    let assignment = on_score::hands::HandAssignment {
-        profile: options.profile.clone(),
-        ..Default::default()
-    };
+    let assignment = args.weights.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
     let score = input.score();
 
@@ -471,4 +468,91 @@ fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Arguments to `opennote tune`.
+#[derive(Debug, Args)]
+pub struct TuneArgs {
+    /// What to tune: which hand plays each note, or which finger.
+    #[arg(long, value_enum, default_value_t = TuneTarget::Hands)]
+    pub target: TuneTarget,
+
+    /// For `--target hands`: scores or folders of scores whose source says which hand
+    /// plays what — two-staff MusicXML, or piano MIDI with a track per hand.
+    #[arg(long, num_args = 1..)]
+    pub scores: Vec<PathBuf>,
+
+    /// For `--target hands`: the most scores to learn from. A downloaded dataset is
+    /// far more than one search needs, and every score is read every generation.
+    #[arg(long, default_value_t = 1500)]
+    pub limit: usize,
+
+    /// For `--target fingers`: the corpus to learn from.
+    #[arg(long, default_value = CORPUS_DIR)]
+    pub corpus: PathBuf,
+
+    /// Stop after this many hours. Without it, runs until stopped.
+    #[arg(long)]
+    pub hours: Option<f64>,
+
+    /// Settings tried at once. One per core by default.
+    #[arg(long)]
+    pub threads: Option<usize>,
+
+    /// Where the search keeps its state and its log.
+    #[arg(long, default_value = "out/tune")]
+    pub out: PathBuf,
+
+    /// Where better weights are written, for `--tuned` and for review.
+    #[arg(long, default_value = "models/weights.json")]
+    pub weights: PathBuf,
+}
+
+/// What `opennote tune` searches.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum TuneTarget {
+    /// Which hand plays each note.
+    Hands,
+    /// Which finger plays each note.
+    Fingers,
+}
+
+/// Search the engine's weights until stopped or out of time.
+pub fn tune(args: TuneArgs) -> Result<()> {
+    use on_train::tune::{run, Examples, TuneConfig};
+
+    let examples = match args.target {
+        TuneTarget::Hands => {
+            if args.scores.is_empty() {
+                bail!("give --scores: files or folders of two-staff MusicXML or two-track piano MIDI");
+            }
+            println!("Reading scores...");
+            let mut last = std::time::Instant::now();
+            Examples::hands(&args.scores, args.limit, |tried, kept| {
+                if last.elapsed().as_secs() >= 10 {
+                    last = std::time::Instant::now();
+                    println!("  {tried} files read, {kept} usable");
+                }
+            })?
+        }
+        TuneTarget::Fingers => {
+            let pieces = Corpus::at(&args.corpus)?.load()?;
+            if pieces.is_empty() {
+                bail!(
+                    "the corpus at {} is empty. Add fingered music with `opennote corpus add`.",
+                    args.corpus.display()
+                );
+            }
+            Examples::fingers(pieces)
+        }
+    };
+    let config = TuneConfig {
+        directory: args.out,
+        weights: args.weights,
+        hours: args.hours,
+        threads: args.threads.unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(4, |n| n.get())
+        }),
+    };
+    run(&examples, &config, |line| println!("{line}"))
 }

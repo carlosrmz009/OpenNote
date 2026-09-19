@@ -42,6 +42,9 @@ enum Command {
     Train(learn::TrainArgs),
     /// Measure the fingering against expert annotations.
     Eval(learn::EvalArgs),
+    /// Search the engine's weights for as long as it is left running. See
+    /// docs/TUNING.md.
+    Tune(learn::TuneArgs),
 }
 
 /// How big the pianist's hand is, and which rule set to score with.
@@ -74,6 +77,10 @@ pub struct ModelArgs {
     /// `--model`.
     #[arg(long, default_value_t = 1.0)]
     pub prior_scale: f32,
+
+    /// Weights found by `opennote tune`, to try them before they become the defaults.
+    #[arg(long)]
+    pub tuned: Option<std::path::PathBuf>,
 }
 
 impl ModelArgs {
@@ -94,7 +101,29 @@ impl ModelArgs {
         if self.model.is_some() {
             options.prior_scale = self.prior_scale.max(0.0);
         }
+        if let Some(weights) = self.weights()? {
+            weights.apply_to_fingering(&mut options);
+        }
         Ok(options)
+    }
+
+    /// How the hands are divided, for a hand the size these options are for.
+    pub fn hands(&self, options: &FingeringOptions) -> Result<on_score::hands::HandAssignment> {
+        let mut assignment = on_score::hands::HandAssignment {
+            profile: options.profile.clone(),
+            ..Default::default()
+        };
+        if let Some(weights) = self.weights()? {
+            weights.apply_to_hands(&mut assignment);
+        }
+        Ok(assignment)
+    }
+
+    fn weights(&self) -> Result<Option<on_train::tune::Weights>> {
+        self.tuned
+            .as_deref()
+            .map(on_train::tune::Weights::load)
+            .transpose()
     }
 
     /// Load the trained model, if one was asked for.
@@ -189,5 +218,6 @@ fn main() -> Result<()> {
         Command::Corpus(args) => learn::corpus(args),
         Command::Train(args) => learn::train(args),
         Command::Eval(args) => learn::eval(args),
+        Command::Tune(args) => learn::tune(args),
     }
 }

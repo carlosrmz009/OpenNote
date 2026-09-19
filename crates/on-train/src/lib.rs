@@ -10,10 +10,12 @@
 //! * [`video`] — reading them out of overhead video of somebody playing
 //! * [`train`] — fitting the model, and the weights that blend it with the rules
 //! * [`eval`] — how well a fingering agrees with the people who wrote one
+//! * [`tune`] — searching the engine's weights, for as long as it is left running
 
 pub mod corpus;
 pub mod eval;
 pub mod train;
+pub mod tune;
 pub mod video;
 
 pub use corpus::{Corpus, Piece};

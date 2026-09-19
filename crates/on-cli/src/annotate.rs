@@ -6,7 +6,6 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use on_engrave::{engrave, EngraveOptions};
 use on_hand::Hand;
-use on_score::hands::HandAssignment;
 
 use crate::ModelArgs;
 
@@ -50,10 +49,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
 
     // MIDI carries no staves, so the hands have to be worked out; MusicXML usually
     // says, and `assign_hands` uses that when it can.
-    let assignment = HandAssignment {
-        profile: options.profile.clone(),
-        ..Default::default()
-    };
+    let assignment = args.model.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
 
     let score = input.score();
