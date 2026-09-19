@@ -482,10 +482,18 @@ pub struct TuneArgs {
     #[arg(long, num_args = 1..)]
     pub scores: Vec<PathBuf>,
 
-    /// For `--target hands`: the most scores to learn from. A downloaded dataset is
-    /// far more than one search needs, and every score is read every generation.
-    #[arg(long, default_value_t = 1500)]
+    /// For `--target hands`: the most scores to learn from. Every one of them is
+    /// fingered again for every setting tried, so this is what a generation costs;
+    /// more of them generalises better and moves slower.
+    #[arg(long, default_value_t = 5000)]
     pub limit: usize,
+
+    /// For `--target hands`: keep only music where at least this share of notes falls
+    /// inside the other hand's usual range. Nought, the default, learns from the
+    /// dataset as it is, which is what gives the best accuracy over it; raise it to
+    /// weight the search towards music where the hands share the keyboard.
+    #[arg(long, default_value_t = 0.0)]
+    pub min_shared: f64,
 
     /// For `--target fingers`: the corpus to learn from.
     #[arg(long, default_value = CORPUS_DIR)]
@@ -506,6 +514,18 @@ pub struct TuneArgs {
     /// Where better weights are written, for `--tuned` and for review.
     #[arg(long, default_value = "models/weights.json")]
     pub weights: PathBuf,
+
+    /// Optional: pieces no setting may do worse on than the defaults. Only for
+    /// holding on to behaviour on music you have checked by hand — it refuses
+    /// improvements, so it costs dataset accuracy.
+    /// Scores for `--target hands`, a corpus directory for `--target fingers`.
+    #[arg(long, num_args = 1..)]
+    pub guard: Vec<PathBuf>,
+
+    /// Instead of searching, measure these weights against the engine's defaults on
+    /// every example given — for trying a setting on music it was not tuned on.
+    #[arg(long)]
+    pub measure: Option<PathBuf>,
 }
 
 /// What `opennote tune` searches.
@@ -528,7 +548,9 @@ pub fn tune(args: TuneArgs) -> Result<()> {
             }
             println!("Reading scores...");
             let mut last = std::time::Instant::now();
-            Examples::hands(&args.scores, args.limit, |tried, kept| {
+            // Measuring is about the pieces given, all of them.
+            let min_shared = if args.measure.is_some() { 0.0 } else { args.min_shared };
+            Examples::hands(&args.scores, args.limit, min_shared, |tried, kept| {
                 if last.elapsed().as_secs() >= 10 {
                     last = std::time::Instant::now();
                     println!("  {tried} files read, {kept} usable");
@@ -546,7 +568,31 @@ pub fn tune(args: TuneArgs) -> Result<()> {
             Examples::fingers(pieces)
         }
     };
+    if let Some(path) = &args.measure {
+        let tuned = on_train::tune::Weights::load(path)?;
+        let defaults = on_train::tune::Weights::default();
+        let [a, b, c] = examples.sizes();
+        println!("{} examples", a + b + c);
+        println!("  defaults:  {:.2}%", examples.agreement(&defaults) * 100.0);
+        println!("  {}:  {:.2}%", path.display(), examples.agreement(&tuned) * 100.0);
+        return Ok(());
+    }
+    let guard = if args.guard.is_empty() {
+        None
+    } else {
+        Some(match args.target {
+            TuneTarget::Hands => Examples::hands(&args.guard, usize::MAX, 0.0, |_, _| {})?,
+            TuneTarget::Fingers => {
+                let mut pieces = Vec::new();
+                for path in &args.guard {
+                    pieces.extend(Corpus::at(path)?.load()?);
+                }
+                Examples::fingers(pieces)
+            }
+        })
+    };
     let config = TuneConfig {
+        guard,
         directory: args.out,
         weights: args.weights,
         hours: args.hours,

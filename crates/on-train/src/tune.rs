@@ -238,7 +238,18 @@ impl Examples {
     /// alphabetically, which spreads them over the whole of it instead of taking every
     /// piece by one composer whose name begins with A. Files that cannot be read, or
     /// whose source does not say which hand plays what, are passed over.
-    pub fn hands(paths: &[PathBuf], limit: usize, mut progress: impl FnMut(usize, usize)) -> Result<Self> {
+    ///
+    /// `min_shared` keeps only music where the hands share the keyboard: the share of
+    /// notes that fall inside the other hand's usual range, from 0 to 1. A dataset of
+    /// hymns and simple arrangements is mostly two hands a long way apart, where any
+    /// setting that splits by register is right; learning from that teaches the engine
+    /// to split by register, which is exactly wrong where it matters.
+    pub fn hands(
+        paths: &[PathBuf],
+        limit: usize,
+        min_shared: f64,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<Self> {
         let mut files = Vec::new();
         for path in paths {
             walk(path, &mut files)?;
@@ -254,10 +265,20 @@ impl Examples {
                 break;
             }
             progress(tried, kept);
-            let Ok(document) = on_score::Document::open(file) else { continue };
-            let score = document.score().clone();
+            let is_json = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+            let score = if is_json {
+                let Ok(score) = read_music_render(file) else { continue };
+                score
+            } else {
+                let Ok(document) = on_score::Document::open(file) else { continue };
+                document.score().clone()
+            };
             // A handful of notes says nothing about how a search follows a piece.
-            if score.notes.len() < 32 || on_score::hands::truth_hands(&score).is_none() {
+            if score.notes.len() < 32 {
+                continue;
+            }
+            let Some(truth) = on_score::hands::truth_hands(&score) else { continue };
+            if shared(&score, &truth) < min_shared {
                 continue;
             }
             let name = file.to_string_lossy().to_string();
@@ -275,7 +296,65 @@ impl Examples {
         }
     }
 
-    fn target(&self) -> Target {
+    /// How often a setting agrees with every example, whichever third it is in.
+    ///
+    /// For checking a setting against music the search never saw at all — somebody's
+    /// own test pieces — rather than for choosing one.
+    pub fn agreement(&self, weights: &Weights) -> f64 {
+        match self {
+            Examples::Hands(parts) => {
+                let mut options = HandAssignment::default();
+                weights.apply_to_hands(&mut options);
+                let (mut right, mut judged) = (0usize, 0usize);
+                for (_, score) in parts.iter().flatten() {
+                    if let Some((r, j)) = on_score::hands::agreement(score, &options) {
+                        right += r;
+                        judged += j;
+                    }
+                }
+                right as f64 / judged.max(1) as f64
+            }
+            Examples::Fingers(parts) => {
+                let mut options = FingeringOptions::default();
+                weights.apply_to_fingering(&mut options);
+                let all: Vec<Piece> = parts.iter().flatten().cloned().collect();
+                f64::from(evaluate(&all, &options, None).general)
+            }
+        }
+    }
+
+    /// How often a setting agrees with each example on its own, in a fixed order.
+    fn each(&self, weights: &Weights) -> Vec<(String, f64)> {
+        match self {
+            Examples::Hands(parts) => {
+                let mut options = HandAssignment::default();
+                weights.apply_to_hands(&mut options);
+                parts
+                    .iter()
+                    .flatten()
+                    .filter_map(|(name, score)| {
+                        let (right, judged) = on_score::hands::agreement(score, &options)?;
+                        Some((name.clone(), right as f64 / judged.max(1) as f64))
+                    })
+                    .collect()
+            }
+            Examples::Fingers(parts) => {
+                let mut options = FingeringOptions::default();
+                weights.apply_to_fingering(&mut options);
+                parts
+                    .iter()
+                    .flatten()
+                    .map(|piece| {
+                        let rate = evaluate(std::slice::from_ref(piece), &options, None).general;
+                        (format!("{} ({})", piece.piece, piece.annotator), f64::from(rate))
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Which target these examples are for.
+    pub fn target(&self) -> Target {
         match self {
             Examples::Hands(_) => Target::Hands,
             Examples::Fingers(_) => Target::Fingers,
@@ -316,6 +395,87 @@ fn fnv(text: &str) -> u64 {
     hash
 }
 
+/// The share of notes played inside the other hand's usual range.
+///
+/// "Usual" is the middle eight tenths of it, so one stray low note in the right hand
+/// does not make a whole piece count as crossing.
+fn shared(score: &Score, truth: &[Option<Hand>]) -> f64 {
+    let pitches = |hand: Hand| {
+        let mut out: Vec<u8> = score
+            .notes
+            .iter()
+            .zip(truth)
+            .filter(|(_, h)| **h == Some(hand))
+            .map(|(n, _)| n.midi)
+            .collect();
+        out.sort_unstable();
+        out
+    };
+    let (right, left) = (pitches(Hand::Right), pitches(Hand::Left));
+    if right.is_empty() || left.is_empty() {
+        return 0.0;
+    }
+    let at = |sorted: &[u8], p: f64| sorted[(p * (sorted.len() - 1) as f64) as usize];
+    let (right_low, left_high) = (at(&right, 0.1), at(&left, 0.9));
+    let inside = right.iter().filter(|p| **p <= left_high).count()
+        + left.iter().filter(|p| **p >= right_low).count();
+    inside as f64 / (right.len() + left.len()) as f64
+}
+
+/// Read a score from PDMX's JSON, which is how that dataset ships.
+///
+/// PDMX was converted from MuseScore into its authors' own format, which keeps a track
+/// per staff and drops the staff numbers — and drops fingerings entirely, so it is of no
+/// use for fingering. For hands it is: a two-staff piano score arrives as two tracks,
+/// and read as a two-track MIDI would be, the higher-sounding one is the right hand.
+fn read_music_render(path: &Path) -> Result<Score> {
+    let text = std::fs::read_to_string(path)?;
+    let json: serde_json::Value = serde_json::from_str(&text)?;
+    if json["absolute_time"].as_bool() == Some(true) {
+        bail!("absolute time is not handled");
+    }
+    let resolution = json["resolution"].as_i64().filter(|r| *r > 0).context("no resolution")?;
+    let ticks = |time: &serde_json::Value| {
+        time.as_i64().map(|t| t * i64::from(TICKS_PER_QUARTER) / resolution)
+    };
+    let mut score = Score::default();
+    for tempo in json["tempos"].as_array().into_iter().flatten() {
+        if let (Some(at), Some(qpm)) = (ticks(&tempo["time"]), tempo["qpm"].as_f64()) {
+            if qpm > 0.0 {
+                score.tempo.insert(at, (60_000_000.0 / qpm) as u32);
+            }
+        }
+    }
+    for (track, part) in json["tracks"].as_array().context("no tracks")?.iter().enumerate() {
+        for note in part["notes"].as_array().into_iter().flatten() {
+            let (Some(onset), Some(duration), Some(midi)) =
+                (ticks(&note["time"]), ticks(&note["duration"]), note["pitch"].as_u64())
+            else {
+                continue;
+            };
+            score.notes.push(Note {
+                id: NoteId(0),
+                midi: u8::try_from(midi).unwrap_or(0),
+                onset,
+                duration: duration.max(1),
+                onset_seconds: 0.0,
+                duration_seconds: 0.0,
+                staff: None,
+                voice: None,
+                hand: None,
+                tie: TieState::default(),
+                grace: note["is_grace"].as_bool().unwrap_or(false),
+                chord: false,
+                velocity: 64,
+                given_finger: None,
+                source: SourceRef::Midi { track, event: score.notes.len() },
+            });
+        }
+    }
+    score.finalise();
+    Ok(score)
+}
+
 /// Every score file under a path.
 fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     if path.is_dir() {
@@ -329,7 +489,7 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if matches!(extension.as_str(), "mid" | "midi" | "mxl" | "musicxml" | "xml") {
+    if matches!(extension.as_str(), "mid" | "midi" | "mxl" | "musicxml" | "xml" | "json") {
         out.push(path.to_path_buf());
     }
     Ok(())
@@ -441,7 +601,20 @@ pub struct TuneConfig {
     pub hours: Option<f64>,
     /// Candidates tried at once; one per core by default.
     pub threads: usize,
+    /// Pieces no promoted setting may do worse on than the defaults do.
+    ///
+    /// A large dataset is mostly easy music, and a setting can win on it by getting
+    /// worse at the hard pieces somebody actually cares about. Each piece here is
+    /// checked on its own rather than in a total, so a gain on one cannot pay for a
+    /// loss on another.
+    pub guard: Option<Examples>,
 }
+
+/// How far a guarded piece may fall before a setting is refused, as a fraction.
+///
+/// A quarter of a point: a note or two on a long piece, which is the noise of which
+/// side of a boundary one ambiguous chord lands.
+const GUARD_SLACK: f64 = 0.0025;
 
 /// Smallest and largest step, in natural-log units.
 const STEP_MIN: f64 = 0.02;
@@ -523,6 +696,11 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             }
         }
     };
+    let guard_floor = config.guard.as_ref().map(|guard| guard.each(&weights_of(&defaults)));
+    if let Some(floor) = &guard_floor {
+        say(&format!("{} guarded pieces, none of which may get worse.", floor.len()));
+    }
+    let mut guarded = 0u64;
     say(&format!(
         "The engine's defaults: {:.2}% learning, {:.2}% held back, {:.2}% test.",
         state.baseline.train * 100.0,
@@ -616,7 +794,21 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 let (taught, model) = scale_agreement(&options);
                 taught >= state.scales.0 - 1e-9 && model >= state.scales.1 - 0.01
             };
-            if held_out > state.best_scores.held_out + 1e-12 && scales_kept {
+            let better = held_out > state.best_scores.held_out + 1e-12 && scales_kept;
+            let kept = better
+                && match (&config.guard, &guard_floor) {
+                    (Some(guard), Some(floor)) => {
+                        let now = guard.each(&weights);
+                        let held = now.iter().zip(floor).all(|((_, is), (_, was))| *is >= was - GUARD_SLACK);
+                        if !held {
+                            guarded += 1;
+                            event = "guarded";
+                        }
+                        held
+                    }
+                    _ => true,
+                };
+            if kept {
                 state.best = state.current.clone();
                 state.best_scores = Scores {
                     train: state.current_train,
@@ -663,7 +855,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         if last_said.elapsed().as_secs() >= 600 {
             last_said = Instant::now();
             say(&format!(
-                "Generation {}, {} settings tried; best so far {:.2}% held back (defaults {:.2}%).",
+                "Generation {}, {} settings tried; best so far {:.2}% held back (defaults {:.2}%).                  {guarded} better settings refused for doing worse on a guarded piece.",
                 state.generation,
                 state.evaluated,
                 state.best_scores.held_out * 100.0,
