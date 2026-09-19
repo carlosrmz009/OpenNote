@@ -390,11 +390,17 @@ impl Timeline {
                 }
             }
 
-            // Bottom first, on the beat, and the hand climbs through the rest of it.
+            // Bottom first, on the beat, and the hand climbs through the rest of it —
+            // finishing before the next chord, however soon that is. A roll that ran past
+            // it put the grips out of order, and everything that looks a grip up by time
+            // assumes they are in order: the hand jumped by up to twelve centimetres.
+            let step = mine.get(index).map_or(ROLL_SECONDS, |(next, _)| {
+                ROLL_SECONDS.min((next.start - time) / (rolls.len() + 1) as f64)
+            });
             let mut grip_time = time;
             for group in &rolls {
                 events.push(grip_event(group, grip_time, time));
-                grip_time += ROLL_SECONDS;
+                grip_time += step;
             }
 
             let struck: Vec<(Finger, u8)> = held
@@ -406,7 +412,11 @@ impl Timeline {
                 .iter()
                 .map(|(note, finger)| (note.midi, *finger))
                 .collect();
-            let release = held.iter().fold(time, |latest, (note, _)| latest.max(note.end));
+            // From when the hand gets there, not from the beat: the top of a roll arrives
+            // late, and a short note can have ended before it does. A grip let go of
+            // before it is taken puts the hand half-way up its next lift the moment it
+            // lands, and it jumped thirteen millimetres.
+            let release = held.iter().fold(grip_time, |latest, (note, _)| latest.max(note.end));
             let mut grip = Grip::new(keys);
             grip.keys.sort_by_key(|(midi, _)| *midi);
             events.push(GripEvent { time: grip_time, release, grip, struck });
@@ -580,22 +590,33 @@ pub const CLEARANCE_SLACK_MM: f32 = 3.0;
 /// millimetres. The renderer was moving hands apart that were never touching.
 pub const HAND_THICKNESS_MM: f32 = 20.0;
 
-/// How long the hands take to move out of each other's way, in seconds either side.
+/// How long a hand takes to commit to its keys, and to let go of them, in seconds.
 ///
-/// The swing that angles two wrists apart is a large movement, and it used to appear and
-/// disappear whole in the frame the hands happened to be touching. A correction that big
-/// arriving in a sixtieth of a second is not a hand moving, it is a hand flickering —
-/// which is exactly what widening the swing to clear more collisions bought.
-///
-/// So it is brought in over a window instead. Nothing here keeps state: the pose at any
-/// moment is still a pure function of that moment, worked out by asking how close the
-/// hands come during the window rather than only at its centre.
+/// A hand with keys down can be angled aside but not lifted, and one without can be
+/// lifted. Asked as a yes-or-no that changes the instant a key goes down; this is the
+/// ramp either side of it instead. See [`HandAnimator::holding`].
 const SWING_LEAD_SECONDS: f64 = 0.08;
 
-/// How close the hands have to come before they begin moving apart, in millimetres.
+/// How often it is decided what to do about the two hands, in seconds.
 ///
-/// A little more than a hand's thickness, so the movement is under way before they would
-/// otherwise touch rather than starting once they already have.
+/// Decided on a fixed grid of moments, never at the moment being drawn. Anything decided
+/// at the moment being drawn switches whenever the decision does — which hand goes over,
+/// which way a wrist turns, whether a hand has let go yet — and every switch is a hand
+/// jumping. A grid fixed in time does not move with the frame, so what is drawn between
+/// two decisions is eased from one to the other and cannot jump at all.
+///
+/// Thirty times a second. Hands meeting and parting is slower than that.
+const DECIDE_EVERY_SECONDS: f64 = 1.0 / 30.0;
+
+/// How far either side of a decision it reaches, in seconds.
+///
+/// A correction is at full strength within one grid step of where it was decided and
+/// eases to nothing by this far away, so the hands start moving apart before they would
+/// meet and settle back after they have passed. Long enough that the largest lift is a
+/// movement rather than a jolt; short enough that a hand is not seen moving out of the
+/// way of something a beat away.
+const EASE_SECONDS: f64 = 0.2;
+
 /// How close the hands have to come before they begin moving apart, in millimetres.
 ///
 /// A little more than a hand's thickness, so the movement is under way before they would
@@ -879,6 +900,12 @@ impl HandAnimator {
     ///
     /// Both a drop and an extension. The drop is what happens; the extension is what
     /// can be seen, for the reason given on [`WRIST_DROP_MM`].
+    ///
+    /// Gone again by the next note, eased out over the fall before it. A note struck
+    /// before the last one has settled used to throw away whatever of the last one was
+    /// left, all at once — in a quick passage most of it, and the hand jumped by up to
+    /// thirteen millimetres on every note. Handing over this way the wrist is back where
+    /// the grip put it at the instant each note lands, which is where it has to be.
     fn sink_into_note(&self, pose: &mut HandPose, index: usize, time: f64) {
         let current = &self.events[index];
         let since = time - current.time;
@@ -899,7 +926,9 @@ impl HandAnimator {
             // off it.
             1.0 - back * back * (3.0 - 2.0 * back)
         };
-        let shape = shape.clamp(0.0, 1.0);
+        let until = self.events.get(index + 1).map_or(f64::INFINITY, |next| next.time - time);
+        let handover = ((until / WRIST_FALL_SECONDS) as f32).clamp(0.0, 1.0);
+        let shape = shape.clamp(0.0, 1.0) * handover * handover * (3.0 - 2.0 * handover);
 
         let depth = WRIST_DROP_MM.0 + (WRIST_DROP_MM.1 - WRIST_DROP_MM.0) * hardness;
         let angle = WRIST_DROP_DEG.0 + (WRIST_DROP_DEG.1 - WRIST_DROP_DEG.0) * hardness;
@@ -917,7 +946,9 @@ impl HandAnimator {
         if time <= current.release {
             return 0.0;
         }
-        let free = ((time - current.release) / BREATH_EASE_SECONDS).clamp(0.0, 1.0) as f32;
+        // And out again before the next note, rather than stopping dead when it lands.
+        let until = self.events.get(index + 1).map_or(f64::INFINITY, |next| next.time - time);
+        let free = ((time - current.release).min(until) / BREATH_EASE_SECONDS).clamp(0.0, 1.0) as f32;
         let offset = match self.hand {
             Hand::Right => 0.0,
             Hand::Left => 2.1,
@@ -1020,8 +1051,12 @@ impl HandAnimator {
     /// is public because anything computed per frame from *which keys are held* has to
     /// cross a grip boundary the same way the posture does, or it steps where the posture
     /// glides — and a step in the middle of a movement is what a flicker is.
+    ///
+    /// Before its first grip a hand is waiting over it, so that is the grip either side.
     pub fn grips_around(&self, time: f64) -> Option<(&Grip, Option<&Grip>, f32)> {
-        let index = self.current_index(time)?;
+        let Some(index) = self.current_index(time) else {
+            return self.events.first().map(|first| (&first.grip, None, 0.0));
+        };
         let current = &self.events[index].grip;
         let Some(next) = self.events.get(index + 1) else {
             return Some((current, None, 0.0));
@@ -1054,9 +1089,9 @@ impl HandAnimator {
     ///
     /// Asked as a degree, the two corrections cross over instead of swapping.
     pub fn holding(&self, time: f64, ramp: f64) -> f32 {
-        let Some(index) = self.current_index(time) else {
-            return 0.0;
-        };
+        // Before the first grip, the ramp into it; otherwise the first key a hand plays
+        // would commit it all at once.
+        let index = self.current_index(time).unwrap_or(0);
         let mut held = 0.0f32;
         // The event either side as well, since a ramp reaches back into the last grip and
         // forward into the next.
@@ -1069,6 +1104,15 @@ impl HandAnimator {
             held = held.max(((inside + ramp) / ramp).clamp(0.0, 1.0) as f32);
         }
         held
+    }
+
+    /// When the hand next has to be on keys, after a moment. Never, if it does not.
+    fn lands_next(&self, time: f64) -> f64 {
+        let after = self.events.partition_point(|e| e.time <= time);
+        self.events[after..]
+            .iter()
+            .find(|e| !e.grip.keys.is_empty())
+            .map_or(f64::INFINITY, |e| e.time)
     }
 
     /// The grip the hand is holding at a moment, if any.
@@ -1123,7 +1167,7 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
     height * (through * std::f32::consts::PI).sin()
 }
 
-/// Pose both hands at a moment, lifting one clear if they are inside each other.
+/// Pose both hands at a moment, moving them out of each other's way.
 ///
 /// Everything else about a hand is decided by that hand alone, which is right: what it
 /// plays, where it has to be, how it gets there. The one thing it cannot decide alone is
@@ -1131,17 +1175,118 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
 /// simulated ones, so when they are in the same place they simply pass through each
 /// other, which is the one failure a viewer notices immediately.
 ///
-/// The way out is the one a player uses: lift a hand over. Only a hand that is holding
-/// nothing can be lifted — a hand with keys down has to stay on them, and lifting it
-/// would pull its fingers off the notes it is sounding. Between two chords a hand is
-/// usually free, which is exactly when it is travelling and exactly when it runs into
-/// the other one.
+/// The ways out are the ones a player uses. A hand holding nothing is lifted over the
+/// other. A hand with keys down cannot be — that would pull its fingers off the notes it
+/// is sounding — so it raises its wrist with its fingers left where they are, or angles
+/// its wrist aside. Which of those is wanted is decided on a grid of moments, not at this
+/// one, and what is drawn is eased between those decisions. See [`DECIDE_EVERY_SECONDS`] for why that matters: it
+/// is the difference between hands that move apart and hands that flicker.
 ///
-/// When both are free the lift is shared. When neither is, nothing is done: the
-/// fingering has sent two hands to one place while both are holding, and drawing that
-/// honestly is better than flying a hand off its keys to hide it.
+/// Still a pure function of the moment, so seeking gives what playing through gives.
 pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
     let mut poses = [
+        animators[Hand::Left as usize].pose_at(time),
+        animators[Hand::Right as usize].pose_at(time),
+    ];
+    let apart = apart_around(animators, time);
+    for (side, animator) in animators.iter().enumerate().take(2) {
+        let (swing, lift) = (apart.swing[side], apart.lift[side]);
+        if swing == 0.0 && lift == 0.0 {
+            continue;
+        }
+        // How much of the lift has to leave the fingertips where they are. None while
+        // the hand is free, so it goes up whole; all of it once its keys are down, so it
+        // raises its wrist instead and the fingers stay on them. Crossing from one to the
+        // other is what lets a hand that is over the other one land without first
+        // dropping out of the way.
+        let hold = animator.holding(time, SWING_LEAD_SECONDS);
+        // Only by however much more this hand is being lifted than the other, though. A
+        // hand that was over the other one and has landed must not stay up once the other
+        // is the one going over, or both are up and neither is clear.
+        let over = (lift - apart.lift[1 - side]).max(0.0);
+        let adjust = |pose: &mut HandPose, grip: &Grip| {
+            swing_by(animator, pose, grip, swing);
+            raise_by(animator, pose, grip, over * hold);
+        };
+        if let Some((current, next, blend)) = animator.grips_around(time) {
+            // For the grip being left and for the one being taken, crossed between on the
+            // same curve the posture crosses on: what keeps the fingers on their keys is
+            // different either side.
+            let mut a = poses[side];
+            adjust(&mut a, current);
+            poses[side] = match next {
+                Some(next) if blend > 0.0 => {
+                    let mut b = poses[side];
+                    adjust(&mut b, next);
+                    a.lerp(&b, blend)
+                }
+                _ => a,
+            };
+        }
+        poses[side].q[dof::WRIST_Z] += lift * (1.0 - hold);
+    }
+    poses
+}
+
+/// What is done to keep the hands apart: how far each is lifted, in millimetres, and how
+/// far each wrist is angled aside, in radians.
+#[derive(Clone, Copy, Default)]
+struct Apart {
+    lift: [f32; 2],
+    swing: [f32; 2],
+}
+
+/// What is done about the hands at a moment, eased from the decisions around it.
+///
+/// Each decision on the grid reaches either side of itself, at full strength nearby and
+/// falling smoothly to nothing [`EASE_SECONDS`] away, and at any moment the strongest
+/// reach wins. So a correction is there in full wherever it was decided, begins before
+/// it and ends after it, and in between two decisions is never anything but a blend of
+/// them. Taking the strongest rather than an average is what keeps a meeting that lasts
+/// a frame or two from being diluted into not being dealt with.
+///
+/// The two directions a wrist can turn are eased separately, so a decision that turns it
+/// one way next to one that turns it the other crosses over rather than jumping.
+fn apart_around(animators: &[HandAnimator], time: f64) -> Apart {
+    let first = ((time - EASE_SECONDS) / DECIDE_EVERY_SECONDS).ceil().max(0.0) as i64;
+    let last = ((time + EASE_SECONDS) / DECIDE_EVERY_SECONDS).floor() as i64;
+    let mut lift = [0.0f32; 2];
+    // Per hand, how far towards one side and how far towards the other.
+    let mut swing = [[0.0f32; 2]; 2];
+    for step in first..=last {
+        let at = step as f64 * DECIDE_EVERY_SECONDS;
+        let reach = reach((time - at).abs());
+        if reach <= 0.0 {
+            continue;
+        }
+        let decided = apart_at(animators, at);
+        for side in 0..2 {
+            lift[side] = lift[side].max(reach * decided.lift[side]);
+            let turn = decided.swing[side];
+            swing[side][0] = swing[side][0].max(reach * turn.max(0.0));
+            swing[side][1] = swing[side][1].max(reach * (-turn).max(0.0));
+        }
+    }
+    Apart { lift, swing: [swing[0][0] - swing[0][1], swing[1][0] - swing[1][1]] }
+}
+
+/// How much of a decision reaches a moment this far from it, in seconds.
+///
+/// All of it within a grid step, so a correction decided the same way twice running is
+/// held flat between the two rather than dipping; then a smoothstep to nothing, so it
+/// starts and stops rather than being switched.
+fn reach(gap: f64) -> f32 {
+    let u = ((EASE_SECONDS - gap) / (EASE_SECONDS - DECIDE_EVERY_SECONDS)).clamp(0.0, 1.0) as f32;
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// What to do about the two hands at exactly one moment.
+///
+/// This is free to switch abruptly — which hand is freer, which way a wrist turns — since
+/// nothing is drawn from it directly; [`apart_around`] eases between its answers.
+fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
+    let mut apart = Apart::default();
+    let poses = [
         animators[Hand::Left as usize].pose_at(time),
         animators[Hand::Right as usize].pose_at(time),
     ];
@@ -1149,120 +1294,69 @@ pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
         animators[Hand::Left as usize].joints(&poses[0]),
         animators[Hand::Right as usize].joints(&poses[1]),
     ];
-    // How near the hands come around this moment, not merely at it. See [`closing`].
-    let closing = closing(animators, time);
-    if closing <= 0.0 && !overlapping(&joints[0], &joints[1]) {
-        return poses;
+    let near = ((ENGAGE_MM - nearest(&joints[0], &joints[1])) / (ENGAGE_MM - HAND_THICKNESS_MM))
+        .clamp(0.0, 1.0);
+    if near <= 0.0 {
+        return apart;
     }
 
-    // How much each hand can be moved, and how much it can only be angled. These are
-    // degrees rather than a yes or no, so the two corrections cross over where they used
-    // to swap. See [`HandAnimator::holding`].
-    let hold = [
-        animators[Hand::Left as usize].holding(time, SWING_LEAD_SECONDS),
-        animators[Hand::Right as usize].holding(time, SWING_LEAD_SECONDS),
-    ];
+    // Lifting raises one hand over the other; raising both would separate neither. The
+    // one that goes is whichever is free, and when both are, whichever lands later: the
+    // other has to be on its keys first, and this one has the time to come back down.
+    //
+    // That has to be the same answer from one decision to the next for as long as the
+    // hands are passing, or the easing lifts both. Which is higher, which it used to be,
+    // changes back and forth as two hands in the air go up and down; which lands first
+    // cannot change while both are in the air.
     let free = [
         animators[Hand::Left as usize].grip_at(time).is_none(),
         animators[Hand::Right as usize].grip_at(time).is_none(),
     ];
-
-    // Lifting raises one hand over the other; raising both would separate neither. The
-    // one that goes is whichever is freer, and the higher of the two when that is level,
-    // so a hand on its way over keeps going over rather than being swapped underneath
-    // halfway across.
-    let height = |side: usize| joints[side].iter().fold(f32::MIN, |a, j| a.max(j.z));
-    // The hand already higher goes up when both are free, so one on its way over keeps
-    // going over rather than being swapped underneath halfway across.
+    let lands = [
+        animators[Hand::Left as usize].lands_next(time),
+        animators[Hand::Right as usize].lands_next(time),
+    ];
     let up = match (free[0], free[1]) {
-        (true, true) => Some(usize::from(height(1) > height(0))),
+        (true, true) => Some(usize::from(lands[1] > lands[0])),
         (true, false) => Some(0),
         (false, true) => Some(1),
         (false, false) => None,
     };
     if let Some(up) = up {
-        // Not faded by anything. The distance a hand has to rise is already the distance
-        // it has to rise, and it already falls to nothing on its own as they part;
-        // fading it as well only means never quite clearing.
-        poses[up].q[dof::WRIST_Z] += lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
+        apart.lift[up] = lift_to_clear(&joints[up], &joints[1 - up]).min(CLEARANCE_MAX_MM);
     }
 
-    // And angle the wrists apart, by however much each hand is committed to its keys.
+    // And angle the wrists apart, by however much both hands are committed to their keys:
+    // that is what is left when neither can be lifted, and while one is being lifted,
+    // swinging the other only moves it somewhere the lift did not account for.
+    let hold = [
+        animators[Hand::Left as usize].holding(time, SWING_LEAD_SECONDS),
+        animators[Hand::Right as usize].holding(time, SWING_LEAD_SECONDS),
+    ];
+    let strength = near * hold[0] * hold[1];
+    if strength <= 0.0 {
+        return apart;
+    }
     let centre = |side: usize| {
         let (lo, hi) = joints[side]
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
         (lo + hi) / 2.0
     };
-    let centres = [centre(0), centre(1)];
     for side in 0..2 {
         let animator = &animators[side];
-        // Both hands, not just this one: angling the wrists apart is what is left when
-        // neither can be lifted over the other. While the other hand is free and being
-        // lifted, swinging this one as well only moves it somewhere the lift did not
-        // account for.
-        let strength = closing * hold[side] * hold[1 - side];
-        if strength <= 0.0 {
-            continue;
-        }
         let Some((current, next, blend)) = animator.grips_around(time) else {
             continue;
         };
-        // Swing for the grip being left and for the one being taken, and cross between
-        // them on the same curve the posture crosses on: which fingers are down changes
-        // all at once at a grip boundary, and the angle that keeps them on their keys is
-        // a different angle either side of it.
-        let mut a = poses[side];
-        swing_clear(animator, &mut a, current, centres[1 - side], strength);
-        poses[side] = match next {
-            Some(next) if blend > 0.0 => {
-                let mut b = poses[side];
-                swing_clear(animator, &mut b, next, centres[1 - side], strength);
-                a.lerp(&b, blend)
-            }
-            _ => a,
+        // Whichever grip the hand is nearer; the easing covers the change from one to the
+        // next.
+        let grip = match next {
+            Some(next) if blend >= 0.5 => next,
+            _ => current,
         };
+        apart.swing[side] = swing_angle(animator, &poses[side], grip, centre(1 - side), strength);
     }
-    poses
-}
-
-/// How near the two hands come around a moment, from not at all to touching.
-///
-/// Looks across a window either side rather than at the instant, and weights a sample by
-/// how near the middle it is. A meeting a tenth of a second off therefore already counts
-/// for something, and one just past still does.
-///
-/// It has to look ahead. Hands close the last thirty millimetres inside a single frame in
-/// a fast passage, so anything judged only on where they are *now* goes from nothing to
-/// everything between one frame and the next — which is a correction appearing whole, and
-/// a hand flickering. On one fast piece, judging it at the instant leaves 183 frames where
-/// a joint outruns a hand; judging it across the window leaves 22.
-///
-/// Stateless, so seeking and replaying give what playing through gives.
-fn closing(animators: &[HandAnimator], time: f64) -> f32 {
-    /// How far either side to look, in seconds.
-    const WINDOW: f64 = 0.12;
-    /// Samples either side. About one per two frames at sixty a second.
-    const SAMPLES: usize = 4;
-
-    let mut nearness = 0.0f32;
-    for step in 0..=SAMPLES * 2 {
-        let offset = (step as f64 / SAMPLES as f64 - 1.0) * WINDOW;
-        let at = time + offset;
-        if at < 0.0 {
-            continue;
-        }
-        let left = animators[Hand::Left as usize].pose_at(at);
-        let right = animators[Hand::Right as usize].pose_at(at);
-        let apart = nearest(
-            &animators[Hand::Left as usize].joints(&left),
-            &animators[Hand::Right as usize].joints(&right),
-        );
-        let want = ((ENGAGE_MM - apart) / (ENGAGE_MM - HAND_THICKNESS_MM)).clamp(0.0, 1.0);
-        let weight = 1.0 - (offset.abs() / WINDOW) as f32;
-        nearness = nearness.max(want * weight);
-    }
-    nearness
+    apart
 }
 
 /// How close the two hands come, in millimetres, joint to joint.
@@ -1318,34 +1412,134 @@ fn lift_to_clear(up: &[glam::Vec3], down: &[glam::Vec3]) -> f32 {
     needed
 }
 
-/// Swing a hand's body aside without taking its fingers off their keys.
+/// Raise a hand's wrist without taking its fingers off their keys.
+///
+/// What a player does to get a hand over another one it cannot leave: the wrist and the
+/// back of the hand go up, and the fingers, which are on the keys, stay there. The wrist
+/// is raised, then tipped forward until the middle of the held fingertips is back down,
+/// then slid until it is back where it was along and across the keys.
+///
+/// The knuckles rise by less than the wrist, and the fingertips by nothing, so this
+/// clears less than lifting the whole hand would. It is for the hand that has to be on
+/// its keys, which cannot be lifted whole at all.
+fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f32) {
+    if height <= 0.0 {
+        return;
+    }
+    if grip.keys.is_empty() {
+        pose.q[dof::WRIST_Z] += height;
+        return;
+    }
+    let raised = |height: f32| {
+        let mut trial = *pose;
+        let middle = |p: &HandPose| -> glam::Vec3 {
+            let posture = animator.skeleton.forward(p);
+            grip.keys
+                .iter()
+                .map(|(_, finger)| posture.chain[finger.index()][3])
+                .sum::<glam::Vec3>()
+                / grip.keys.len() as f32
+        };
+        let held = middle(&trial);
+        trial.q[dof::WRIST_Z] += height;
+        // Tipping the hand moves the fingertips on an arc, so a few steps of Newton on
+        // the angle, measuring the slope rather than deriving it.
+        const PROBE: f32 = 0.01;
+        for _ in 0..3 {
+            let now = middle(&trial);
+            let high = now.z - held.z;
+            let mut probe = trial;
+            probe.q[dof::WRIST_FLEXION] += PROBE;
+            let slope = (middle(&probe).z - now.z) / PROBE;
+            if slope.abs() < 1e-3 {
+                break;
+            }
+            // Only the joint being moved is held to its range. Clamping the whole pose
+            // would also pull a swung wrist back inside a window that moved when the
+            // swing slid it — and do so only while there is any height to raise, so the
+            // hand would snap in the frame the raise ran out.
+            let flexion = &mut trial.q[dof::WRIST_FLEXION];
+            *flexion = on_hand::skeleton::LIMITS[dof::WRIST_FLEXION].clamp(*flexion - high / slope);
+        }
+        let now = middle(&trial);
+        trial.q[dof::WRIST_X] += held.x - now.x;
+        trial.q[dof::WRIST_Y] += held.y - now.y;
+        trial
+    };
+    // Tipping the hand forward takes every finger further from the wrist than the held
+    // ones further down than they are, and a long finger idle beside a short one held
+    // goes through the keys. So no joint is let lower than it was or than the top of the
+    // keys, whichever is lower, and the height is scaled back until none is: the drop is
+    // near enough proportional to it. A fraction of a millimetre is let through, or the
+    // held fingertips themselves, which are pinned only as nearly as Newton gets them,
+    // would forbid any raise at all.
+    const RAISE_SLACK_MM: f32 = 0.5;
+    let before = animator.joints(pose);
+    let trial = raised(height);
+    let after = animator.joints(&trial);
+    let allowed = before
+        .iter()
+        .zip(&after)
+        .filter(|(was, is)| is.z < was.z)
+        .map(|(was, is)| (was.z.max(0.0) + RAISE_SLACK_MM) / (was.z - is.z))
+        .fold(1.0f32, f32::min);
+    *pose = if allowed >= 1.0 { trial } else { raised(height * allowed) };
+}
+
+/// How far to swing a hand's body aside to get it away from the other, in radians.
 ///
 /// The last resort, for when both hands are holding and neither can be lifted over the
 /// other. A hand is far wider than the notes it plays, so two hands working in one
 /// register meet at the palms long before the fingers do — and a player answers that by
-/// angling the wrists outward, not by moving the fingers.
-///
-/// The pose can do exactly that. Deviation swings the whole hand about the wrist, which
-/// takes the fingers with it; translating the wrist by however far the fingertips moved
-/// puts them back. The centroid of the held tips is restored exactly, because the wrist
-/// translation is a rigid shift of everything. Individual fingers rotate a little about
-/// that centroid, which for the narrow shapes this happens on is a millimetre or two —
-/// the price of getting a palm out of another hand.
+/// angling the wrists outward, not by moving the fingers. [`swing_by`] is how.
 ///
 /// Both directions are tried and the better kept, rather than reasoning about which
 /// sign of deviation swings which way for which hand: the answer depends on the hand,
 /// the shape and where the other hand is, and measuring it is both shorter and right.
-fn swing_clear(
+/// Nought if neither direction gets the hand any further away.
+fn swing_angle(
     animator: &HandAnimator,
-    pose: &mut HandPose,
+    pose: &HandPose,
     grip: &Grip,
     away_from: f32,
     urgency: f32,
-) {
+) -> f32 {
     if grip.keys.is_empty() {
-        return;
+        return 0.0;
     }
-    // Where the held fingers are now, and where their middle is.
+    let mut best = (0.0f32, 0.0f32);
+    for sign in [1.0f32, -1.0] {
+        let mut trial = *pose;
+        let (angle, strayed) =
+            swing_by(animator, &mut trial, grip, sign * SWING_MAX_DEG.to_radians() * urgency);
+        if strayed > 1.1 {
+            continue;
+        }
+        // Did the body actually end up further from the other hand?
+        let gained = (trial.wrist_position().x - away_from).abs()
+            - (pose.wrist_position().x - away_from).abs();
+        if gained > best.0 {
+            best = (gained, angle);
+        }
+    }
+    best.1
+}
+
+/// Swing a hand's body aside without taking its fingers off their keys.
+///
+/// Deviation swings the whole hand about the wrist, which takes the fingers with it;
+/// translating the wrist by however far the fingertips moved puts them back. The centroid
+/// of the held tips is restored exactly, because the wrist translation is a rigid shift
+/// of everything. Individual fingers rotate a little about that centroid, and the angle
+/// is scaled back until none has gone further than [`SWING_TOLERANCE_MM`] across its key
+/// or [`SWING_SLIDE_MM`] along it.
+///
+/// Returns the angle the wrist turned through, and how far out of tolerance the worst
+/// finger still is as a multiple of it — at most one, unless the shape is too wide to swing at all.
+fn swing_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, angle: f32) -> (f32, f32) {
+    if grip.keys.is_empty() || angle == 0.0 {
+        return (0.0, 0.0);
+    }
     let tips = |p: &HandPose| -> Vec<glam::Vec3> {
         let posture = animator.skeleton.forward(p);
         grip.keys
@@ -1354,14 +1548,9 @@ fn swing_clear(
             .collect()
     };
     let middle = |t: &[glam::Vec3]| t.iter().copied().sum::<glam::Vec3>() / t.len() as f32;
-
     let before = tips(pose);
     let held = middle(&before);
 
-    // Swing by an angle, then shift the wrist so the middle of the held fingers is back
-    // where it was. That shift is a rigid translation of the whole hand, so the middle
-    // is restored exactly; how far the *outer* fingers end up from their keys is what
-    // has to be watched.
     let swung = |angle: f32| {
         let mut trial = *pose;
         trial.q[dof::WRIST_DEVIATION] += angle;
@@ -1369,8 +1558,6 @@ fn swing_clear(
         let moved = middle(&tips(&trial));
         trial.q[dof::WRIST_X] += held.x - moved.x;
         trial.q[dof::WRIST_Y] += held.y - moved.y;
-        // How far out of tolerance the worst finger is, as a multiple of it: across the
-        // keys and along them are different questions with different answers.
         let strayed = tips(&trial)
             .iter()
             .zip(&before)
@@ -1382,35 +1569,24 @@ fn swing_clear(
         (trial, strayed)
     };
 
-    let mut best: Option<(f32, HandPose)> = None;
-    for sign in [1.0f32, -1.0] {
-        let full = sign * SWING_MAX_DEG.to_radians() * urgency;
-        // Scale the angle back until the worst-moved finger is inside tolerance. The
-        // displacement is nearly but not quite linear in the angle, so twice.
-        let mut angle = full;
-        let (mut trial, mut strayed) = swung(full);
-        for _ in 0..2 {
-            if strayed <= 1.0 {
-                break;
-            }
-            angle /= strayed;
-            (trial, strayed) = swung(angle);
+    // The displacement is nearly but not quite linear in the angle, so twice. Scaling by
+    // exactly one changes nothing, so this is continuous in the angle it is given — which
+    // it has to be, since the angle arrives eased and must leave that way.
+    let mut angle = angle;
+    let (mut trial, mut strayed) = swung(angle);
+    for _ in 0..2 {
+        if strayed <= 1.0 {
+            break;
         }
-        if strayed > 1.1 {
-            continue;
-        }
-        // Did the body actually end up further from the other hand?
-        let gained = (trial.wrist_position().x - away_from).abs()
-            - (pose.wrist_position().x - away_from).abs();
-        if best.as_ref().is_none_or(|(g, _)| gained > *g) {
-            best = Some((gained, trial));
-        }
+        angle /= strayed;
+        (trial, strayed) = swung(angle);
     }
-    if let Some((gained, trial)) = best {
-        if gained > 0.0 {
-            *pose = trial;
-        }
-    }
+    // What the joint actually turned through, which is less than was asked where its range
+    // ran out. Reporting that rather than the request matters: what is decided gets eased,
+    // and easing towards an angle the wrist cannot reach runs it into its stop at speed.
+    let turned = trial.q[dof::WRIST_DEVIATION] - pose.q[dof::WRIST_DEVIATION];
+    *pose = trial;
+    (turned, strayed)
 }
 
 #[cfg(test)]
@@ -1840,6 +2016,101 @@ mod tests {
                     finger.number()
                 );
             }
+        }
+    }
+
+    /// Nothing about moving the hands apart may make one jump.
+    ///
+    /// The passage the flicker was reported on: both thumbs on a C an octave apart, then
+    /// both index fingers on the E above, short and quick, so the idle thumbs meet
+    /// between the hands on every E. Everything done about that — lifting, swinging,
+    /// raising a wrist — changes as the keys go down and come up, and each of those
+    /// changes used to be made inside one frame. Sampled half a millisecond apart, a
+    /// hand flat out covers a millimetre and a half; any further is a step.
+    #[test]
+    fn the_hands_never_step_where_they_meet() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut entries = Vec::new();
+        let mut fingers = Vec::new();
+        for beat in 0..12 {
+            let (left, right, finger) =
+                if beat % 2 == 0 { (48, 60, Finger::Thumb) } else { (52, 64, Finger::Index) };
+            // A beat a quarter of a second long, played short: the wrist is still coming
+            // back up from one note when the next arrives.
+            let at = beat * q / 2;
+            fingers.push((entries.len() as u32, finger));
+            entries.push((left, at, q / 6, Hand::Left));
+            fingers.push((entries.len() as u32, finger));
+            entries.push((right, at, q / 6, Hand::Right));
+        }
+        let score = score_of(&entries);
+        let timeline = Timeline::build(&score, &pinned(&fingers));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let drawn = |at: f64| {
+            let posed = pose_both(&animators, at);
+            [animators[0].joints(&posed[0]), animators[1].joints(&posed[1])]
+        };
+
+        let step = 0.0005;
+        let mut met = false;
+        let mut before = drawn(0.0);
+        let mut at = step;
+        while at < timeline.duration {
+            let now = drawn(at);
+            for side in 0..2 {
+                let moved =
+                    before[side].iter().zip(&now[side]).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+                assert!(moved < 3.0, "{:?} jumped {moved:.1} mm at {at:.4}s", Hand::ALL[side]);
+            }
+            met |= pose_both(&animators, at)[0].q != animators[0].pose_at(at).q;
+            before = now;
+            at += step;
+        }
+        assert!(met, "the hands never came near each other, so this showed nothing");
+    }
+
+    /// A rolled chord has to be taken before it is let go of, and be over before the
+    /// next chord arrives.
+    ///
+    /// The grips are looked up by time on the assumption that they are in order and
+    /// that each is held for at least an instant. A short note at the top of a roll can
+    /// end before the roll reaches it, and a roll can run past a chord a few
+    /// milliseconds behind it — which is what played-in MIDI is full of. Either one put
+    /// a hand a long way from where it should be for a frame: thirteen millimetres for
+    /// the first, twelve centimetres for the second.
+    #[test]
+    fn a_roll_is_held_and_finished_in_order() {
+        let q = TICKS_PER_QUARTER as i64;
+        // The minor tenth with a note in the middle, twice: once with its top notes too
+        // short to still be sounding when the roll reaches them, and once with another
+        // chord three milliseconds behind it.
+        let score = score_of(&[
+            (45, 0, q, Hand::Left),
+            (57, 0, q / 32, Hand::Left),
+            (60, 0, q / 32, Hand::Left),
+            (45, 2 * q, q, Hand::Left),
+            (57, 2 * q, q, Hand::Left),
+            (60, 2 * q, q, Hand::Left),
+            (62, 2 * q + 6, q, Hand::Left),
+        ]);
+        let fingerings = pinned(&[
+            (0, Finger::Little),
+            (1, Finger::Index),
+            (2, Finger::Thumb),
+            (3, Finger::Little),
+            (4, Finger::Index),
+            (5, Finger::Thumb),
+            (6, Finger::Thumb),
+        ]);
+        let timeline = Timeline::build(&score, &fingerings);
+        let grips = timeline.hand_grips(Hand::Left);
+        let shown: Vec<_> = grips.iter().map(|e| (e.time, e.release, e.grip.keys.clone())).collect();
+        assert!(grips.len() >= 4, "expected both chords rolled: {shown:?}");
+        for pair in grips.windows(2) {
+            assert!(pair[1].time >= pair[0].time, "grips out of order: {shown:?}");
+        }
+        for event in grips {
+            assert!(event.release >= event.time, "a grip let go of before it is taken: {shown:?}");
         }
     }
 

@@ -42,8 +42,9 @@ fn main() -> anyhow::Result<()> {
             let mut keys = event.grip.keys.clone();
             keys.sort_by_key(|(midi, _)| *midi);
             println!(
-                "  {:7.2}  {}",
+                "  {:9.4} ..{:9.4}  {}",
                 event.time,
+                event.release,
                 keys.iter().map(|(m, f)| format!("{m}={}", f.number())).collect::<Vec<_>>().join(" ")
             );
         }

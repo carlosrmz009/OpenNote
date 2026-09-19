@@ -145,8 +145,8 @@ without a GPU, so they run in CI.
 
 ## Checking a port
 
-The engine carries its own harnesses, and they are the reason to trust it. Both run in
-the no-GPU configuration.
+The engine carries its own harnesses, and they are the reason to trust it. All three
+run in the no-GPU configuration.
 
 ```bash
 # Physical honesty: does every finger reach its key, is every joint inside its range,
@@ -156,6 +156,9 @@ cargo run --release -p on-viz --no-default-features --example anatomy -- score.m
 # Does the hand-assignment search agree with whoever wrote the music down? Point it at
 # engraved MusicXML or a two-track piano MIDI.
 cargo run --release -p on-score --example handtruth -- score.musicxml score.mid
+
+# Does the animation move like a hand from one frame to the next, or flicker?
+cargo run --release -p on-viz --no-default-features --example jitter -- score.mid
 ```
 
 `anatomy` should report zero for unreachable fingers, out-of-range joints and silent
@@ -165,8 +168,12 @@ the ratio it prints against no handling at all.
 `handtruth` sits around 92% and is a movement detector, not a score: a change that sends
 it down has broken something.
 
-If you change nothing in the engine, both should read exactly as they do upstream. That
-is the point of them.
+`jitter` should report no places a hand steps rather than moves. The exceptions are
+scores whose notes a few milliseconds apart are split into separate grips, where the
+hand really does change shape that fast. A step anywhere else is a bug in the engine.
+
+If you change nothing in the engine, all three should read exactly as they do upstream.
+That is the point of them.
 
 ### Guarding the boundary
 

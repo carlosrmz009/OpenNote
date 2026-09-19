@@ -24,6 +24,33 @@ const FPS: f64 = 60.0;
 /// two octaves. Anything quicker than this is not a hand moving.
 const HAND_SPEED_MM_PER_SECOND: f64 = on_fingering::playability::HAND_SPEED_MM_PER_SECOND;
 
+/// How sharply the moving-apart may change pace between frames, in millimetres.
+///
+/// The speed limit misses a flicker made of small steps. A hand lifted twenty millimetres
+/// for two frames and dropped again never breaks it, and reads as nothing but a flicker.
+/// What gives that away is the change of pace: out, back, out again. So this watches the
+/// correction alone — where the hand is drawn, less where it would be without the other
+/// hand there — and its second difference, which a correction brought in smoothly keeps
+/// to a millimetre or two and a correction that switches on and off does not.
+const JOLT_MM: f32 = 5.0;
+
+/// How far a joint may move across an interval of a few microseconds, in millimetres.
+/// Anything continuous moves nowhere near this in that time — a hand flat out covers a
+/// hundredth of a millimetre in four microseconds — and a step does.
+const BREAK_MM: f32 = 1.0;
+
+/// Every joint of both hands, as drawn: moved apart, or with `ON_RAW`, not.
+fn drawn_at(animators: &[on_viz::timeline::HandAnimator], at: f64) -> Vec<glam::Vec3> {
+    let posed = if std::env::var("ON_RAW").is_ok() {
+        [animators[0].pose_at(at), animators[1].pose_at(at)]
+    } else {
+        pose_both(animators, at)
+    };
+    let mut out = animators[0].joints(&posed[0]);
+    out.extend(animators[1].joints(&posed[1]));
+    out
+}
+
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| {
@@ -47,6 +74,11 @@ fn main() -> anyhow::Result<()> {
 
     // Worst joint movement between one frame and the next, per hand, over the piece.
     let mut previous: Option<[Vec<glam::Vec3>; 2]> = None;
+    // How far the collision handling has moved each joint from where the hand alone would
+    // put it, over the last two frames. See the note on `JOLT_MM`.
+    let mut corrections: Vec<[Vec<glam::Vec3>; 2]> = Vec::new();
+    let mut jolts: Vec<(f64, Hand, f32)> = Vec::new();
+    let mut breaks: Vec<(f64, f32)> = Vec::new();
     let mut jumps: Vec<(f64, Hand, f32)> = Vec::new();
     let mut every: Vec<f32> = Vec::new();
 
@@ -66,6 +98,49 @@ fn main() -> anyhow::Result<()> {
             animators[Hand::Left as usize].joints(&poses[0]),
             animators[Hand::Right as usize].joints(&poses[1]),
         ];
+        let alone = [
+            animators[Hand::Left as usize].joints(&animators[Hand::Left as usize].pose_at(at)),
+            animators[Hand::Right as usize].joints(&animators[Hand::Right as usize].pose_at(at)),
+        ];
+        let correction = [0, 1].map(|side| {
+            now[side].iter().zip(&alone[side]).map(|(a, b)| *a - *b).collect::<Vec<_>>()
+        });
+        if let [.., two_ago, one_ago] = corrections.as_slice() {
+            for hand in Hand::ALL {
+                let side = hand as usize;
+                let jolt = (0..correction[side].len())
+                    .map(|j| (correction[side][j] - 2.0 * one_ago[side][j] + two_ago[side][j]).length())
+                    .fold(0.0f32, f32::max);
+                if jolt > JOLT_MM {
+                    jolts.push((at, hand, jolt));
+                }
+            }
+        }
+        // Is the hand continuous across this frame? A steep movement and a step look
+        // alike at one frame apart; halving the interval tells them apart, because a
+        // movement shrinks with it and a step does not.
+        if at > 0.0 {
+            let change = |a: f64, b: f64| {
+                let (x, y) = (drawn_at(&animators, a), drawn_at(&animators, b));
+                x.iter().zip(&y).map(|(p, q)| p.distance(*q)).fold(0.0f32, f32::max)
+            };
+            let (mut lo, mut hi) = (at - step, at);
+            if change(lo, hi) > BREAK_MM {
+                for _ in 0..12 {
+                    let mid = (lo + hi) / 2.0;
+                    if change(lo, mid) >= change(mid, hi) {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                let size = change(lo, hi);
+                if size > BREAK_MM {
+                    breaks.push((lo, size));
+                }
+            }
+        }
+        corrections.push(correction);
         if std::env::var("ON_MODE").is_ok() {
             let raw = [animators[0].pose_at(at), animators[1].pose_at(at)];
             let j = [animators[0].joints(&raw[0]), animators[1].joints(&raw[1])];
@@ -107,9 +182,27 @@ fn main() -> anyhow::Result<()> {
         every[every.len() - 1]
     );
     println!("  frames where a joint outran a hand: {}", jumps.len());
+    println!("  frames where moving the hands apart jolted one: {}", jolts.len());
+    println!("  places a hand steps rather than moves: {}", breaks.len());
+    for (time, size) in breaks.iter().take(8) {
+        println!("    {time:9.4}s  {size:5.1} mm");
+    }
 
     // One line per episode rather than one per frame: a stutter is several frames long
     // and listing each of them says nothing the first does not.
+    let mut shown = 0;
+    let mut last = f64::MIN;
+    for (time, hand, jolt) in &jolts {
+        if time - last > 0.25 {
+            if shown == 12 {
+                println!("    ... and more");
+                break;
+            }
+            println!("    {time:7.2}s {hand:?} jolted {jolt:5.1} mm");
+            shown += 1;
+        }
+        last = *time;
+    }
     let mut shown = 0;
     let mut last = f64::MIN;
     for (time, hand, moved) in &jumps {
