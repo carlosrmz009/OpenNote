@@ -8,12 +8,17 @@ use for `--target fingers`.
 
 This keeps the scores that are:
 
-* exactly two piano tracks (`tracks == "0-0"`);
+* exactly two piano tracks (`tracks == "0-0"`) — 21,538 of them;
 * in the de-duplicated subset, so one hymn uploaded forty times is not forty examples;
 * public domain or CC0, so what is learned from them can ship;
+* in the `no_license_conflict` subset where the metadata has one, which is what the
+  dataset's authors recommend: for 12% of PDMX, what MuseScore's page says about the
+  copyright and what the file itself says disagree. The first release's metadata does
+  not carry the flag; the release at https://zenodo.org/records/15571083 does;
 * at least 100 notes long.
 
-and extracts only those, which is about 15,000 files and 1.4 GB.
+That leaves about 15,000 files from the first release, or 2,241 once the licence
+conflicts are excluded.
 
     python tools/pdmx_piano.py path/to/PDMX.tar.gz
 
@@ -38,6 +43,7 @@ def main() -> None:
             for row in rows
             if row["tracks"] == "0-0"
             and row["subset:deduplicated"] == "True"
+            and row.get("subset:no_license_conflict", "True") == "True"
             and row["license"] in ("publicdomain", "cc-zero")
             and int(row["n_notes"]) >= 100
         }

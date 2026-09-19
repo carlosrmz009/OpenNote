@@ -522,6 +522,11 @@ pub struct TuneArgs {
     #[arg(long, num_args = 1..)]
     pub guard: Vec<PathBuf>,
 
+    /// Instead of searching, say how long has been searched altogether and what it
+    /// found. The hours add up over every run there has ever been.
+    #[arg(long)]
+    pub report: bool,
+
     /// Instead of searching, measure these weights against the engine's defaults on
     /// every example given — for trying a setting on music it was not tuned on.
     #[arg(long)]
@@ -539,7 +544,14 @@ pub enum TuneTarget {
 
 /// Search the engine's weights until stopped or out of time.
 pub fn tune(args: TuneArgs) -> Result<()> {
-    use on_train::tune::{run, Examples, TuneConfig};
+    use on_train::tune::{report, run, Examples, TuneConfig};
+
+    if args.report {
+        for line in report(&args.out)? {
+            println!("{line}");
+        }
+        return Ok(());
+    }
 
     let examples = match args.target {
         TuneTarget::Hands => {
@@ -548,9 +560,7 @@ pub fn tune(args: TuneArgs) -> Result<()> {
             }
             println!("Reading scores...");
             let mut last = std::time::Instant::now();
-            // Measuring is about the pieces given, all of them.
-            let min_shared = if args.measure.is_some() { 0.0 } else { args.min_shared };
-            Examples::hands(&args.scores, args.limit, min_shared, |tried, kept| {
+            Examples::hands(&args.scores, args.limit, args.min_shared, |tried, kept| {
                 if last.elapsed().as_secs() >= 10 {
                     last = std::time::Instant::now();
                     println!("  {tried} files read, {kept} usable");

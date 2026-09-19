@@ -530,6 +530,59 @@ fn scale_agreement(options: &FingeringOptions) -> (f64, f64) {
     (rate(totals[0]), rate(totals[1]))
 }
 
+/// Does a hand holding a bass octave leave a note above it to the other hand?
+///
+/// The shape of the opening of a great many romantic pieces: the left hand puts down a
+/// bass octave and holds it while a figure runs above, and the figure's lowest note sits
+/// between the hands. A hand cannot be in two places, so it belongs to the right hand,
+/// and the same case is `a_hand_holding_a_chord_does_not_go_and_fetch_something_else` in
+/// `on-score`.
+///
+/// It is a gate on the search for the same reason the scales are a gate on the fingering
+/// search. A dataset of easy music will happily pay for a fraction of a point by letting
+/// a hand drop what it is holding, because in easy music that almost never comes up; in
+/// the music somebody actually wants help with it comes up constantly, and on a screen
+/// it is a hand visibly letting go of keys it is still sounding.
+fn holds_what_it_is_holding(weights: &Weights) -> bool {
+    let mut options = HandAssignment::default();
+    weights.apply_to_hands(&mut options);
+    let q = i64::from(TICKS_PER_QUARTER);
+    let mut score = Score::default();
+    let mut push = |midi: u8, onset: i64, duration: i64| {
+        score.notes.push(Note {
+            id: NoteId(score.notes.len() as u32),
+            midi,
+            onset,
+            duration,
+            onset_seconds: 0.0,
+            duration_seconds: 0.0,
+            staff: None,
+            voice: None,
+            hand: None,
+            tie: TieState::default(),
+            grace: false,
+            chord: false,
+            velocity: 80,
+            source: SourceRef::Midi { track: 0, event: 0 },
+            given_finger: None,
+        });
+    };
+    // The bass octave, held right through, and a figure above it whose lowest note the
+    // left hand could only reach by letting the octave go.
+    push(28, 0, 8 * q);
+    push(40, 0, 8 * q);
+    for (i, midi) in [52u8, 64, 71, 64, 52, 64, 71, 64].into_iter().enumerate() {
+        push(midi, (i as i64 + 1) * q, q / 2);
+    }
+    score.finalise();
+    // No staves on it, so this is the search, which is what is being judged.
+    on_score::assign_hands(&mut score, &options);
+    score.notes.iter().all(|note| {
+        let held = note.midi < 41;
+        note.hand == Some(if held { Hand::Left } else { Hand::Right })
+    })
+}
+
 /// A line of eighth notes in one hand.
 fn melody(pitches: &[u8], hand: Hand) -> Score {
     let step = i64::from(TICKS_PER_QUARTER) / 2;
@@ -579,6 +632,11 @@ struct State {
     rng: u64,
     generation: u64,
     evaluated: u64,
+    /// How long has been spent searching altogether, over every run that has ever
+    /// carried this state on. Counted from the work, not from when the process
+    /// started, so time with the search stopped is not in it.
+    #[serde(default)]
+    searched_seconds: f64,
     /// Generations since the search last found anything better.
     stalled: u64,
     /// The last setting that was promoted, and what it scored.
@@ -688,6 +746,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 rng: fnv(target.name()) | 1,
                 generation: 0,
                 evaluated: 0,
+                searched_seconds: 0.0,
                 stalled: 0,
                 best: defaults.clone(),
                 best_scores: baseline,
@@ -718,9 +777,13 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let deadline = config.hours.map(|h| std::time::Duration::from_secs_f64(h * 3600.0));
     let threads = config.threads.max(1);
     let mut last_said = Instant::now();
+    let mut since = Instant::now();
     loop {
         if deadline.is_some_and(|d| started.elapsed() >= d) {
-            say("Time is up.");
+            say(&format!(
+                "Time is up, after {:.2} hours of searching altogether.",
+                state.searched_seconds / 3600.0
+            ));
             break;
         }
 
@@ -755,6 +818,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         });
         state.generation += 1;
         state.evaluated += children.len() as u64;
+        state.searched_seconds += since.elapsed().as_secs_f64();
+        since = Instant::now();
 
         let (index, &train) = scored
             .iter()
@@ -788,13 +853,14 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         if state.current_train > state.best_scores.train + 1e-12 {
             let weights = weights_of(&state.current);
             let held_out = examples.score(&weights, 1);
+            let sane = target != Target::Hands || holds_what_it_is_holding(&weights);
             let scales_kept = target == Target::Hands || {
                 let mut options = FingeringOptions::default();
                 weights.apply_to_fingering(&mut options);
                 let (taught, model) = scale_agreement(&options);
                 taught >= state.scales.0 - 1e-9 && model >= state.scales.1 - 0.01
             };
-            let better = held_out > state.best_scores.held_out + 1e-12 && scales_kept;
+            let better = held_out > state.best_scores.held_out + 1e-12 && scales_kept && sane;
             let kept = better
                 && match (&config.guard, &guard_floor) {
                     (Some(guard), Some(floor)) => {
@@ -817,6 +883,15 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 };
                 let mut file = Weights::load(&config.weights).unwrap_or_default();
                 file.0.extend(weights.0);
+                // What it took to find these, kept with them. Names beginning with an
+                // underscore are not weights and are ignored when they are applied.
+                let name = target.name();
+                file.0.insert(
+                    format!("_{name}.searched_hours"),
+                    (state.searched_seconds / 3600.0) as f32,
+                );
+                file.0.insert(format!("_{name}.settings_tried"), state.evaluated as f32);
+                file.0.insert(format!("_{name}.examples"), sizes.iter().sum::<usize>() as f32);
                 file.save(&config.weights)?;
                 event = "promoted";
                 say(&format!(
@@ -854,9 +929,15 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
         if last_said.elapsed().as_secs() >= 600 {
             last_said = Instant::now();
+            let refused = if guard_floor.is_some() {
+                format!(" {guarded} better settings refused for doing worse on a guarded piece.")
+            } else {
+                String::new()
+            };
             say(&format!(
-                "Generation {}, {} settings tried; best so far {:.2}% held back (defaults {:.2}%).                  {guarded} better settings refused for doing worse on a guarded piece.",
-                state.generation,
+                "{:.2} hours searched, {} settings tried; \
+                 best so far {:.2}% held back (defaults {:.2}%).{refused}",
+                state.searched_seconds / 3600.0,
                 state.evaluated,
                 state.best_scores.held_out * 100.0,
                 state.baseline.held_out * 100.0
@@ -864,6 +945,43 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         }
     }
     Ok(())
+}
+
+/// What the searches under a directory have done, in sentences.
+///
+/// The hours are what was actually spent searching, added up over every run there has
+/// ever been, and they keep counting as long as the state files are kept.
+pub fn report(directory: &Path) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    let mut hours = 0.0;
+    let mut tried = 0u64;
+    for target in [Target::Hands, Target::Fingers] {
+        let path = directory.join(target.name()).join("state.json");
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let state: State = serde_json::from_str(&text)
+            .with_context(|| format!("reading {}", path.display()))?;
+        hours += state.searched_seconds / 3600.0;
+        tried += state.evaluated;
+        lines.push(format!(
+            "{}: {:.2} hours, {} settings tried over {} generations.",
+            target.name(),
+            state.searched_seconds / 3600.0,
+            state.evaluated,
+            state.generation
+        ));
+        lines.push(format!(
+            "  agreement with the people who wrote the music down, on the third it never \
+             learned from: {:.2}%, against {:.2}% for the engine's defaults at the time.",
+            state.best_scores.test * 100.0,
+            state.baseline.test * 100.0
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(format!("Nothing has been searched under {} yet.", directory.display()));
+    } else {
+        lines.push(format!("Altogether: {hours:.2} hours, {tried} settings tried."));
+    }
+    Ok(lines)
 }
 
 fn score_all(examples: &Examples, weights: &Weights) -> Scores {
@@ -945,6 +1063,22 @@ mod tests {
         let held = spread.iter().filter(|b| **b == 1).count();
         let test = spread.iter().filter(|b| **b == 2).count();
         assert!((150..250).contains(&held) && (150..250).contains(&test), "{held} {test}");
+    }
+
+    /// The gate has to pass what the engine does now and refuse what breaks it, or it
+    /// is not a gate. The weights refused here are the ones an hour and a half of
+    /// searching against PDMX actually produced.
+    #[test]
+    fn a_setting_that_drops_held_notes_is_refused() {
+        assert!(holds_what_it_is_holding(&Weights::defaults(Target::Hands)));
+        let mut greedy = Weights::defaults(Target::Hands);
+        greedy.0.insert("hands.abandon".into(), 0.041);
+        greedy.0.insert("hands.overspan".into(), 0.4);
+        greedy.0.insert("hands.travel".into(), 0.0004);
+        greedy.0.insert("hands.register".into(), 6.0);
+        greedy.0.insert("hands.pivot_window".into(), 1.31);
+        greedy.0.insert("hands.one_hand_fraction".into(), 0.5);
+        assert!(!holds_what_it_is_holding(&greedy));
     }
 
     #[test]

@@ -19,12 +19,14 @@ the others improve.
 * **Hands** (`--target hands`) learns from scores whose source says which hand plays
   what: two-staff MusicXML, piano MIDI with a track per hand, or
   [PDMX](https://github.com/pnlong/PDMX). PDMX is a quarter of a million public
-  domain scores, of which about 15,000 are two-staff piano. `tools/pdmx_piano.py`
-  pulls those out of the 2.4 GB download; point `--scores` at the `PDMX/data`
-  folder it leaves.
+  domain scores, of which 21,538 are two-staff piano. `tools/pdmx_piano.py` pulls
+  those out of the download; point `--scores` at the `PDMX/data` folder it leaves.
 * **Fingers** (`--target fingers`) learns from the corpus, which is fingerings
-  somebody wrote. `opennote corpus add` reads MusicXML with printed fingerings. PDMX
-  can't help here: its scores were converted into a format that drops fingerings.
+  somebody wrote. `opennote corpus add` reads MusicXML with printed fingerings.
+  **PDMX cannot help here.** Its JSON drops fingerings, and its original MusicXML
+  barely has any: of 21,083 public domain piano scores, 35 carry a printed fingering
+  at all, 1,432 marks between them. Commercially usable fingering data is the thing
+  this project does not have, and no amount of searching makes up for it.
 
 Anything tuned on PIG must never ship. PIG is licensed for academic use only, like
 PianoVAM. Measure against it by all means (see [TRAINING.md](TRAINING.md)), but don't
@@ -85,6 +87,35 @@ To start it every time you log on, create a Task Scheduler task with the trigger
 log on" and that same command as the action. Stopping it is safe at any moment,
 whether by closing the window, Ctrl+C or turning the machine off: everything it needs
 to carry on is written after every generation, and the next run picks up from there.
+
+## How long it has run
+
+```bash
+target/release/opennote tune --report
+```
+
+```text
+hands: 41.75 hours, 1802184 settings tried over 150182 generations.
+  agreement with the people who wrote the music down, on the third it never learned
+  from: 91.43%, against 87.65% for the engine's defaults at the time.
+Altogether: 41.75 hours, 1802184 settings tried.
+```
+
+The hours are time actually spent searching, added up over every run there has ever
+been, and they carry on counting as long as `out/tune/` is kept. Time with the search
+stopped is not in them, so the number is one you can stand behind.
+
+Each promotion also writes the same figures into `models/weights.json` beside the
+weights, under names beginning with an underscore, so a setting carries its own
+provenance:
+
+```json
+  "_hands.searched_hours": 41.75,
+  "_hands.settings_tried": 1802184.0,
+  "_hands.examples": 5000.0
+```
+
+Those are ignored when the weights are applied.
 
 ## Reading what it did
 
