@@ -88,8 +88,13 @@ so leave them alone unless you mean it:
 ```bash
 cargo build --release -p on-cli
 target/release/opennote tune --target hands --scores path/to/PDMX/data
-target/release/opennote tune --target play  --scores path/to/PDMX/data
+target/release/opennote tune --target play  --scores path/to/PDMX/data     --limit 20000 --notes 120 --batch 200
 ```
+
+The playing target is given smaller numbers because a score costs about three hundred
+times as much to finger as it does to divide between the hands. The defaults suit the
+hand target; leave them on the playing one and a generation takes minutes rather than
+seconds.
 
 To keep every part of it improving and not just one, alternate the targets round and
 round. That is all `tools/tune_forever.sh` (and `tools\tune_forever.bat`) does:

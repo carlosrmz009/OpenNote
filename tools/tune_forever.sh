@@ -8,15 +8,21 @@
 #
 #   ./tools/tune_forever.sh ~/PDMX/PDMX/data
 #
-# On a Raspberry Pi, pass a smaller batch: a Pi is about ten times slower per core and
-# has four of them, so `--batch 150 --notes 80` keeps a generation to about a minute.
-# Memory is the other limit; fifteen thousand scores need about a gigabyte, and
-# `--limit 6000` brings that down if the board has less.
+# The two targets are given different numbers because a score costs about three hundred
+# times as much to finger as it does to divide between the hands. The hand target reads
+# whole pieces and judges a generation on six hundred of them; the playing target reads
+# a passage from each and judges on two hundred. Anything passed after the folder is
+# added to both, and overrides what is set here.
+#
+# On a Raspberry Pi — four cores, each about ten times slower — pass
+# `--batch 150 --notes 80 --limit 6000` to keep a generation near a minute and the whole
+# thing inside a gigabyte.
 set -e
 scores=${1:?usage: tune_forever.sh <PDMX/data folder> [extra opennote arguments...]}
 shift
 opennote=${OPENNOTE:-./target/release/opennote}
 while true; do
     "$opennote" tune --target hands --scores "$scores" --hours 4 "$@"
-    "$opennote" tune --target play --scores "$scores" --hours 4 "$@"
+    "$opennote" tune --target play --scores "$scores" --hours 4 \
+        --limit 20000 --notes 120 --batch 200 "$@"
 done

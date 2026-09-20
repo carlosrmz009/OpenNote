@@ -9,6 +9,11 @@ rem started again.
 rem
 rem     tools\tune_forever.bat D:\PDMX\PDMX\data
 rem
+rem The two targets are given different numbers because a score costs about three
+rem hundred times as much to finger as it does to divide between the hands. The hand
+rem target reads whole pieces and judges a generation on six hundred of them; the
+rem playing target reads a passage from each and judges on two hundred.
+rem
 rem To leave it running without it getting in the way, start it at low priority:
 rem
 rem     start "opennote tune" /low /min tools\tune_forever.bat D:\PDMX\PDMX\data
@@ -19,7 +24,8 @@ if "%~1"=="" (
 )
 set SCORES=%~1
 shift
+set EXTRA=%2 %3 %4 %5 %6
 :loop
-target\release\opennote.exe tune --target hands --scores "%SCORES%" --hours 4 %2 %3 %4 %5 %6
-target\release\opennote.exe tune --target play --scores "%SCORES%" --hours 4 %2 %3 %4 %5 %6
+target\release\opennote.exe tune --target hands --scores "%SCORES%" --hours 4 %EXTRA%
+target\release\opennote.exe tune --target play --scores "%SCORES%" --hours 4 --limit 20000 --notes 120 --batch 200 %EXTRA%
 goto loop
