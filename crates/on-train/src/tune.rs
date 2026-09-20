@@ -842,6 +842,11 @@ struct State {
     best_scores: Scores,
     /// What the engine's defaults scored, for comparison.
     baseline: Scores,
+    /// How many examples were in each third when those scores were measured. A search
+    /// that resumes on the same examples can trust what it already worked out; one
+    /// resumed on a different set cannot, and measures again.
+    #[serde(default)]
+    sizes: [usize; 3],
     /// The defaults' scale agreement, with and without the taught patterns, which a
     /// fingering setting may not fall below.
     scales: (f64, f64),
@@ -929,10 +934,17 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let mut state = match resumed {
         Some(mut state) => {
             // The examples may not be the ones it was started on — a bigger download, a
-            // different limit — so everything it compares against is measured again.
-            state.current_train = examples.score(&weights_of(&state.current), 0, threads);
-            state.baseline = score_all(examples, &weights_of(&defaults), threads);
-            state.best_scores = score_all(examples, &weights_of(&state.best), threads);
+            // different limit — and then everything it compares against has to be
+            // measured again. That is seven passes over the whole dataset, which for
+            // the playing target is the best part of an hour, so it is not done unless
+            // the examples really have changed.
+            if state.sizes != sizes {
+                say("The examples are not the ones this was started on; measuring again.");
+                state.current_train = examples.score(&weights_of(&state.current), 0, threads);
+                state.baseline = score_all(examples, &weights_of(&defaults), threads);
+                state.best_scores = score_all(examples, &weights_of(&state.best), threads);
+                state.sizes = sizes;
+            }
             say(&format!("Carrying on from generation {}.", state.generation));
             state
         }
@@ -957,6 +969,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 best: defaults.clone(),
                 best_scores: baseline,
                 baseline,
+                sizes,
                 scales,
             }
         }

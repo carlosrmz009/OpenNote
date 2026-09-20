@@ -204,6 +204,11 @@ Everything goes under `out/tune/<target>/`:
   honest figure. `current_train` is where the search stands *on that generation's draw*,
   so it jumps about; that is the sampling, not the search.
 * **`state.json`** is where it is. Delete it to start from the engine's defaults again.
+  It also holds what the defaults and the best setting scored on whole thirds, which is
+  seven passes over the dataset to work out — the best part of an hour for the playing
+  target — so a search that resumes on the same number of examples trusts what is in
+  there rather than measuring again. **Change the engine and those figures are stale:
+  delete `state.json` after a change to the code the search is grading.**
 
 Each improvement is written to `models/weights.json`, and every target shares that file.
 To try it:
