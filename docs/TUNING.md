@@ -154,15 +154,20 @@ target/release/opennote tune --report
 ```
 
 ```text
-hands: 41.75 hours, 1802184 settings tried over 150182 generations.
+hands: 41.75 hours, 1802184 settings tried.
   agreement with the people who wrote the music down, on the third it never learned
   from: 91.43%, against 86.95% for the engine's defaults at the time.
-Altogether: 41.75 hours, 1802184 settings tried.
+play: 12.10 hours, 401220 settings tried.
+  music a hand can play comfortably, on the third it never learned from: 99.41%,
+  against 98.93% for the engine's defaults at the time.
+Altogether: 53.85 hours, 2203404 settings tried.
 ```
 
 The hours are time actually spent searching, added up over every run there has ever
-been, and they carry on counting as long as `out/tune/` is kept. Time with the search
-stopped is not in them, so the number is one you can stand behind.
+been. Time with the search stopped is not in them, so the number is one you can stand
+behind. They live in `out/tune/<target>/hours.json`, apart from the search's own state,
+because that state has to be thrown away whenever the engine changes under it and the
+hours do not — they were spent either way. Nothing but deleting `out/tune/` resets them.
 
 Each promotion also writes the same figures into `models/weights.json` beside the
 weights, under names beginning with an underscore, so a setting carries its own

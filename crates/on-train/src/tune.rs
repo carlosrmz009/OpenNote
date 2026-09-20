@@ -852,6 +852,40 @@ struct State {
     scales: (f64, f64),
 }
 
+/// Everything that has ever been spent searching one target, kept apart from the
+/// search's own state.
+///
+/// The state file has to be thrown away whenever the engine changes under it, because
+/// what it remembers the defaults scoring is no longer what they score. The hours are
+/// not like that: they were spent, and they were spent on this. So they are kept in
+/// their own file, which nothing in the ordinary run of things deletes, and they only
+/// ever go up.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct Ledger {
+    searched_seconds: f64,
+    settings_tried: u64,
+}
+
+impl Ledger {
+    fn path(directory: &Path) -> PathBuf {
+        directory.join("hours.json")
+    }
+
+    fn load(directory: &Path) -> Self {
+        std::fs::read_to_string(Self::path(directory))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, directory: &Path) -> Result<()> {
+        let partial = directory.join("hours.json.partial");
+        std::fs::write(&partial, serde_json::to_string(self)?)?;
+        std::fs::rename(&partial, Self::path(directory))?;
+        Ok(())
+    }
+}
+
 /// How a search is run.
 pub struct TuneConfig {
     /// Where the state, the log and the weights go.
@@ -996,6 +1030,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let deadline = config.hours.map(|h| std::time::Duration::from_secs_f64(h * 3600.0));
     let mut last_said = Instant::now();
     let mut since = Instant::now();
+    let mut ledger = Ledger::load(&directory);
     loop {
         if deadline.is_some_and(|d| started.elapsed() >= d) {
             say(&format!(
@@ -1047,7 +1082,10 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         let scored = &scored[2..];
         state.generation += 1;
         state.evaluated += children.len() as u64;
-        state.searched_seconds += since.elapsed().as_secs_f64();
+        let spent = since.elapsed().as_secs_f64();
+        state.searched_seconds += spent;
+        ledger.searched_seconds += spent;
+        ledger.settings_tried += children.len() as u64;
         since = Instant::now();
 
         let (index, &train) = scored
@@ -1156,9 +1194,9 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 let name = target.name();
                 file.0.insert(
                     format!("_{name}.searched_hours"),
-                    (state.searched_seconds / 3600.0) as f32,
+                    (ledger.searched_seconds / 3600.0) as f32,
                 );
-                file.0.insert(format!("_{name}.settings_tried"), state.evaluated as f32);
+                file.0.insert(format!("_{name}.settings_tried"), ledger.settings_tried as f32);
                 file.0.insert(format!("_{name}.examples"), sizes.iter().sum::<usize>() as f32);
                 file.save(&config.weights)?;
                 event = "promoted";
@@ -1194,6 +1232,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         let partial = directory.join("state.json.partial");
         std::fs::write(&partial, serde_json::to_string(&state)?)?;
         std::fs::rename(&partial, &state_path)?;
+        ledger.save(&directory)?;
 
         if last_said.elapsed().as_secs() >= 600 {
             last_said = Instant::now();
@@ -1224,19 +1263,26 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
     let mut hours = 0.0;
     let mut tried = 0u64;
     for target in Target::ALL {
-        let path = directory.join(target.name()).join("state.json");
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let directory = directory.join(target.name());
+        let ledger = Ledger::load(&directory);
+        if ledger.searched_seconds <= 0.0 {
+            continue;
+        }
+        hours += ledger.searched_seconds / 3600.0;
+        tried += ledger.settings_tried;
+        lines.push(format!(
+            "{}: {:.2} hours, {} settings tried.",
+            target.name(),
+            ledger.searched_seconds / 3600.0,
+            ledger.settings_tried
+        ));
+        let path = directory.join("state.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            lines.push("  nothing kept from the search running now yet.".into());
+            continue;
+        };
         let state: State = serde_json::from_str(&text)
             .with_context(|| format!("reading {}", path.display()))?;
-        hours += state.searched_seconds / 3600.0;
-        tried += state.evaluated;
-        lines.push(format!(
-            "{}: {:.2} hours, {} settings tried over {} generations.",
-            target.name(),
-            state.searched_seconds / 3600.0,
-            state.evaluated,
-            state.generation
-        ));
         let measure = match target {
             Target::Play => "music a hand can play comfortably, on the third it never \
                              learned from",
