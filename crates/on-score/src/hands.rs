@@ -56,12 +56,20 @@ impl Default for HandAssignment {
     fn default() -> Self {
         Self {
             profile: HandProfile::default(),
-            overspan_weight: 4.0,
-            travel_weight: 0.004,
-            register_weight: 0.6,
-            abandon_weight: 0.4,
-            pivot_window_seconds: 4.0,
-            one_hand_fraction: 0.85,
+            // Searched, not chosen. `opennote tune --target hands` ran against 14,885
+            // two-staff piano scores from PDMX and these agreed with the hand division
+            // their composers wrote 88.47% of the time on the third of the dataset it
+            // was never graded on, against 86.95% for the numbers that were here
+            // before. The gain is larger, not smaller, on the music that is hard —
+            // where the hands share the keyboard, 73.99% against 72.01% — which is
+            // what says this is a better reading of the problem rather than a better
+            // fit to easy music. See docs/TUNING.md.
+            overspan_weight: 0.76,
+            travel_weight: 0.00004,
+            register_weight: 26.0,
+            abandon_weight: 0.004,
+            pivot_window_seconds: 1.5,
+            one_hand_fraction: 0.5,
         }
     }
 }
