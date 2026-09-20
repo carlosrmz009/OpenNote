@@ -22,10 +22,23 @@
 //! * **test** — never consulted. It is reported alongside each promotion so that the
 //!   figure somebody reads in the morning is one the search could not have chased.
 //!
-//! Fingering settings have one more gate. The major scales have a settled answer, and a
-//! setting that fingers them worse than the defaults do is rejected however well it
-//! agrees with the corpus: agreeing with a corpus by forgetting how scales go is not an
-//! improvement anyone wants.
+//! A generation is judged on a few hundred examples drawn afresh, not on the whole of
+//! the training third: see [`Examples::sample`] for why that is what makes a dataset of
+//! any size usable at all. Promotion is always decided on whole thirds.
+//!
+//! There are three things to search for, and they differ only in what the answer is
+//! compared against. [`Target::Hands`] has real ground truth — a two-staff score says
+//! which hand plays what — and there are tens of thousands of scores of it.
+//! [`Target::Fingers`] has ground truth too, fingerings a pianist wrote, and almost
+//! none of it exists. [`Target::Play`] is for the gap between those two: it grades a
+//! fingering by measuring it against the hand model afterwards, which can be done on
+//! every score there is, and asks whether a hand could play what the engine wrote and
+//! how comfortably rather than whether a pianist would have written the same.
+//!
+//! Fingering settings, however they are graded, have one more gate. The major scales
+//! have a settled answer, and a setting that fingers them worse than the defaults do is
+//! rejected however well it does otherwise: agreeing with a measure by forgetting how
+//! scales go is not an improvement anyone wants.
 //!
 //! Everything the search needs to carry on is written after every generation, so it can
 //! be stopped at any moment and started again without losing more than one.
@@ -51,8 +64,16 @@ use crate::eval::evaluate;
 pub enum Target {
     /// Which hand plays each note.
     Hands,
-    /// Which finger plays each note.
+    /// Which finger plays each note, graded against fingerings a pianist wrote.
     Fingers,
+    /// Which finger plays each note, graded against what a hand can actually do.
+    ///
+    /// The same numbers as `Fingers`, judged differently. Fingerings somebody wrote
+    /// down barely exist — of a quarter of a million public-domain scores, thirty-five
+    /// carry one — so on nearly all music the question cannot be "did it write what a
+    /// pianist wrote". It can be "could a hand play what it wrote, and comfortably",
+    /// and that has an answer on every score there is.
+    Play,
 }
 
 impl Target {
@@ -60,8 +81,12 @@ impl Target {
         match self {
             Target::Hands => "hands",
             Target::Fingers => "fingers",
+            Target::Play => "play",
         }
     }
+
+    /// Every target there is, in the order a report should read them.
+    pub const ALL: [Target; 3] = [Target::Hands, Target::Fingers, Target::Play];
 }
 
 /// Engine weights by name, as they are saved and loaded.
@@ -147,11 +172,17 @@ struct Knob {
 }
 
 impl Knob {
-    /// A tenth to ten times the default. Every weight here is a cost, and a cost's
-    /// size only means anything against the others; a factor of ten either way is
-    /// enough to switch one term off or let it dominate.
+    /// A hundredth to a hundred times the default. Every weight here is a cost, and a
+    /// cost's size only means anything against the others, so the bound is a factor
+    /// rather than an amount.
+    ///
+    /// It was a factor of ten to begin with, on the reasoning that ten either way is
+    /// enough to switch a term off or let it dominate. The first long search ended
+    /// with five of its six numbers sitting exactly on a bound, which is the search
+    /// saying the answer is on the other side of it. A bound a search leans on is a
+    /// fence, not a bound.
     fn scaled(name: impl Into<String>, default: f32) -> Self {
-        Self { name: name.into(), default, min: default / 10.0, max: default * 10.0 }
+        Self { name: name.into(), default, min: default / 100.0, max: default * 100.0 }
     }
 }
 
@@ -171,7 +202,8 @@ fn knobs(target: Target) -> Vec<Knob> {
                 Knob { name: "hands.one_hand_fraction".into(), default: d.one_hand_fraction, min: 0.5, max: 1.2 },
             ]
         }
-        Target::Fingers => {
+        // The same numbers; only what they are graded against differs.
+        Target::Fingers | Target::Play => {
             let d = FingeringOptions::default();
             let rules = RuleWeights::default();
             let s = d.biomech.strain;
@@ -219,9 +251,47 @@ pub enum Examples {
     Hands([Vec<(String, Score)>; 3]),
     /// Fingered pieces from the corpus.
     Fingers([Vec<Piece>; 3]),
+    /// Scores to be fingered and then measured, with the hands already settled.
+    Play([Vec<(String, Score)>; 3]),
 }
 
 impl Examples {
+    /// The same scores, to be judged on whether a hand could play the fingering rather
+    /// than on which hand plays what.
+    ///
+    /// Every note is put in the hand its source says, so what is measured is the
+    /// fingering on its own and not the engine's guess at the hands on top of it.
+    ///
+    /// Each score is cut to `notes` of them, from the middle, unless that is 0.
+    /// Fingering a score costs about three hundred times what deciding its hands does —
+    /// it is a search over five fingers at every note rather than two hands at every
+    /// chord — and that cost is what a generation is made of. A passage from each of
+    /// six thousand pieces says more per second than the whole of six hundred, and
+    /// fingering has no long-range structure that only whole pieces would show.
+    pub fn playing(self, notes: usize) -> Self {
+        match self {
+            Examples::Hands(mut parts) => {
+                for (_, score) in parts.iter_mut().flatten() {
+                    if let Some(truth) = on_score::hands::truth_hands(score) {
+                        for (note, hand) in score.notes.iter_mut().zip(truth) {
+                            note.hand = hand;
+                        }
+                    }
+                    if notes > 0 && score.notes.len() > notes {
+                        let from = (score.notes.len() - notes) / 2;
+                        score.notes.drain(..from);
+                        score.notes.truncate(notes);
+                        // A note's identifier is its place in the list, so cutting the
+                        // list renumbers every note that is left.
+                        score.finalise();
+                    }
+                }
+                Examples::Play(parts)
+            }
+            other => other,
+        }
+    }
+
     /// Fingered pieces, divided by piece so one piece's annotations stay together.
     pub fn fingers(pieces: Vec<Piece>) -> Self {
         let mut parts: [Vec<Piece>; 3] = Default::default();
@@ -291,64 +361,47 @@ impl Examples {
     /// How many examples are in each third.
     pub fn sizes(&self) -> [usize; 3] {
         match self {
-            Examples::Hands(parts) => [parts[0].len(), parts[1].len(), parts[2].len()],
+            Examples::Hands(parts) | Examples::Play(parts) => {
+                [parts[0].len(), parts[1].len(), parts[2].len()]
+            }
             Examples::Fingers(parts) => [parts[0].len(), parts[1].len(), parts[2].len()],
         }
     }
 
-    /// How often a setting agrees with every example, whichever third it is in.
+    /// How well a setting does on every example, whichever third it is in.
     ///
     /// For checking a setting against music the search never saw at all — somebody's
     /// own test pieces — rather than for choosing one.
     pub fn agreement(&self, weights: &Weights) -> f64 {
-        match self {
-            Examples::Hands(parts) => {
-                let mut options = HandAssignment::default();
-                weights.apply_to_hands(&mut options);
-                let (mut right, mut judged) = (0usize, 0usize);
-                for (_, score) in parts.iter().flatten() {
-                    if let Some((r, j)) = on_score::hands::agreement(score, &options) {
-                        right += r;
-                        judged += j;
-                    }
-                }
-                right as f64 / judged.max(1) as f64
-            }
-            Examples::Fingers(parts) => {
-                let mut options = FingeringOptions::default();
-                weights.apply_to_fingering(&mut options);
-                let all: Vec<Piece> = parts.iter().flatten().cloned().collect();
-                f64::from(evaluate(&all, &options, None).general)
-            }
+        let (mut good, mut of) = (0.0, 0.0);
+        for part in 0..3 {
+            let all: Vec<usize> = (0..self.sizes()[part]).collect();
+            let (g, o) = self.tally(weights, part, &all);
+            good += g;
+            of += o;
         }
+        good / of.max(1.0)
     }
 
-    /// How often a setting agrees with each example on its own, in a fixed order.
+    /// How well it does on each example on its own, in a fixed order.
     fn each(&self, weights: &Weights) -> Vec<(String, f64)> {
-        match self {
-            Examples::Hands(parts) => {
-                let mut options = HandAssignment::default();
-                weights.apply_to_hands(&mut options);
-                parts
-                    .iter()
-                    .flatten()
-                    .filter_map(|(name, score)| {
-                        let (right, judged) = on_score::hands::agreement(score, &options)?;
-                        Some((name.clone(), right as f64 / judged.max(1) as f64))
-                    })
-                    .collect()
+        let mut out = Vec::new();
+        for part in 0..3 {
+            for index in 0..self.sizes()[part] {
+                let (good, of) = self.tally(weights, part, &[index]);
+                out.push((self.name_of(part, index), good / of.max(1.0)));
             }
+        }
+        out
+    }
+
+    /// What an example is called, for the guard's report.
+    fn name_of(&self, part: usize, index: usize) -> String {
+        match self {
+            Examples::Hands(parts) | Examples::Play(parts) => parts[part][index].0.clone(),
             Examples::Fingers(parts) => {
-                let mut options = FingeringOptions::default();
-                weights.apply_to_fingering(&mut options);
-                parts
-                    .iter()
-                    .flatten()
-                    .map(|piece| {
-                        let rate = evaluate(std::slice::from_ref(piece), &options, None).general;
-                        (format!("{} ({})", piece.piece, piece.annotator), f64::from(rate))
-                    })
-                    .collect()
+                let piece = &parts[part][index];
+                format!("{} ({})", piece.piece, piece.annotator)
             }
         }
     }
@@ -358,32 +411,135 @@ impl Examples {
         match self {
             Examples::Hands(_) => Target::Hands,
             Examples::Fingers(_) => Target::Fingers,
+            Examples::Play(_) => Target::Play,
         }
     }
 
-    /// How often a setting agrees with the examples in one third, from 0 to 1.
-    fn score(&self, weights: &Weights, part: usize) -> f64 {
+    /// How well a setting does on a whole third, from 0 to 1, over every core.
+    ///
+    /// This is the slow one, and it is only ever asked for when something is about to
+    /// be promoted or reported — never inside a generation, which is why it is free to
+    /// take the whole machine.
+    fn score(&self, weights: &Weights, part: usize, threads: usize) -> f64 {
+        let all: Vec<usize> = (0..self.sizes()[part]).collect();
+        if all.is_empty() {
+            return 0.0;
+        }
+        let chunk = all.len().div_ceil(threads.max(1)).max(1);
+        let (good, of) = std::thread::scope(|scope| {
+            let handles: Vec<_> = all
+                .chunks(chunk)
+                .map(|pick| scope.spawn(move || self.tally(weights, part, pick)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or((0.0, 0.0)))
+                .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
+        });
+        good / of.max(1.0)
+    }
+
+    /// How well it does on `size` of that third, drawn by `seed`.
+    ///
+    /// This is what lets a dataset of any size be used at all. Every example is worked
+    /// through again for every setting tried, so grading each setting against fifteen
+    /// thousand scores makes a generation fifteen thousand scores long, and a night is
+    /// then a few hundred settings. Grading it against a few hundred drawn afresh each
+    /// generation costs what a few hundred cost, and over a night every score in the
+    /// dataset is still seen many times over.
+    ///
+    /// What matters is that every setting in one generation is judged on the *same*
+    /// draw: a score on one sample means nothing held against a score on another. The
+    /// draw being different next generation is not a problem but the point, since a
+    /// setting that wins only because it suits one handful of pieces stops winning as
+    /// soon as the handful changes. Nothing is ever *promoted* on a sample; that is
+    /// decided on the whole of the third the search never learns from.
+    ///
+    /// `size` of 0, or more than there are, is all of them.
+    fn sample(&self, weights: &Weights, part: usize, seed: u64, size: usize) -> f64 {
+        let len = self.sizes()[part];
+        if len == 0 {
+            return 0.0;
+        }
+        let (good, of) = self.tally(weights, part, &draw(seed, size, len));
+        good / of.max(1.0)
+    }
+
+    /// What one pass over some of a third counted: how much went right, out of how
+    /// much there was.
+    ///
+    /// Counts rather than a rate, because passes are split across cores and a rate
+    /// cannot be added to another rate. Everything else here is this divided.
+    fn tally(&self, weights: &Weights, part: usize, pick: &[usize]) -> (f64, f64) {
         match self {
             Examples::Hands(parts) => {
                 let mut options = HandAssignment::default();
                 weights.apply_to_hands(&mut options);
-                let (mut right, mut judged) = (0usize, 0usize);
-                for (_, score) in &parts[part] {
+                let (mut right, mut judged) = (0.0, 0.0);
+                for (_, score) in pick.iter().map(|i| &parts[part][*i]) {
                     if let Some((r, j)) = on_score::hands::agreement(score, &options) {
-                        right += r;
-                        judged += j;
+                        right += r as f64;
+                        judged += j as f64;
                     }
                 }
-                right as f64 / judged.max(1) as f64
+                (right, judged)
+            }
+            Examples::Play(parts) => {
+                let options = fingering_options(weights);
+                let spans = options.span_model.table();
+                let (mut good, mut of) = (0.0, 0.0);
+                for (_, score) in pick.iter().map(|i| &parts[part][*i]) {
+                    let solution = finger_score(score, &options);
+                    let measured = on_fingering::measure_solution(score, &solution, spans);
+                    let faults = measured.unplayable as f64
+                        + STRETCH_PRICE * measured.stretched as f64;
+                    let notes = score.notes.len() as f64;
+                    good += (notes - faults).max(0.0);
+                    of += notes;
+                }
+                (good, of)
             }
             Examples::Fingers(parts) => {
-                let mut options = FingeringOptions::default();
-                weights.apply_to_fingering(&mut options);
-                f64::from(evaluate(&parts[part], &options, None).general)
+                let options = fingering_options(weights);
+                let chosen: Vec<Piece> = pick.iter().map(|i| parts[part][*i].clone()).collect();
+                let rates = evaluate(&chosen, &options, None);
+                // A mean over the pieces in this pass, kept as a total so that passes
+                // over different pieces can be added together.
+                (f64::from(rates.general) * rates.pieces as f64, rates.pieces as f64)
             }
         }
     }
 }
+
+/// Which of `len` examples a generation is judged on: `size` of them, chosen by
+/// `seed`, or all of them if that is 0 or more than there are.
+///
+/// Drawn with replacement, which for a few hundred out of thousands is a handful of
+/// repeats and no reason to keep a set around to avoid them.
+fn draw(seed: u64, size: usize, len: usize) -> Vec<usize> {
+    if size == 0 || size >= len {
+        return (0..len).collect();
+    }
+    let mut rng = seed | 1;
+    (0..size).map(|_| (uniform(&mut rng) * len as f64) as usize % len).collect()
+}
+
+/// The engine's fingering settings with these weights applied.
+fn fingering_options(weights: &Weights) -> FingeringOptions {
+    let mut options = FingeringOptions::default();
+    weights.apply_to_fingering(&mut options);
+    options
+}
+
+/// What one stretch beyond a comfortable span costs, against one transition a hand
+/// could not make at all, counted in notes.
+///
+/// A quarter. The two are not the same kind of fault: one is a fingering that cannot be
+/// performed, the other one that can, tightly. But a fingering that is never impossible
+/// and always tight is not one anybody wants either, and without the second term the
+/// measure is flat over most music — and a flat measure is a week of searching that
+/// finds nothing.
+const STRETCH_PRICE: f64 = 0.25;
 
 /// FNV-1a.
 fn fnv(text: &str) -> u64 {
@@ -659,6 +815,9 @@ pub struct TuneConfig {
     pub hours: Option<f64>,
     /// Candidates tried at once; one per core by default.
     pub threads: usize,
+    /// How many examples each generation is judged on, drawn afresh every time. 0 is
+    /// all of them, which is slower by however many times more there are.
+    pub batch: usize,
     /// Pieces no promoted setting may do worse on than the defaults do.
     ///
     /// A large dataset is mostly easy music, and a setting can win on it by getting
@@ -714,7 +873,12 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         "{} examples to learn from, {} held back, {} kept for the final test.",
         sizes[0], sizes[1], sizes[2]
     ));
+    let batch = if config.batch == 0 { sizes[0] } else { config.batch.min(sizes[0]) };
+    if batch < sizes[0] {
+        say(&format!("Judging each generation on {batch} of them, drawn afresh each time."));
+    }
 
+    let threads = config.threads.max(1);
     let defaults: Vec<f64> = knobs.iter().map(|k| f64::from(k.default).ln()).collect();
     let resumed = std::fs::read_to_string(&state_path)
         .ok()
@@ -724,18 +888,18 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         Some(mut state) => {
             // The examples may not be the ones it was started on — a bigger download, a
             // different limit — so everything it compares against is measured again.
-            state.current_train = examples.score(&weights_of(&state.current), 0);
-            state.baseline = score_all(examples, &weights_of(&defaults));
-            state.best_scores = score_all(examples, &weights_of(&state.best));
+            state.current_train = examples.score(&weights_of(&state.current), 0, threads);
+            state.baseline = score_all(examples, &weights_of(&defaults), threads);
+            state.best_scores = score_all(examples, &weights_of(&state.best), threads);
             say(&format!("Carrying on from generation {}.", state.generation));
             state
         }
         None => {
-            let baseline = score_all(examples, &weights_of(&defaults));
-            let scales = if target == Target::Fingers {
-                scale_agreement(&FingeringOptions::default())
-            } else {
+            let baseline = score_all(examples, &weights_of(&defaults), threads);
+            let scales = if target == Target::Hands {
                 (0.0, 0.0)
+            } else {
+                scale_agreement(&FingeringOptions::default())
             };
             State {
                 target,
@@ -775,7 +939,6 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
     let started = Instant::now();
     let deadline = config.hours.map(|h| std::time::Duration::from_secs_f64(h * 3600.0));
-    let threads = config.threads.max(1);
     let mut last_said = Instant::now();
     let mut since = Instant::now();
     loop {
@@ -786,6 +949,10 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             ));
             break;
         }
+
+        // Which examples this generation is judged on. Every candidate in it gets the
+        // same ones, and next generation gets different ones.
+        let draw = state.rng ^ state.generation.wrapping_mul(0x9e37_79b9_7f4a_7c15);
 
         // Each child moves a few of the knobs, not all of them. With dozens of knobs,
         // moving every one at once almost always breaks something that was right.
@@ -806,16 +973,23 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 child
             })
             .collect();
+        // Where the search stands and the best it has found are judged on this
+        // generation's draw alongside the children, because that is the only way their
+        // scores can be compared with the children's at all.
+        let running: Vec<&Vec<f64>> =
+            [&state.current, &state.best].into_iter().chain(children.iter()).collect();
         let scored: Vec<f64> = std::thread::scope(|scope| {
-            let handles: Vec<_> = children
+            let handles: Vec<_> = running
                 .iter()
-                .map(|child| {
-                    let weights = weights_of(child);
-                    scope.spawn(move || examples.score(&weights, 0))
+                .map(|point| {
+                    let weights = weights_of(point);
+                    scope.spawn(move || examples.sample(&weights, 0, draw, batch))
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap_or(f64::MIN)).collect()
         });
+        let (here, best_here) = (scored[0], scored[1]);
+        let scored = &scored[2..];
         state.generation += 1;
         state.evaluated += children.len() as u64;
         state.searched_seconds += since.elapsed().as_secs_f64();
@@ -827,7 +1001,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             .max_by(|a, b| a.1.total_cmp(b.1))
             .expect("at least one child");
         let mut event = "";
-        if train > state.current_train + 1e-12 {
+        state.current_train = here;
+        if train > here + 1e-12 {
             state.current = children[index].clone();
             state.current_train = train;
             state.step = (state.step * 1.5).min(STEP_MAX);
@@ -835,8 +1010,9 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         } else {
             // A tie is taken too. The score has wide plateaus, and the only way across
             // one is to be allowed to wander on it.
-            if train >= state.current_train - 1e-12 {
+            if train >= here - 1e-12 {
                 state.current = children[index].clone();
+                state.current_train = train;
             }
             state.step *= 0.9;
             state.stalled += 1;
@@ -850,9 +1026,12 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         }
 
         // Promote only what does better on the pieces it never learned from as well.
-        if state.current_train > state.best_scores.train + 1e-12 {
+        // Beating the best on this generation's draw is only what makes it worth the
+        // asking; everything below this line is measured on whole thirds, so a promotion
+        // is never something a lucky sample bought.
+        if state.current_train > best_here + 1e-12 {
             let weights = weights_of(&state.current);
-            let held_out = examples.score(&weights, 1);
+            let held_out = examples.score(&weights, 1, threads);
             let sane = target != Target::Hands || holds_what_it_is_holding(&weights);
             let scales_kept = target == Target::Hands || {
                 let mut options = FingeringOptions::default();
@@ -877,9 +1056,9 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             if kept {
                 state.best = state.current.clone();
                 state.best_scores = Scores {
-                    train: state.current_train,
+                    train: examples.score(&weights, 0, threads),
                     held_out,
-                    test: examples.score(&weights, 2),
+                    test: examples.score(&weights, 2, threads),
                 };
                 let mut file = Weights::load(&config.weights).unwrap_or_default();
                 file.0.extend(weights.0);
@@ -955,7 +1134,7 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     let mut hours = 0.0;
     let mut tried = 0u64;
-    for target in [Target::Hands, Target::Fingers] {
+    for target in Target::ALL {
         let path = directory.join(target.name()).join("state.json");
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         let state: State = serde_json::from_str(&text)
@@ -969,9 +1148,14 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
             state.evaluated,
             state.generation
         ));
+        let measure = match target {
+            Target::Play => "music a hand can play comfortably, on the third it never \
+                             learned from",
+            _ => "agreement with the people who wrote the music down, on the third it \
+                  never learned from",
+        };
         lines.push(format!(
-            "  agreement with the people who wrote the music down, on the third it never \
-             learned from: {:.2}%, against {:.2}% for the engine's defaults at the time.",
+            "  {measure}: {:.2}%, against {:.2}% for the engine's defaults at the time.",
             state.best_scores.test * 100.0,
             state.baseline.test * 100.0
         ));
@@ -984,11 +1168,11 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-fn score_all(examples: &Examples, weights: &Weights) -> Scores {
+fn score_all(examples: &Examples, weights: &Weights, threads: usize) -> Scores {
     Scores {
-        train: examples.score(weights, 0),
-        held_out: examples.score(weights, 1),
-        test: examples.score(weights, 2),
+        train: examples.score(weights, 0, threads),
+        held_out: examples.score(weights, 1, threads),
+        test: examples.score(weights, 2, threads),
     }
 }
 
@@ -1079,6 +1263,65 @@ mod tests {
         greedy.0.insert("hands.pivot_window".into(), 1.31);
         greedy.0.insert("hands.one_hand_fraction".into(), 0.5);
         assert!(!holds_what_it_is_holding(&greedy));
+    }
+
+    /// A few scores of the same shape, to count over.
+    fn some_music() -> Vec<(String, Score)> {
+        (0..7u8)
+            .map(|i| {
+                let pitches: Vec<u8> = (0..40).map(|n| 55 + i + (n * 5) % 19).collect();
+                (format!("piece-{i}"), melody(&pitches, Hand::Right))
+            })
+            .collect()
+    }
+
+    /// Splitting a pass over the cores has to count exactly what one core counts, or
+    /// the figure reported in the morning depends on the machine it ran on.
+    #[test]
+    fn a_pass_split_across_cores_counts_the_same() {
+        let examples = Examples::Play([some_music(), Vec::new(), Vec::new()]);
+        let weights = Weights::defaults(Target::Play);
+        let one = examples.score(&weights, 0, 1);
+        assert!((0.0..=1.0).contains(&one), "{one}");
+        for threads in [2, 3, 8, 64] {
+            assert_eq!(one, examples.score(&weights, 0, threads), "on {threads} threads");
+        }
+    }
+
+    /// Every setting in a generation has to be judged on the same draw, and the next
+    /// generation on a different one. Otherwise the comparison between two settings is
+    /// a comparison between two sets of music.
+    #[test]
+    fn a_generations_draw_is_the_same_for_every_setting_and_new_next_time() {
+        assert_eq!(draw(11, 300, 9000), draw(11, 300, 9000));
+        assert_ne!(draw(11, 300, 9000), draw(12, 300, 9000));
+        assert!(draw(11, 300, 9000).iter().all(|i| *i < 9000));
+        // Asking for as many as there are, or for none, is all of them in order.
+        assert_eq!(draw(11, 0, 5), vec![0, 1, 2, 3, 4]);
+        assert_eq!(draw(11, 9, 5), vec![0, 1, 2, 3, 4]);
+        // Over many generations every example is drawn, rather than the same tenth of
+        // them every time.
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..200 {
+            seen.extend(draw(seed, 20, 300));
+        }
+        assert_eq!(seen.len(), 300, "only {} of 300 were ever drawn", seen.len());
+    }
+
+    /// The playing target cuts each score down, and takes it from the middle rather
+    /// than the opening, which is where a piece is least like itself.
+    #[test]
+    fn playing_keeps_the_middle_of_a_score() {
+        let pitches: Vec<u8> = (0..100).map(|n| 40 + n / 2).collect();
+        let score = melody(&pitches, Hand::Right);
+        let examples = Examples::Hands([vec![("piece".into(), score)], Vec::new(), Vec::new()]);
+        let Examples::Play(parts) = examples.playing(10) else { panic!("not the playing target") };
+        let kept = &parts[0][0].1.notes;
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept[0].midi, pitches[45]);
+        // A note's identifier is where it sits in the list, and everything that looks a
+        // note up goes through that, so the cut has to renumber them.
+        assert!(kept.iter().enumerate().all(|(i, n)| n.id == NoteId(i as u32)));
     }
 
     #[test]

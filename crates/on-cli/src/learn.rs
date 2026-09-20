@@ -477,16 +477,31 @@ pub struct TuneArgs {
     #[arg(long, value_enum, default_value_t = TuneTarget::Hands)]
     pub target: TuneTarget,
 
-    /// For `--target hands`: scores or folders of scores whose source says which hand
-    /// plays what — two-staff MusicXML, or piano MIDI with a track per hand.
+    /// For `--target hands` and `--target play`: scores or folders of scores whose
+    /// source says which hand plays what — two-staff MusicXML, or piano MIDI with a
+    /// track per hand.
     #[arg(long, num_args = 1..)]
     pub scores: Vec<PathBuf>,
 
-    /// For `--target hands`: the most scores to learn from. Every one of them is
-    /// fingered again for every setting tried, so this is what a generation costs;
-    /// more of them generalises better and moves slower.
-    #[arg(long, default_value_t = 5000)]
+    /// The most scores to keep. Nought, the default, keeps every one there is: memory
+    /// is the only limit, and fifteen thousand of them is about a gigabyte. What a
+    /// generation costs is `--batch`, not this.
+    #[arg(long, default_value_t = 0)]
     pub limit: usize,
+
+    /// How many scores each generation is judged on, drawn afresh every generation.
+    /// This is what a generation costs. Nought uses every one kept, which is slower by
+    /// however many times more there are and buys nothing: a few hundred drawn again
+    /// each time says as much, and over a night the whole dataset is seen many times.
+    #[arg(long, default_value_t = 600)]
+    pub batch: usize,
+
+    /// For `--target play`: cut each score to this many notes, from the middle.
+    /// Fingering a score costs about three hundred times what deciding its hands does,
+    /// and a passage from each of six thousand pieces says more per second than the
+    /// whole of six hundred. Nought keeps whole pieces.
+    #[arg(long, default_value_t = 200)]
+    pub notes: usize,
 
     /// For `--target hands`: keep only music where at least this share of notes falls
     /// inside the other hand's usual range. Nought, the default, learns from the
@@ -538,8 +553,10 @@ pub struct TuneArgs {
 pub enum TuneTarget {
     /// Which hand plays each note.
     Hands,
-    /// Which finger plays each note.
+    /// Which finger plays each note, against fingerings a pianist wrote.
     Fingers,
+    /// Which finger plays each note, against what a hand can actually do.
+    Play,
 }
 
 /// Search the engine's weights until stopped or out of time.
@@ -554,18 +571,23 @@ pub fn tune(args: TuneArgs) -> Result<()> {
     }
 
     let examples = match args.target {
-        TuneTarget::Hands => {
+        TuneTarget::Hands | TuneTarget::Play => {
             if args.scores.is_empty() {
                 bail!("give --scores: files or folders of two-staff MusicXML or two-track piano MIDI");
             }
             println!("Reading scores...");
             let mut last = std::time::Instant::now();
-            Examples::hands(&args.scores, args.limit, args.min_shared, |tried, kept| {
+            let limit = if args.limit == 0 { usize::MAX } else { args.limit };
+            let read = Examples::hands(&args.scores, limit, args.min_shared, |tried, kept| {
                 if last.elapsed().as_secs() >= 10 {
                     last = std::time::Instant::now();
                     println!("  {tried} files read, {kept} usable");
                 }
-            })?
+            })?;
+            match args.target {
+                TuneTarget::Play => read.playing(args.notes),
+                _ => read,
+            }
         }
         TuneTarget::Fingers => {
             let pieces = Corpus::at(&args.corpus)?.load()?;
@@ -592,6 +614,9 @@ pub fn tune(args: TuneArgs) -> Result<()> {
     } else {
         Some(match args.target {
             TuneTarget::Hands => Examples::hands(&args.guard, usize::MAX, 0.0, |_, _| {})?,
+            TuneTarget::Play => {
+                Examples::hands(&args.guard, usize::MAX, 0.0, |_, _| {})?.playing(args.notes)
+            }
             TuneTarget::Fingers => {
                 let mut pieces = Vec::new();
                 for path in &args.guard {
@@ -606,6 +631,7 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         directory: args.out,
         weights: args.weights,
         hours: args.hours,
+        batch: args.batch,
         threads: args.threads.unwrap_or_else(|| {
             std::thread::available_parallelism().map_or(4, |n| n.get())
         }),
