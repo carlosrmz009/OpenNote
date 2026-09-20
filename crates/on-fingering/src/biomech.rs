@@ -15,8 +15,9 @@
 //! poses its 3D hands with the same solver, from the same postures, so what you
 //! watch is the reasoning rather than a separate performance of it.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use on_hand::ik::{reach, ReachRequest};
 use on_hand::keyboard::{is_black, Keyboard, StrikeStyle};
@@ -192,30 +193,111 @@ impl GripOutcome {
     }
 }
 
+/// Everything a solved posture depends on: the skeleton and the keyboard.
+///
+/// Nothing in these three maps is a function of a weight. A posture comes out of
+/// [`reach`] on a skeleton, which is the hand profile and the chirality; the work of a
+/// transition is the distance between two such postures, weighted by which fingers are
+/// playing; and the keyboard is the same keyboard everywhere. So two models that agree
+/// on hand and profile can share all three, whatever they disagree about elsewhere —
+/// which is what lets the tuner grade one setting after another without re-solving the
+/// same chord shapes for each of them.
+///
+/// The one thing that would break it is making the inverse-kinematics solve depend on
+/// [`BiomechWeights::strain`], which today it does not: [`BiomechModel::solve`] hands
+/// `reach` the default strain weights. Plumb those through and this has to be keyed on
+/// them too.
+#[derive(Default)]
+struct Geometry {
+    postures: RwLock<HashMap<GripKey, (GripOutcome, HandPose)>>,
+    /// Postures for the grips the octave cache cannot serve. See
+    /// [`BiomechModel::grip_pose`].
+    moved: RwLock<HashMap<GripKey, HandPose>>,
+    work: RwLock<HashMap<(GripKey, GripKey, i16), f32>>,
+}
+
+/// How large each shared map may grow before it is emptied.
+///
+/// A tuning run left going for a week fingers hundreds of thousands of scores, so the
+/// maps need a ceiling or they are a leak. Emptying rather than evicting the coldest
+/// entry costs one cold score whenever the ceiling is reached; real piano music settles
+/// into far fewer distinct shapes than this, so mostly it never is.
+const CACHE_CAP: usize = 200_000;
+
+/// Remember a solved value, forgetting everything if the map has grown past its cap.
+fn remember<K: Eq + Hash, V>(map: &RwLock<HashMap<K, V>>, key: K, value: V) {
+    let mut map = map.write().unwrap();
+    if map.len() >= CACHE_CAP {
+        map.clear();
+    }
+    map.insert(key, value);
+}
+
+/// A hand's geometry, exactly, as a map key.
+///
+/// The bit patterns rather than a hash of them: a collision would quietly hand one hand
+/// another hand's postures, and comparing thirty-odd floats once per model is nothing.
+fn profile_key(profile: &HandProfile) -> Vec<u32> {
+    let mut key = vec![profile.hand_length.to_bits()];
+    for d in &profile.digits {
+        key.extend([d.metacarpal, d.proximal, d.medial, d.distal, d.pulp].map(f32::to_bits));
+    }
+    for (x, y, z) in &profile.base_offsets {
+        key.extend([x, y, z].map(|v| v.to_bits()));
+    }
+    key
+}
+
+/// Every set of geometry caches this process has built, one per hand and profile.
+///
+/// Process-wide rather than per model, and shared across threads rather than
+/// thread-local, because the engine spawns short-lived threads of its own: [`solve_score`]
+/// searches each hand on a scoped thread, and the consensus rule set does that once per
+/// published set, so a score is fingered on ten threads that exist only for it. A cache
+/// tied to a thread would be born and die inside one score and never warm up.
+///
+/// The lock is not the expensive thing here by any margin. A cold grip is an
+/// inverse-kinematics solve costing tens of microseconds; a warm one is now a read lock
+/// and a hash lookup costing tens of nanoseconds, contended or not.
+///
+/// [`solve_score`]: crate::finger_score
+static GEOMETRY: LazyLock<RwLock<HashMap<(Hand, Vec<u32>), Arc<Geometry>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// The caches for one hand and profile, building them if this is the first ask.
+fn geometry_for(hand: Hand, profile: &HandProfile) -> Arc<Geometry> {
+    let key = (hand, profile_key(profile));
+    if let Some(hit) = GEOMETRY.read().unwrap().get(&key) {
+        return Arc::clone(hit);
+    }
+    Arc::clone(GEOMETRY.write().unwrap().entry(key).or_default())
+}
+
 /// Solves and caches hand postures for chord grips.
 ///
-/// Not `Sync`: it owns a cache behind a [`RefCell`]. The solver is single-threaded
-/// per hand, and the two hands get one of these each.
+/// The solved postures themselves live in [`GEOMETRY`], shared with every other model
+/// for the same hand and profile, so a model built for a second score starts warm.
 pub struct BiomechModel {
     skeleton: Skeleton,
     keyboard: Keyboard,
     weights: BiomechWeights,
-    postures: RefCell<HashMap<GripKey, (GripOutcome, HandPose)>>,
-    /// Postures for the grips the octave cache cannot serve. See [`Self::grip_pose`].
-    moved: RefCell<HashMap<GripKey, HandPose>>,
-    work: RefCell<HashMap<(GripKey, GripKey, i16), f32>>,
+    /// Shared with every other model for the same hand and profile.
+    cache: Arc<Geometry>,
 }
 
 impl BiomechModel {
     /// Build a model for one hand.
+    ///
+    /// The geometry it solves with is whatever the process has already worked out for
+    /// this hand and profile, so only the first model of a run starts cold. See
+    /// [`Geometry`].
     pub fn new(profile: HandProfile, hand: Hand, weights: BiomechWeights) -> Self {
+        let cache = geometry_for(hand, &profile);
         Self {
             skeleton: Skeleton::new(profile, hand),
             keyboard: Keyboard::new(),
             weights,
-            postures: RefCell::new(HashMap::new()),
-            moved: RefCell::new(HashMap::new()),
-            work: RefCell::new(HashMap::new()),
+            cache,
         }
     }
 
@@ -268,7 +350,7 @@ impl BiomechModel {
     /// octave; [`Self::grip_pose`] shifts it back to where the notes really are.
     fn solve(&self, grip: &Grip) -> (GripOutcome, HandPose) {
         let key = grip.cache_key();
-        if let Some(hit) = self.postures.borrow().get(&key) {
+        if let Some(hit) = self.cache.postures.read().unwrap().get(&key) {
             return *hit;
         }
 
@@ -283,7 +365,7 @@ impl BiomechModel {
             },
             outcome.pose,
         );
-        self.postures.borrow_mut().insert(key, result);
+        remember(&self.cache.postures, key, result);
         result
     }
 
@@ -300,12 +382,12 @@ impl BiomechModel {
     /// Solve a grip where the notes really are, rather than in the reference octave.
     fn solved_where_it_is(&self, grip: &Grip) -> HandPose {
         let key = GripKey(grip.keys.clone());
-        if let Some(hit) = self.moved.borrow().get(&key) {
+        if let Some(hit) = self.cache.moved.read().unwrap().get(&key) {
             return *hit;
         }
         let targets = self.targets(grip);
         let pose = reach(&self.skeleton, &ReachRequest::new(&targets)).pose;
-        self.moved.borrow_mut().insert(key, pose);
+        remember(&self.cache.moved, key, pose);
         pose
     }
 
@@ -341,7 +423,7 @@ impl BiomechModel {
         // preserved, so the offset between the two anchors is part of the key.
         let offset = (to.octave_offset() - from.octave_offset()) as i16;
         let cache_key = (from_key, to_key, offset);
-        if let Some(hit) = self.work.borrow().get(&cache_key) {
+        if let Some(hit) = self.cache.work.read().unwrap().get(&cache_key) {
             return *hit;
         }
 
@@ -361,7 +443,7 @@ impl BiomechModel {
         }
 
         let work = sum.sqrt();
-        self.work.borrow_mut().insert(cache_key, work);
+        remember(&self.cache.work, cache_key, work);
         work
     }
 
@@ -383,9 +465,10 @@ impl BiomechModel {
         self.weights.motion * demand * demand
     }
 
-    /// How many distinct postures have been solved so far.
+    /// How many distinct postures have been solved so far — by every model sharing this
+    /// hand and profile, not by this one alone.
     pub fn cached_postures(&self) -> usize {
-        self.postures.borrow().len()
+        self.cache.postures.read().unwrap().len()
     }
 }
 
@@ -460,7 +543,13 @@ mod tests {
 
     #[test]
     fn the_same_shape_an_octave_apart_costs_the_same() {
-        let m = model(Hand::Right);
+        // A hand length of its own, so the postures it counts are its own: the caches
+        // are shared process-wide between every model of the same hand and profile.
+        let m = BiomechModel::new(
+            HandProfile::from_hand_length(183.5),
+            Hand::Right,
+            BiomechWeights::default(),
+        );
         let low = m.grip_cost(&grip(&[(48, 1), (52, 3), (55, 5)]));
         let high = m.grip_cost(&grip(&[(60, 1), (64, 3), (67, 5)]));
         assert!((low - high).abs() < 1e-4, "{low} vs {high}");
