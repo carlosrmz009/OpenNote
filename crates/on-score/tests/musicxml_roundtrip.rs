@@ -40,10 +40,18 @@ const SCORE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </score-partwise>
 "#;
 
+/// A temp path no other test can be holding. The tests in this binary run in
+/// parallel threads, so a shared fixture path gets written and read by two of
+/// them at once, which fails intermittently on Windows.
 fn scratch(name: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
     let dir = std::env::temp_dir().join("opennote-tests");
     std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    let (stem, ext) = name.rsplit_once('.').expect("scratch names carry an extension");
+    let tag = format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+    dir.join(format!("{stem}-{tag}.{ext}"))
 }
 
 fn load() -> MusicXmlDocument {
