@@ -93,6 +93,24 @@ research; their licences are limited to that.
 
 ## Training data
 
+The engine's weights are searched against **PDMX**, and the numbers that ship were
+found with it:
+
+> Long, P., Novack, Z., Berg-Kirkpatrick, T. and McAuley, J. (2025). *PDMX: A
+> Large-Scale Public Domain MusicXML Dataset for Symbolic Music Processing.*
+> <https://github.com/pnlong/PDMX>
+
+PDMX is licensed **CC BY 4.0**, which asks for attribution and nothing else, and every
+one of its 254,077 scores is public domain (210,364) or CC0 (43,713) in its own right —
+its authors filtered for that when they built it. So this attribution is what using it
+requires, and it is given gladly: without it the engine would be tuned against a handful
+of files somebody happened to have.
+
+Nothing from PDMX is redistributed here. What a search takes out of a score is a number:
+how often the engine agreed with the hand division the score was written with, or how
+often the fingering it produced could be played. `tools/pdmx_piano.py` pulls the piano
+scores out of a copy you download yourself.
+
 The PIG dataset (Nakamura et al.) is free but **registration-gated and licensed for
 nonprofit academic use only**. Nothing derived from it is included here. `opennote
 corpus add` reads a copy you obtained yourself; `corpus/` is gitignored, nothing in

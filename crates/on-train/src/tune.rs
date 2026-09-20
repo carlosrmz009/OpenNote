@@ -245,6 +245,25 @@ fn bucket(name: &str) -> usize {
     }
 }
 
+/// How scores are read in for a search.
+#[derive(Debug, Clone)]
+pub struct Load {
+    /// The most to keep. 0 is every one there is.
+    pub limit: usize,
+    /// Keep only music where the hands share the keyboard: the share of notes that
+    /// fall inside the other hand's usual range, from 0 to 1. A dataset of hymns and
+    /// simple arrangements is mostly two hands a long way apart, where any setting that
+    /// splits by register is right; learning from that teaches the engine to split by
+    /// register, which is exactly wrong where it matters. Only a score whose source
+    /// says which hand plays what can be judged on this, so it lets the others through.
+    pub min_shared: f64,
+    /// Cut each score to this many notes, from the middle. 0 keeps whole pieces.
+    pub notes: usize,
+    /// Keep only scores whose source says which hand plays what, which is what the hand
+    /// target has to learn from and what the others do not need.
+    pub truth_only: bool,
+}
+
 /// What the search is graded against, already divided.
 pub enum Examples {
     /// Scores whose source says which hand plays what, by name.
@@ -262,28 +281,21 @@ impl Examples {
     /// Every note is put in the hand its source says, so what is measured is the
     /// fingering on its own and not the engine's guess at the hands on top of it.
     ///
-    /// Each score is cut to `notes` of them, from the middle, unless that is 0.
-    /// Fingering a score costs about three hundred times what deciding its hands does —
-    /// it is a search over five fingers at every note rather than two hands at every
-    /// chord — and that cost is what a generation is made of. A passage from each of
-    /// six thousand pieces says more per second than the whole of six hundred, and
-    /// fingering has no long-range structure that only whole pieces would show.
-    pub fn playing(self, notes: usize) -> Self {
+    pub fn playing(self) -> Self {
         match self {
             Examples::Hands(mut parts) => {
                 for (_, score) in parts.iter_mut().flatten() {
-                    if let Some(truth) = on_score::hands::truth_hands(score) {
-                        for (note, hand) in score.notes.iter_mut().zip(truth) {
-                            note.hand = hand;
+                    match on_score::hands::truth_hands(score) {
+                        Some(truth) => {
+                            for (note, hand) in score.notes.iter_mut().zip(truth) {
+                                note.hand = hand;
+                            }
                         }
-                    }
-                    if notes > 0 && score.notes.len() > notes {
-                        let from = (score.notes.len() - notes) / 2;
-                        score.notes.drain(..from);
-                        score.notes.truncate(notes);
-                        // A note's identifier is its place in the list, so cutting the
-                        // list renumbers every note that is left.
-                        score.finalise();
+                        // Nothing in the source to go on, so the engine divides it
+                        // itself, exactly as it does for a MIDI file somebody drops in.
+                        // While the fingering weights are being searched the division
+                        // is fixed, so it is a property of the score, not a moving part.
+                        None => on_score::assign_hands(score, &HandAssignment::default()),
                     }
                 }
                 Examples::Play(parts)
@@ -301,23 +313,16 @@ impl Examples {
         Examples::Fingers(parts)
     }
 
-    /// Scores with a hand split in the source, found under some paths.
+    /// Piano scores found under some paths, read and divided.
     ///
-    /// A downloaded dataset can be far bigger than a search needs, so at most `limit`
-    /// are kept. They are taken in the order of a hash of their path rather than
-    /// alphabetically, which spreads them over the whole of it instead of taking every
-    /// piece by one composer whose name begins with A. Files that cannot be read, or
-    /// whose source does not say which hand plays what, are passed over.
-    ///
-    /// `min_shared` keeps only music where the hands share the keyboard: the share of
-    /// notes that fall inside the other hand's usual range, from 0 to 1. A dataset of
-    /// hymns and simple arrangements is mostly two hands a long way apart, where any
-    /// setting that splits by register is right; learning from that teaches the engine
-    /// to split by register, which is exactly wrong where it matters.
-    pub fn hands(
+    /// A downloaded dataset can be far bigger than a search needs, so at most
+    /// `load.limit` are kept. They are taken in the order of a hash of their path
+    /// rather than alphabetically, which spreads them over the whole of it instead of
+    /// taking every piece by one composer whose name begins with A. Files that cannot
+    /// be read are passed over.
+    pub fn scores(
         paths: &[PathBuf],
-        limit: usize,
-        min_shared: f64,
+        load: &Load,
         mut progress: impl FnMut(usize, usize),
     ) -> Result<Self> {
         let mut files = Vec::new();
@@ -328,6 +333,7 @@ impl Examples {
             let text = p.to_string_lossy().to_string();
             (fnv(&text), text)
         });
+        let limit = if load.limit == 0 { usize::MAX } else { load.limit };
         let mut parts: [Vec<(String, Score)>; 3] = Default::default();
         let mut kept = 0;
         for (tried, file) in files.iter().enumerate() {
@@ -336,7 +342,7 @@ impl Examples {
             }
             progress(tried, kept);
             let is_json = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
-            let score = if is_json {
+            let mut score = if is_json {
                 let Ok(score) = read_music_render(file) else { continue };
                 score
             } else {
@@ -347,10 +353,24 @@ impl Examples {
             if score.notes.len() < 32 {
                 continue;
             }
-            let Some(truth) = on_score::hands::truth_hands(&score) else { continue };
-            if shared(&score, &truth) < min_shared {
-                continue;
+            match on_score::hands::truth_hands(&score) {
+                Some(truth) => {
+                    if shared(&score, &truth) < load.min_shared {
+                        continue;
+                    }
+                }
+                // One staff, so the source does not say which hand plays what. Such a
+                // score cannot teach that, and `truth_only` turns it away — but it can
+                // still be fingered, and whether the fingering can be played is a
+                // question it answers as well as any other. Most piano music on disk
+                // looks like this, and so does most of what anybody drops into Handy.
+                None => {
+                    if load.truth_only {
+                        continue;
+                    }
+                }
             }
+            trim(&mut score, load.notes);
             let name = file.to_string_lossy().to_string();
             parts[bucket(&name)].push((name, score));
             kept += 1;
@@ -630,6 +650,28 @@ fn read_music_render(path: &Path) -> Result<Score> {
     }
     score.finalise();
     Ok(score)
+}
+
+/// Cut a score to `notes` of them, taken from the middle, unless that is 0.
+///
+/// Fingering a score costs about three hundred times what deciding its hands does — it
+/// is a search over five fingers at every note rather than two hands at every chord —
+/// and that cost is what a generation is made of. A passage from each of fifty thousand
+/// pieces says more per second than the whole of five hundred, and fingering has no
+/// long-range structure that only whole pieces would show. It is also what keeps a
+/// dataset this size in memory.
+///
+/// From the middle rather than the opening, which is where a piece is least like itself.
+fn trim(score: &mut Score, notes: usize) {
+    if notes == 0 || score.notes.len() <= notes {
+        return;
+    }
+    let from = (score.notes.len() - notes) / 2;
+    score.notes.drain(..from);
+    score.notes.truncate(notes);
+    // A note's identifier is its place in the list, so cutting the list renumbers every
+    // note that is left.
+    score.finalise();
 }
 
 /// Every score file under a path.
@@ -1348,9 +1390,9 @@ mod tests {
     fn playing_keeps_the_middle_of_a_score() {
         let pitches: Vec<u8> = (0..100).map(|n| 40 + n / 2).collect();
         let score = melody(&pitches, Hand::Right);
-        let examples = Examples::Hands([vec![("piece".into(), score)], Vec::new(), Vec::new()]);
-        let Examples::Play(parts) = examples.playing(10) else { panic!("not the playing target") };
-        let kept = &parts[0][0].1.notes;
+        let mut score = score;
+        trim(&mut score, 10);
+        let kept = &score.notes;
         assert_eq!(kept.len(), 10);
         assert_eq!(kept[0].midi, pitches[45]);
         // A note's identifier is where it sits in the list, and everything that looks a

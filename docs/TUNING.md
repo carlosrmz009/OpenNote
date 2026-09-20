@@ -20,13 +20,20 @@ answer is compared against.
 * **Hands** (`--target hands`) — which hand plays each note, against scores whose
   source says: two-staff MusicXML, piano MIDI with a track per hand, or
   [PDMX](https://github.com/pnlong/PDMX). This is the target with real ground truth in
-  quantity. `tools/pdmx_piano.py` pulls the two-staff piano scores out of the download;
-  point `--scores` at the `PDMX/data` folder it leaves.
+  quantity, and a score can only provide it by having two staves. PDMX has 21,538 of
+  those out of 254,077; 14,936 survive de-duplication and a 100-note minimum, and that
+  is the honest ceiling for this target. `tools/pdmx_piano.py` pulls the piano scores
+  out of the download; point `--scores` at the `PDMX/data` folder it leaves.
 * **Play** (`--target play`) — which finger plays each note, against what a hand can
-  actually do. It fingers the same scores and then measures the result: how often it
-  asks a hand to be somewhere it cannot get to in the time the music allows, and how
-  often it asks for a stretch beyond a comfortable one. Both are measured afterwards,
-  against the hand model and the span tables, over whole pieces.
+  actually do. It fingers the scores and then measures the result: how often it asks a
+  hand to be somewhere it cannot get to in the time the music allows, and how often it
+  asks for a stretch beyond a comfortable one. Both are measured afterwards, against the
+  hand model and the span tables.
+
+  This one does not need a hand split in the source — it needs *a* split, and takes the
+  engine's own where the score does not say, exactly as Handy does for a MIDI file
+  somebody drops in. So it uses the single-staff piano scores too: **51,774** rather
+  than 14,936, and the ones it gains are the harder, more realistic case.
 
   This is not the same thing as the engine's own cost function, which is a guess at the
   answer made note by note with a short view ahead. Tuning the guess against the
@@ -46,8 +53,15 @@ Anything tuned on PIG must never ship. PIG is licensed for academic use only, li
 PianoVAM. Measure against it by all means (see [TRAINING.md](TRAINING.md)), but don't
 put it in the corpus you tune from.
 
-PDMX is CC BY 4.0, and the scores the script keeps are public domain or CC0. If weights
-tuned on it become the engine's defaults, credit it in `LICENSES.md`.
+PDMX itself is no such problem. It is CC BY 4.0, and every one of its scores is public
+domain or CC0 in its own right — there is no non-commercial or no-derivatives material
+in it to filter out, and `tools/pdmx_piano.py` filters only for quality. The attribution
+it asks for is in `LICENSES.md`. One flag in its metadata is deliberately not enforced:
+for about 12% of the dataset, what MuseScore's page says about the copyright and what
+the file itself says disagree, and honouring that flag would leave 2,241 two-staff
+scores instead of 14,936. Since both claims are public domain, and since nothing is
+redistributed from these scores — what a search takes out of one is a number — it is
+recorded rather than applied.
 
 ### What to aim at
 
@@ -91,8 +105,10 @@ next run picks up from there.
 Useful options:
 
 * `--hours 8` stops after eight hours. Without it, it runs until you stop it.
-* `--limit 0`, the default, keeps every score there is. Fifteen thousand of them need
-  about a gigabyte of memory; lower it if the machine has less.
+* `--limit 0`, the default, keeps every score there is. Fifteen thousand whole scores
+  need about a gigabyte of memory; lower it if the machine has less. For `--target
+  play`, `--notes` caps what a score costs to keep, so fifty thousand of them fit in
+  much the same space.
 * `--batch 600` is how many of them a generation is judged on, drawn afresh every
   generation. **This is what a generation costs, and `--limit` is not.** Every setting
   in one generation is judged on the same draw, so the comparison is fair; the draw

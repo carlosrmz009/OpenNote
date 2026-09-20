@@ -549,7 +549,7 @@ pub struct TuneArgs {
 }
 
 /// What `opennote tune` searches.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum TuneTarget {
     /// Which hand plays each note.
     Hands,
@@ -570,24 +570,30 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         return Ok(());
     }
 
+    let playing = args.target == TuneTarget::Play;
+    let load = on_train::tune::Load {
+        limit: args.limit,
+        min_shared: args.min_shared,
+        // Whole pieces for the hand target, where a score costs almost nothing to work
+        // through, and a passage for the playing one, where it costs three hundred times
+        // as much.
+        notes: if playing { args.notes } else { 0 },
+        truth_only: args.target == TuneTarget::Hands,
+    };
     let examples = match args.target {
         TuneTarget::Hands | TuneTarget::Play => {
             if args.scores.is_empty() {
-                bail!("give --scores: files or folders of two-staff MusicXML or two-track piano MIDI");
+                bail!("give --scores: files or folders of piano MusicXML or MIDI");
             }
             println!("Reading scores...");
             let mut last = std::time::Instant::now();
-            let limit = if args.limit == 0 { usize::MAX } else { args.limit };
-            let read = Examples::hands(&args.scores, limit, args.min_shared, |tried, kept| {
+            let read = Examples::scores(&args.scores, &load, |tried, kept| {
                 if last.elapsed().as_secs() >= 10 {
                     last = std::time::Instant::now();
                     println!("  {tried} files read, {kept} usable");
                 }
             })?;
-            match args.target {
-                TuneTarget::Play => read.playing(args.notes),
-                _ => read,
-            }
+            if playing { read.playing() } else { read }
         }
         TuneTarget::Fingers => {
             let pieces = Corpus::at(&args.corpus)?.load()?;
@@ -613,10 +619,8 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         None
     } else {
         Some(match args.target {
-            TuneTarget::Hands => Examples::hands(&args.guard, usize::MAX, 0.0, |_, _| {})?,
-            TuneTarget::Play => {
-                Examples::hands(&args.guard, usize::MAX, 0.0, |_, _| {})?.playing(args.notes)
-            }
+            TuneTarget::Hands => Examples::scores(&args.guard, &load, |_, _| {})?,
+            TuneTarget::Play => Examples::scores(&args.guard, &load, |_, _| {})?.playing(),
             TuneTarget::Fingers => {
                 let mut pieces = Vec::new();
                 for path in &args.guard {
