@@ -1001,19 +1001,53 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             .max_by(|a, b| a.1.total_cmp(b.1))
             .expect("at least one child");
         let mut event = "";
+        // The better of where the search stands and the best of its children, taken
+        // before the search moves, since both were measured on this same draw.
+        let (candidate, candidate_score) = if train >= here {
+            (children[index].clone(), train)
+        } else {
+            (state.current.clone(), here)
+        };
         state.current_train = here;
-        if train > here + 1e-12 {
+        if train >= here - 1e-12 {
+            // A tie is taken too. The score has wide plateaus, and the only way across
+            // one is to be allowed to wander on it.
             state.current = children[index].clone();
             state.current_train = train;
+        }
+
+        // Winning on the draw it was chosen on proves very little. Ten perturbations
+        // are tried and the best kept, so the winner is the one that happened to suit
+        // those few hundred scores, and it beats the incumbent on them far more often
+        // than it is actually better — which is a selection made on the sample, not an
+        // improvement. Asked again on a second, independent draw, most of them lose.
+        //
+        // Without this the step grows every generation, because there is always a
+        // winner, and the search ends up taking two-fold jumps at random and never
+        // coming near its best again. That is not a guess: the first run of it did
+        // exactly that, five hundred generations at the largest step it is allowed,
+        // and promoted once.
+        let mut confirmed = false;
+        if candidate_score > best_here + 1e-12 {
+            let again = draw.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x5bf0_3635_0f3a_71c9;
+            let pair = [&candidate, &state.best];
+            let second: Vec<f64> = std::thread::scope(|scope| {
+                let handles: Vec<_> = pair
+                    .iter()
+                    .map(|point| {
+                        let weights = weights_of(point);
+                        scope.spawn(move || examples.sample(&weights, 0, again, batch))
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap_or(f64::MIN)).collect()
+            });
+            state.evaluated += 2;
+            confirmed = second[0] > second[1] + 1e-12;
+        }
+        if confirmed {
             state.step = (state.step * 1.5).min(STEP_MAX);
             state.stalled = 0;
         } else {
-            // A tie is taken too. The score has wide plateaus, and the only way across
-            // one is to be allowed to wander on it.
-            if train >= here - 1e-12 {
-                state.current = children[index].clone();
-                state.current_train = train;
-            }
             state.step *= 0.9;
             state.stalled += 1;
         }
@@ -1026,11 +1060,11 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         }
 
         // Promote only what does better on the pieces it never learned from as well.
-        // Beating the best on this generation's draw is only what makes it worth the
-        // asking; everything below this line is measured on whole thirds, so a promotion
-        // is never something a lucky sample bought.
-        if state.current_train > best_here + 1e-12 {
-            let weights = weights_of(&state.current);
+        // Beating the best on two draws is only what makes it worth the asking;
+        // everything below this line is measured on whole thirds, so a promotion is
+        // never something a lucky sample bought.
+        if confirmed {
+            let weights = weights_of(&candidate);
             let held_out = examples.score(&weights, 1, threads);
             let sane = target != Target::Hands || holds_what_it_is_holding(&weights);
             let scales_kept = target == Target::Hands || {
@@ -1054,7 +1088,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                     _ => true,
                 };
             if kept {
-                state.best = state.current.clone();
+                state.best = candidate.clone();
                 state.best_scores = Scores {
                     train: examples.score(&weights, 0, threads),
                     held_out,
