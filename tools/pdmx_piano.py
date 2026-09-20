@@ -39,26 +39,40 @@ import tarfile
 from pathlib import Path
 
 
+def table(archive: Path):
+    """The dataset's index, as a file to read.
+
+    Taken from beside the archive if it has been extracted already. Reading it out of
+    the archive instead means decompressing all 2.4 GB of it to find one member, and
+    then all of it again to take the scores out, which is twenty minutes rather than
+    ten and no clearer.
+    """
+    beside = archive.parent / "PDMX" / "PDMX.csv"
+    if beside.exists():
+        return io.open(beside, encoding="utf-8")
+    with tarfile.open(archive, "r:gz") as tar:
+        return io.TextIOWrapper(tar.extractfile("PDMX/PDMX.csv"), encoding="utf-8")
+
+
 def main() -> None:
     archive = Path(sys.argv[1] if len(sys.argv) > 1 else "PDMX.tar.gz")
     out = archive.parent
-    with tarfile.open(archive, "r:gz") as tar:
-        table = tar.extractfile("PDMX/PDMX.csv")
-        rows = csv.DictReader(io.TextIOWrapper(table, encoding="utf-8"))
+    with table(archive) as rows:
         keep = {
             "PDMX/" + row["path"][2:]
-            for row in rows
+            for row in csv.DictReader(rows)
             if all(track == "0" for track in row["tracks"].split("-"))
             and row["subset:deduplicated"] == "True"
             and int(row["n_notes"]) >= 100
         }
-        print(f"{len(keep)} piano scores; extracting...")
-        # Streamed in one pass: the archive is gzip, so asking for members by name
-        # would read it from the start again for every one.
-        with tarfile.open(archive, "r|gz") as stream:
-            for member in stream:
-                if member.name in keep:
-                    stream.extract(member, out, filter="data")
+    have = sum(1 for name in keep if (out / name).exists())
+    print(f"{len(keep)} piano scores, {have} already here; extracting the rest...")
+    # Streamed in one pass: the archive is gzip, so asking for members by name would
+    # read it from the start again for every one.
+    with tarfile.open(archive, "r|gz") as stream:
+        for member in stream:
+            if member.name in keep and not (out / member.name).exists():
+                stream.extract(member, out, filter="data")
     listing = out / "PDMX" / "piano.txt"
     listing.write_text("\n".join(sorted(keep)) + "\n", encoding="utf-8", newline="\n")
     print(f"done; the scores are under {out / 'PDMX' / 'data'}")
