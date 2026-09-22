@@ -1,0 +1,18 @@
+[package]
+name = "on-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A small physically-informed piano synthesiser, shared by the live view and the video export."
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+cpal = { version = "0.17", optional = true }
+rustysynth = "1.3"
+
+[features]
+# Rendering to a buffer needs nothing. Playing out of the speakers needs a device,
+# and the offline video export has no use for one.
+default = ["playback"]
+playback = ["dep:cpal"]

@@ -1,0 +1,63 @@
+/target
+**/*.rs.bk
+
+# Training data is licensed to the person who downloaded it (PIG is academic-use only)
+# and is never redistributed from this repo.
+/corpus/*
+!/corpus/README.md
+!/corpus/sample/
+/models/*.bin
+/models/*.json
+/out/
+/spikes/*/target
+/learning/
+
+# Sound fonts are downloaded, not committed: they are large and their licences
+# (CC-BY for the good ones) attach to whoever redistributes them.
+/assets/soundfont/*.sf2
+
+# Local convenience scripts for building the exe; not part of the project. The shell
+# one needs Git Bash; the .cmd runs straight from PowerShell.
+/build
+/build.cmd
+
+# Python bytecode from the tools/ scripts.
+__pycache__/
+*.pyc
+
+# Local working files: the generated README and benchmark report, and the images they
+# reference. Carlos's own README.md is the one in the repo; these are drafts that live
+# on one machine and are not part of the project.
+/README.draft.md
+/BENCHMARK.draft.md
+/docs/images/
+
+# PIG
+
+/pig/
+
+# The Python environment for the video tools: several gigabytes of PyTorch, and
+# a pretrained transcription model downloaded into it on first use.
+/tools/.venv/
+
+# What tools/harvest.py leaves behind: the list of videos it read, and, with --keep,
+# the videos themselves. Neither belongs in a public repository.
+/harvest.jsonl
+/harvest-work/
+/channel_urls.txt
+/harvest-report.txt
+/video (*
+/videos.txt
+/videos/
+
+# Training and tuning tools, kept local
+/tools/harvest.py
+/tools/harvest_all.bat
+/tools/harvest_next.py
+/tools/pdmx_piano.py
+/tools/transcribe.py
+/tools/tune_forever.bat
+/tools/tune_forever.sh
+/tools/tune_stop.bat
+/tools/watch_pianist.py
+/docs/TRAINING.md

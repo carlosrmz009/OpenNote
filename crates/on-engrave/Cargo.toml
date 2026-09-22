@@ -1,0 +1,21 @@
+[package]
+name = "on-engrave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Writes fingerings back into the original score and engraves annotated PDF/SVG."
+
+[dependencies]
+on-score.workspace = true
+on-fingering.workspace = true
+anyhow.workspace = true
+musicxml.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# The `png` feature is deliberately off: Verovio's own rasteriser parses the SVG
+# with no fonts available, which silently drops every fingering digit. PNGs are
+# rendered here instead, with fonts.
+verovioxide = { version = "0.3", default-features = false, features = ["bundled-data"] }
+svg2pdf = "0.13"
+pdf-writer = "0.12"
+resvg = "0.46"

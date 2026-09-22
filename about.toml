@@ -1,0 +1,45 @@
+# What `cargo about` will accept when it builds the notice file.
+#
+# This list is a statement of what the project is prepared to ship, not a list of
+# whatever happens to be in the tree today. A dependency arriving under something not
+# named here fails the run, which is the point: the notice file is only worth having if
+# it is also a gate.
+#
+#     cargo about generate about.hbs > NOTICE.md
+#
+# Permissive only. Every entry below asks for attribution at most, which is what
+# NOTICE.md then provides.
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# Two crates in the tree are dual-licensed with a copyleft option alongside a
+# permissive one, and the permissive one is taken:
+#
+#   r-efi      MIT OR Apache-2.0 OR LGPL-2.1-or-later
+#   self_cell  Apache-2.0 OR GPL-2.0-only
+#
+# `accepted` is ordered by preference, so naming neither GPL-2.0-only nor
+# LGPL-2.1-or-later above is what selects the other arm. Neither is listed, so a crate
+# offering *only* copyleft would fail rather than pass quietly.
+
+# `on-engrave` links Verovio, which is LGPL-3.0. That is a C++ library compiled in by
+# `verovioxide-sys`'s build script, so it does not appear in cargo metadata at all and
+# this file cannot see it — `verovioxide` itself declares Apache-2.0, which covers only
+# the bindings. A build that must stay clear of copyleft has to exclude `on-engrave`,
+# and no licence scan of the Rust tree will tell you that.

@@ -1,0 +1,829 @@
+//! Reading expert fingerings in, and keeping them in one shape.
+//!
+//! Fingering data arrives in whatever form whoever collected it chose. The PIG
+//! dataset is tab-separated text with the hand encoded in the sign of the finger
+//! number; an edition marked up in a notation program is MusicXML with
+//! `<technical><fingering>` on some of its notes. Both say the same thing, so both
+//! are read into [`Piece`] and written out as one line of JSON each.
+//!
+//! Normalising on the way in rather than at training time means the corpus directory
+//! is readable, diffable, and cheap to load, and that adding support for a third
+//! source later changes only this file.
+//!
+//! # A note on licences
+//!
+//! The obvious corpus to train on is PIG (Nakamura, Saito & Yoshii), and it is free
+//! but registration-gated and licensed for nonprofit academic use. Nothing here
+//! downloads it and nothing here redistributes it: `opennote corpus add` reads a
+//! copy the user already has, and `corpus/` is not committed.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context as _, Result};
+use on_fingering::Placement;
+use on_fingering::playability::CHORD_SECONDS;
+use on_hand::{Finger, Hand};
+use serde::{Deserialize, Serialize};
+
+/// One note somebody fingered.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct FingeredNote {
+    /// MIDI pitch.
+    pub midi: u8,
+    /// When it sounds, in seconds.
+    pub onset: f64,
+    /// How long it sounds for, in seconds.
+    ///
+    /// What the hand is still holding is a real constraint on what it can reach for
+    /// next, so a piece cannot be fingered the way it was written without this. Corpus
+    /// files written before it was recorded have no such field, and they fall back to
+    /// [`ASSUMED_DURATION`] — which is what the evaluation used to assume for every
+    /// note in every piece.
+    #[serde(default = "assumed_duration")]
+    pub duration: f64,
+    /// Which hand played it.
+    pub hand: HandLabel,
+    /// Which finger, 1..=5, where somebody wrote one down.
+    ///
+    /// `None` for a note nobody annotated, and those are kept rather than discarded.
+    /// An edition marks up the fingerings a player needs told and leaves the obvious
+    /// ones bare — often most of the piece — so dropping the bare notes reads the
+    /// music with holes in it. What the engine is then asked to finger is not the
+    /// piece: a hand's reach, what it is still holding and how long it has to get
+    /// anywhere are all computed from notes that are not there.
+    ///
+    /// It also makes the evaluation meaningless, because the score being fingered is
+    /// not the score the annotator fingered.
+    ///
+    /// Older corpus files wrote a bare number here and deserialise into `Some`.
+    pub finger: Option<u8>,
+    /// How far to believe `finger`, from 0 to 1, when a machine read it rather than a
+    /// person wrote it.
+    ///
+    /// `None` is a person: an editor or a pianist who wrote the finger down, and whose
+    /// word is taken. `Some` is a finger read out of a video, where the tracker can be
+    /// looking at the wrong knuckle, two fingers can be equally close to one key, and a
+    /// crossed pair has to be put right by assumption rather than by seeing it. Without
+    /// this a doubtful reading loaded exactly like an expert's, and a corpus built from
+    /// video could not be filtered — or even diagnosed — after the fact.
+    ///
+    /// Absent from the file when `None`, so an existing corpus reads back unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+/// What to assume a note's length is when the corpus file does not say.
+///
+/// An eighth note at a moderate tempo. It is a poor guess for any particular note and
+/// the only one available for a file written before lengths were recorded.
+pub const ASSUMED_DURATION: f64 = 0.25;
+
+fn assumed_duration() -> f64 {
+    ASSUMED_DURATION
+}
+
+/// Which hand, in a form that survives a round trip through JSON.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HandLabel {
+    Left,
+    Right,
+}
+
+impl From<HandLabel> for Hand {
+    fn from(label: HandLabel) -> Self {
+        match label {
+            HandLabel::Left => Hand::Left,
+            HandLabel::Right => Hand::Right,
+        }
+    }
+}
+
+impl From<Hand> for HandLabel {
+    fn from(hand: Hand) -> Self {
+        match hand {
+            Hand::Left => HandLabel::Left,
+            Hand::Right => HandLabel::Right,
+        }
+    }
+}
+
+/// One fingering of one piece, by one person.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Piece {
+    /// What the piece is. Two annotations of the same music share this.
+    pub piece: String,
+    /// Who fingered it. Distinguishes one annotator's reading from another's.
+    pub annotator: String,
+    /// Where it came from, for tracing a problem back.
+    pub source: String,
+    /// Every fingered note, in time order.
+    pub notes: Vec<FingeredNote>,
+}
+
+impl Piece {
+    /// The line one hand plays, in time order, as the prior is asked about it.
+    ///
+    /// One note per moment, not one per note: the highest of any notes struck
+    /// together, which is the voice [`on_fingering::solver`] hands the prior when it
+    /// asks what finger should come next.
+    ///
+    /// It used to be every note, flattened. That taught the model that a C major triad
+    /// is a melodic step of a third followed by another third, because a chord read as
+    /// a list looks exactly like an arpeggio — the "flat chords as broken chords"
+    /// failure Ramoneda et al. (2022) identify as the standing weakness of sequence
+    /// models on polyphony. Since the prior is only ever *asked* about the top voice,
+    /// the rest was not merely unused but actively wrong: it filled the melodic
+    /// contexts with intervals nobody played melodically.
+    ///
+    /// What a chord's inner notes could teach — which voicings pianists favour — needs
+    /// a context of its own to learn and a corpus to learn it from, and has neither
+    /// yet. Dropping them loses nothing that was being used and stops the corruption.
+    /// The same piece with every finger a machine was less than `floor` sure of taken
+    /// out, as if it had never been written.
+    ///
+    /// The notes stay — the engine still has to finger the real music, and a note it
+    /// cannot see is a note it cannot plan around — only the doubtful label goes. A
+    /// finger a person wrote is always kept. `floor` of 0 keeps everything.
+    pub fn trusted(&self, floor: f32) -> Piece {
+        let mut piece = self.clone();
+        for note in &mut piece.notes {
+            if note.confidence.is_some_and(|c| c < floor) {
+                note.finger = None;
+            }
+        }
+        piece
+    }
+
+    pub fn voice(&self, hand: Hand) -> Vec<Placement> {
+        let label = HandLabel::from(hand);
+        let mut out: Vec<(f64, Placement)> = Vec::new();
+        for note in self.notes.iter().filter(|note| note.hand == label) {
+            let Some(finger) = note.finger.and_then(Finger::from_number) else {
+                continue;
+            };
+            let placement = Placement::new(note.midi, finger);
+            match out.last_mut() {
+                // Struck with the one before it, so the two are a chord and only the
+                // higher of them is on the line.
+                Some((onset, last)) if (note.onset - *onset).abs() <= CHORD_SECONDS => {
+                    if placement.midi > last.midi {
+                        *last = placement;
+                    }
+                }
+                _ => out.push((note.onset, placement)),
+            }
+        }
+        out.into_iter().map(|(_, placement)| placement).collect()
+    }
+}
+
+/// A directory of normalised fingering data.
+pub struct Corpus {
+    root: PathBuf,
+}
+
+impl Corpus {
+    /// Point at a corpus directory, creating it if it is not there.
+    pub fn at(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("making the corpus directory {}", root.display()))?;
+        Ok(Self { root })
+    }
+
+    /// Where the normalised data lives.
+    fn data_dir(&self) -> PathBuf {
+        self.root.join("normalised")
+    }
+
+    /// Read everything in the corpus.
+    pub fn load(&self) -> Result<Vec<Piece>> {
+        let directory = self.data_dir();
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut pieces = Vec::new();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|e| e == "jsonl"))
+            .collect();
+        // Sorted, so training is reproducible: the same corpus gives the same model
+        // and the same held-out split whatever order the filesystem hands them over.
+        files.sort();
+        for file in files {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            for (line_number, line) in text.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let piece: Piece = serde_json::from_str(line).with_context(|| {
+                    format!("{}, line {}", file.display(), line_number + 1)
+                })?;
+                pieces.push(piece);
+            }
+        }
+        Ok(pieces)
+    }
+
+    /// Add one already-built fingering to the corpus, and say where it went.
+    ///
+    /// The route in for anything that did not come from a file this module can read —
+    /// a fingering recovered from video, most obviously.
+    pub fn add_piece(&self, piece: &Piece, label: Option<&str>) -> Result<PathBuf> {
+        let name = label.map(sanitise).unwrap_or_else(|| sanitise(&piece.piece));
+        let directory = self.data_dir();
+        std::fs::create_dir_all(&directory)?;
+        let file = directory.join(format!("{name}.jsonl"));
+        let mut text = serde_json::to_string(piece)?;
+        text.push('\n');
+        // Appended, so a second video of the same piece is a second fingering of it
+        // rather than a replacement for the first.
+        use std::io::Write as _;
+        let mut out = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file)
+            .with_context(|| format!("writing {}", file.display()))?;
+        out.write_all(text.as_bytes())?;
+        Ok(file)
+    }
+
+    /// Add everything under a path, and say what was taken in.
+    ///
+    /// Directories are walked; a single file is read on its own. Files that are not
+    /// fingering data are skipped rather than treated as errors, because pointing
+    /// this at a downloaded dataset directory should just work.
+    pub fn add(&self, path: &Path, label: Option<&str>) -> Result<Ingested> {
+        let mut pieces = Vec::new();
+        let mut skipped = Vec::new();
+        collect(path, &mut pieces, &mut skipped)?;
+        if pieces.is_empty() {
+            bail!(
+                "found no fingering data under {}.\n\
+                 This reads PIG `_fingering.txt` files and MusicXML that already has \
+                 <fingering> marks on its notes.",
+                path.display()
+            );
+        }
+
+        let name = label
+            .map(str::to_owned)
+            .or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(sanitise)
+            })
+            .unwrap_or_else(|| "added".into());
+
+        let directory = self.data_dir();
+        std::fs::create_dir_all(&directory)?;
+        let file = directory.join(format!("{name}.jsonl"));
+        let mut text = String::new();
+        for piece in &pieces {
+            text.push_str(&serde_json::to_string(piece)?);
+            text.push('\n');
+        }
+        std::fs::write(&file, text)
+            .with_context(|| format!("writing {}", file.display()))?;
+
+        let notes = pieces.iter().map(|p| p.notes.len()).sum();
+        let distinct: std::collections::BTreeSet<&str> =
+            pieces.iter().map(|p| p.piece.as_str()).collect();
+        Ok(Ingested {
+            file,
+            annotations: pieces.len(),
+            pieces: distinct.len(),
+            notes,
+            skipped,
+        })
+    }
+}
+
+/// What one `corpus add` took in.
+pub struct Ingested {
+    /// Where it was written.
+    pub file: PathBuf,
+    /// How many fingerings — one piece fingered by two people counts twice.
+    pub annotations: usize,
+    /// How many distinct pieces those cover.
+    pub pieces: usize,
+    /// How many fingered notes altogether.
+    pub notes: usize,
+    /// Files that looked like they might be data but could not be read.
+    pub skipped: Vec<String>,
+}
+
+/// Turn a name into something safe to use as a filename.
+fn sanitise(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect()
+}
+
+/// Walk a path, reading whatever fingering data is under it.
+fn collect(path: &Path, pieces: &mut Vec<Piece>, skipped: &mut Vec<String>) -> Result<()> {
+    if path.is_dir() {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(path)?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .collect();
+        entries.sort();
+        for entry in entries {
+            collect(&entry, pieces, skipped)?;
+        }
+        return Ok(());
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let read = match extension.as_str() {
+        "txt" => read_pig(path),
+        "musicxml" | "mxl" | "xml" => read_musicxml(path),
+        // Not a mistake, just not data: a README, a licence, a MIDI file with no
+        // fingering alongside it.
+        _ => return Ok(()),
+    };
+    match read {
+        Ok(Some(piece)) => pieces.push(piece),
+        Ok(None) => {}
+        Err(error) => skipped.push(format!("{}: {error:#}", path.display())),
+    }
+    Ok(())
+}
+
+/// Read one PIG fingering file.
+///
+/// The format is one note per line, tab-separated:
+/// `id  onset  offset  spelled-pitch  onset-velocity  offset-velocity  channel  finger`.
+/// The finger number carries the hand in its sign — positive for the right hand,
+/// negative for the left — and a substitution is written as two numbers joined by an
+/// underscore, of which the first is the finger that strikes the note.
+fn read_pig(path: &Path) -> Result<Option<Piece>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut notes = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').filter(|f| !f.is_empty()).collect();
+        if fields.len() < 8 {
+            continue;
+        }
+        let Ok(onset) = fields[1].parse::<f64>() else {
+            continue;
+        };
+        let duration = fields[2]
+            .parse::<f64>()
+            .map_or(ASSUMED_DURATION, |offset| (offset - onset).max(0.0));
+        let Some(midi) = spelled_pitch_to_midi(fields[3]) else {
+            continue;
+        };
+        // The struck finger, before any substitution. In PIG every note carries one;
+        // a partially annotated corpus in the same encoding — ThumbSet is distributed
+        // this way — leaves it zero or blank where nobody said, and those notes are
+        // kept unannotated rather than dropped.
+        let raw = fields[7].split('_').next().unwrap_or_default();
+        let signed = raw.parse::<i32>().unwrap_or(0);
+        let finger = match signed.unsigned_abs() as u8 {
+            f @ 1..=5 => Some(f),
+            _ => None,
+        };
+        // The sign carries the hand, so an unannotated note says nothing about which
+        // hand played it and one has to be guessed. Middle C is the usual split and is
+        // what the staff would have said in a score that had one.
+        let hand = match signed {
+            0 => {
+                if midi < 60 {
+                    HandLabel::Left
+                } else {
+                    HandLabel::Right
+                }
+            }
+            n if n > 0 => HandLabel::Right,
+            _ => HandLabel::Left,
+        };
+        notes.push(FingeredNote {
+            midi,
+            onset,
+            duration,
+            hand,
+            finger,
+            // A person wrote it.
+            confidence: None,
+        });
+    }
+    if notes.is_empty() {
+        return Ok(None);
+    }
+    notes.sort_by(|a, b| a.onset.total_cmp(&b.onset).then(a.midi.cmp(&b.midi)));
+
+    // PIG names its files `<piece>-<annotator>_fingering.txt`, so two annotations of
+    // the same music can be told apart — which is what the soft and highest match
+    // rates need.
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .trim_end_matches("_fingering")
+        .to_string();
+    let (piece, annotator) = match stem.rsplit_once('-') {
+        Some((piece, annotator)) => (piece.to_string(), annotator.to_string()),
+        None => (stem.clone(), "1".to_string()),
+    };
+    Ok(Some(Piece {
+        piece,
+        annotator,
+        source: path.display().to_string(),
+        notes,
+    }))
+}
+
+/// Turn PIG's spelled pitch — `C4`, `Bb3`, `F##2` — into a MIDI number.
+fn spelled_pitch_to_midi(spelled: &str) -> Option<u8> {
+    let mut chars = spelled.chars();
+    let letter = chars.next()?.to_ascii_uppercase();
+    let step = match letter {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+    let rest: String = chars.collect();
+    let mut alteration = 0i32;
+    let mut digits = String::new();
+    for c in rest.chars() {
+        match c {
+            '#' => alteration += 1,
+            'b' | 'B' => alteration -= 1,
+            '-' => digits.push('-'),
+            c if c.is_ascii_digit() => digits.push(c),
+            _ => return None,
+        }
+    }
+    let octave: i32 = digits.parse().ok()?;
+    // MIDI 60 is middle C, which this notation calls C4.
+    let value = (octave + 1) * 12 + step + alteration;
+    u8::try_from(value).ok().filter(|v| (21..=108).contains(v))
+}
+
+/// Read fingerings out of a MusicXML file that already carries them.
+fn read_musicxml(path: &Path) -> Result<Option<Piece>> {
+    let document = on_score::MusicXmlDocument::read(path)?;
+    let mut score = document.score().clone();
+    // The staff a note is on is what says which hand played it, and the reader
+    // already works that out; this fills in anything cross-staff or ambiguous.
+    on_score::assign_hands(&mut score, &on_score::hands::HandAssignment::default());
+
+    // Every note, not only the annotated ones. An edition fingers what the player
+    // needs told and leaves the rest bare, so filtering on `given_finger` here threw
+    // away most of the music and left the engine fingering a line full of holes.
+    let notes: Vec<FingeredNote> = score
+        .notes
+        .iter()
+        .filter_map(|note| {
+            Some(FingeredNote {
+                midi: note.midi,
+                onset: note.onset_seconds,
+                duration: note.duration_seconds,
+                hand: HandLabel::from(note.hand?),
+                finger: note.given_finger.map(|f| f.number()),
+                // An edition: printed by somebody who meant it.
+                confidence: None,
+            })
+        })
+        .collect();
+    if notes.iter().all(|note| note.finger.is_none()) {
+        return Ok(None);
+    }
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    Ok(Some(Piece {
+        piece: stem.clone(),
+        annotator: "edition".into(),
+        source: path.display().to_string(),
+        notes,
+    }))
+}
+
+/// Read fingering data from a path without storing it anywhere.
+///
+/// [`Corpus::add`] is this and then writing what it found into the corpus. Reading
+/// without writing is what a benchmark needs, and the distinction is a licence rather
+/// than a convenience: PIG is free but licensed for nonprofit academic use, so it may be
+/// measured against and must never become part of a corpus a shipped model learns from.
+/// Keeping the two apart makes that rule something the code enforces rather than
+/// something a person has to remember.
+pub fn read(path: &Path) -> Result<(Vec<Piece>, Vec<String>)> {
+    let mut pieces = Vec::new();
+    let mut skipped = Vec::new();
+    collect(path, &mut pieces, &mut skipped)?;
+    Ok((pieces, skipped))
+}
+
+/// Group annotations by the piece they are of.
+pub fn by_piece(pieces: &[Piece]) -> BTreeMap<&str, Vec<&Piece>> {
+    let mut grouped: BTreeMap<&str, Vec<&Piece>> = BTreeMap::new();
+    for piece in pieces {
+        grouped.entry(piece.piece.as_str()).or_default().push(piece);
+    }
+    grouped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spelled_pitches_become_midi_numbers() {
+        assert_eq!(spelled_pitch_to_midi("C4"), Some(60));
+        assert_eq!(spelled_pitch_to_midi("A0"), Some(21));
+        assert_eq!(spelled_pitch_to_midi("C8"), Some(108));
+        assert_eq!(spelled_pitch_to_midi("Bb3"), Some(58));
+        assert_eq!(spelled_pitch_to_midi("F#4"), Some(66));
+        assert_eq!(spelled_pitch_to_midi("Cb4"), Some(59));
+        // Off the end of a piano, or not a pitch at all.
+        assert_eq!(spelled_pitch_to_midi("C-1"), None);
+        assert_eq!(spelled_pitch_to_midi("H4"), None);
+        assert_eq!(spelled_pitch_to_midi(""), None);
+    }
+
+    /// Reading a dataset must not store it anywhere.
+    ///
+    /// This is a licence, not a preference. PIG may be measured against and may not be
+    /// learned from, and the only thing keeping those two apart is that `read` has no
+    /// path that writes. If that ever stops being true, a dataset that must never reach
+    /// a shipped model reaches one, and nothing else in the program would notice.
+    #[test]
+    fn reading_a_dataset_stores_nothing() {
+        let dir = std::env::temp_dir().join("opennote-read-only-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("099-1_fingering.txt"),
+            "0	0.0	0.5	C4	80	80	0	1
+             1	0.5	1.0	E4	80	80	0	3
+",
+        )
+        .unwrap();
+
+        let before: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        let (pieces, _) = read(&dir).unwrap();
+        let after: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+
+        assert_eq!(pieces.len(), 1, "should have read the one piece");
+        assert_eq!(pieces[0].notes.len(), 2);
+        assert_eq!(before, after, "reading a dataset created or removed a file");
+    }
+
+    /// A reading a machine was unsure of is dropped, and a finger a person wrote is kept
+    /// whatever the floor. The notes themselves always stay: the engine still has to
+    /// finger the real music, and a note taken out is a note it cannot plan around.
+    #[test]
+    fn a_doubtful_reading_is_dropped_and_a_person_is_always_believed() {
+        let note = |finger: u8, confidence: Option<f32>| FingeredNote {
+            midi: 60,
+            onset: 0.0,
+            duration: ASSUMED_DURATION,
+            hand: HandLabel::Right,
+            finger: Some(finger),
+            confidence,
+        };
+        let piece = Piece {
+            piece: "p".into(),
+            annotator: "video".into(),
+            source: "somewhere".into(),
+            notes: vec![note(1, None), note(2, Some(0.9)), note(3, Some(0.2))],
+        };
+
+        let kept = piece.trusted(0.5);
+        assert_eq!(kept.notes.len(), 3, "the notes stay; only the doubtful labels go");
+        assert_eq!(kept.notes[0].finger, Some(1), "a person is always believed");
+        assert_eq!(kept.notes[1].finger, Some(2), "a confident reading is kept");
+        assert_eq!(kept.notes[2].finger, None, "a doubtful one is dropped");
+        assert_eq!(piece.trusted(0.0).notes[2].finger, Some(3), "a floor of 0 keeps everything");
+    }
+
+    /// Every corpus written before confidence existed has to read back, and a finger a
+    /// person wrote must not start writing a new field, or every file churns the next
+    /// time it is saved.
+    #[test]
+    fn a_corpus_written_before_confidence_existed_still_reads() {
+        let old = r#"{"midi":60,"onset":0.0,"duration":0.25,"hand":"right","finger":3}"#;
+        let note: FingeredNote = serde_json::from_str(old).unwrap();
+        assert_eq!(note.confidence, None);
+        assert_eq!(note.finger, Some(3));
+        assert!(!serde_json::to_string(&note).unwrap().contains("confidence"));
+    }
+
+    #[test]
+    fn a_pig_file_is_read_with_its_hands_the_right_way_round() {
+        let dir = std::env::temp_dir().join("opennote-corpus-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("042-2_fingering.txt");
+        std::fs::write(
+            &path,
+            "//Version: PIG v1.0\n\
+             0\t0.0\t0.5\tC4\t80\t80\t0\t1\n\
+             1\t0.5\t1.0\tE4\t80\t80\t0\t3\n\
+             2\t1.0\t1.5\tC3\t80\t80\t1\t-5\n\
+             3\t1.5\t2.0\tG3\t80\t80\t1\t-2_-1\n",
+        )
+        .unwrap();
+
+        let piece = read_pig(&path).unwrap().unwrap();
+        assert_eq!(piece.piece, "042");
+        assert_eq!(piece.annotator, "2");
+        assert_eq!(piece.notes.len(), 4);
+        assert_eq!(
+            piece.notes[0],
+            FingeredNote {
+                midi: 60,
+                onset: 0.0,
+                // PIG records when a note stops as well as when it starts, and the
+                // difference is what the hand is actually holding.
+                duration: 0.5,
+                hand: HandLabel::Right,
+                finger: Some(1),
+                confidence: None,
+            }
+        );
+        // A substitution keeps the finger that strikes the note.
+        assert_eq!(piece.notes[3].hand, HandLabel::Left);
+        assert_eq!(piece.notes[3].finger, Some(2));
+
+        let right = piece.voice(Hand::Right);
+        assert_eq!(right.len(), 2);
+        assert_eq!(right[0].midi, 60);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_corpus_round_trips_through_its_directory() {
+        let dir = std::env::temp_dir().join("opennote-corpus-round-trip");
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("001-1_fingering.txt"),
+            "0\t0.0\t0.5\tC4\t80\t80\t0\t1\n1\t0.5\t1.0\tD4\t80\t80\t0\t2\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("README.md"), "not data").unwrap();
+
+        let corpus = Corpus::at(dir.join("corpus")).unwrap();
+        let report = corpus.add(&source, Some("test")).unwrap();
+        assert_eq!(report.annotations, 1);
+        assert_eq!(report.notes, 2);
+        assert!(report.skipped.is_empty());
+
+        let loaded = corpus.load().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].notes.len(), 2);
+        assert_eq!(loaded[0].piece, "001");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_empty_corpus_is_not_an_error() {
+        let dir = std::env::temp_dir().join("opennote-corpus-empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        let corpus = Corpus::at(&dir).unwrap();
+        assert!(corpus.load().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_corpus_file_written_before_lengths_still_reads() {
+        // How long a note sounds was added to the format after the fact, because what a
+        // hand is still holding turned out to constrain what it can reach for next. A
+        // file written without it has to keep loading, with the length the evaluation
+        // used to assume for everything.
+        let old = r#"{"midi":60,"onset":0.5,"hand":"right","finger":1}"#;
+        let note: FingeredNote = serde_json::from_str(old).unwrap();
+        assert_eq!(note.duration, ASSUMED_DURATION);
+
+        // And one written with it keeps what it says.
+        let new = r#"{"midi":60,"onset":0.5,"duration":2.0,"hand":"right","finger":1}"#;
+        let note: FingeredNote = serde_json::from_str(new).unwrap();
+        assert_eq!(note.duration, 2.0);
+    }
+
+
+    /// A chord is one moment on the line, not a little melody.
+    ///
+    /// This is the bug that made the change worth making. Read as a flat list, a C
+    /// major triad is indistinguishable from an arpeggio of the same three notes, so
+    /// training on it taught the model that a third often follows a third — a melodic
+    /// habit nobody has, learned from notes struck together. Since the solver only ever
+    /// asks the prior about the top voice, those contexts were never consulted and
+    /// never corrected; they simply diluted the real ones.
+    #[test]
+    fn a_chord_contributes_one_note_to_the_line_and_an_arpeggio_contributes_three() {
+        let note = |midi: u8, finger: u8, onset: f64| FingeredNote {
+            midi,
+            onset,
+            duration: ASSUMED_DURATION,
+            hand: HandLabel::Right,
+            finger: Some(finger),
+            confidence: None,
+        };
+
+        let chord = Piece {
+            piece: "chord".into(),
+            annotator: "1".into(),
+            source: "test".into(),
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.0), note(67, 5, 0.0)],
+        };
+        let line = chord.voice(Hand::Right);
+        assert_eq!(line.len(), 1, "one moment, one note on the line");
+        assert_eq!(line[0].midi, 67, "the top of the chord is the voice");
+        assert_eq!(line[0].finger.number(), 5);
+
+        // The same three pitches spread out in time are a real melodic line, and all
+        // three belong to it.
+        let arpeggio = Piece {
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.5), note(67, 5, 1.0)],
+            ..chord.clone()
+        };
+        let line = arpeggio.voice(Hand::Right);
+        assert_eq!(line.len(), 3, "an arpeggio is three moments");
+        assert_eq!(
+            line.iter().map(|p| p.midi).collect::<Vec<_>>(),
+            vec![60, 64, 67]
+        );
+    }
+
+    /// Notes struck a few milliseconds apart are a chord a pianist meant to be
+    /// together, not a very fast arpeggio, and a rolled chord should not become one
+    /// note per roll step either.
+    #[test]
+    fn a_chord_survives_being_played_slightly_unevenly() {
+        let note = |midi: u8, finger: u8, onset: f64| FingeredNote {
+            midi,
+            onset,
+            duration: ASSUMED_DURATION,
+            hand: HandLabel::Right,
+            finger: Some(finger),
+            confidence: None,
+        };
+        let piece = Piece {
+            piece: "uneven".into(),
+            annotator: "1".into(),
+            source: "test".into(),
+            notes: vec![note(60, 1, 0.0), note(64, 3, 0.004), note(67, 5, 0.009)],
+        };
+        assert_eq!(piece.voice(Hand::Right).len(), 1);
+    }
+
+    #[test]
+    fn a_partly_annotated_source_keeps_the_notes_nobody_fingered() {
+        // An edition fingers what the player needs told and leaves the rest bare, and
+        // a crowdsourced corpus is barer still — ThumbSet is partial by construction.
+        // Those notes have to survive reading, because the engine is asked to finger
+        // the piece and a piece with holes in it is a different piece: what a hand is
+        // still holding, how far it has to travel and how long it has to get there are
+        // all computed from notes that would not be there.
+        //
+        // PIG itself never exercises this, because PIG annotates everything.
+        let dir = std::env::temp_dir().join("opennote-corpus-partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial_fingering.txt");
+        // Five notes; only the second and fourth carry a finger, the rest read zero.
+        std::fs::write(
+            &path,
+            "//Version: PIG 1.0\n\
+             0\t0.0\t0.5\tC4\t0\t0\t0\t0\n\
+             1\t0.5\t1.0\tD4\t0\t0\t0\t2\n\
+             2\t1.0\t1.5\tE4\t0\t0\t0\t0\n\
+             3\t1.5\t2.0\tF4\t0\t0\t0\t4\n\
+             4\t2.0\t2.5\tG4\t0\t0\t0\t0\n",
+        )
+        .unwrap();
+
+        let piece = read_pig(&path).unwrap().unwrap();
+        assert_eq!(piece.notes.len(), 5, "every note survives, annotated or not");
+        let fingers: Vec<Option<u8>> = piece.notes.iter().map(|n| n.finger).collect();
+        assert_eq!(fingers, vec![None, Some(2), None, Some(4), None]);
+
+        // And the ones nobody fingered contribute nothing to what the prior learns.
+        let placements = piece.voice(Hand::Right);
+        assert_eq!(
+            placements.len(),
+            2,
+            "only the annotated notes teach the model anything"
+        );
+    }
+}
