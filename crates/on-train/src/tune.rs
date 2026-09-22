@@ -1058,6 +1058,13 @@ impl Ledger {
     }
 }
 
+/// What `tools/harvest.py` has spent reading videos, kept in `harvest/hours.json`.
+#[derive(Deserialize)]
+struct Harvested {
+    seconds: f64,
+    videos_added: u64,
+}
+
 /// How a search is run.
 pub struct TuneConfig {
     /// Where the state, the log and the weights go.
@@ -1587,6 +1594,19 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
             state.baseline.test * 100.0
         ));
     }
+    // Reading fingerings out of videos is training time too, and the harvester keeps
+    // its own count beside the searches'.
+    let harvested = std::fs::read_to_string(directory.join("harvest").join("hours.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Harvested>(&text).ok());
+    if let Some(book) = harvested {
+        hours += book.seconds / 3600.0;
+        lines.push(format!(
+            "harvest: {:.2} hours reading videos, {} added to the corpus.",
+            book.seconds / 3600.0,
+            book.videos_added
+        ));
+    }
     if lines.is_empty() {
         lines.push(format!("Nothing has been searched under {} yet.", directory.display()));
     } else {
@@ -1623,6 +1643,25 @@ fn gaussian(state: &mut u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hours_spent_harvesting_count_towards_the_total() {
+        let directory = std::env::temp_dir().join("opennote-harvest-hours-test");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("harvest")).unwrap();
+        std::fs::write(
+            directory.join("harvest").join("hours.json"),
+            r#"{"seconds": 9000, "videos_added": 12}"#,
+        )
+        .unwrap();
+        let lines = report(&directory).unwrap();
+        assert!(
+            lines.iter().any(|line| line.contains("2.50 hours reading videos, 12 added")),
+            "{lines:?}"
+        );
+        assert!(lines.last().unwrap().starts_with("Altogether: 2.50 hours"), "{lines:?}");
+        std::fs::remove_dir_all(&directory).ok();
+    }
 
     #[test]
     fn weights_survive_a_round_trip_and_set_what_they_name() {
