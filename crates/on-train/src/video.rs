@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use on_hand::keyboard::{is_black, Keyboard, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
+use on_hand::keyboard::{is_black, Keyboard, BLACK_KEY_FRONT_Y, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
 use on_hand::{Finger, Hand};
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,15 @@ const MAX_OFFSET_KEYS: f32 = 2.0;
 /// The thumb often tracks slightly off the near edge of the keyboard, so a little
 /// slack is needed; much more than this and the hand is not over the keys at all.
 const MAX_OVERHANG_MM: f32 = 3.0;
+
+/// How far in front of a black key's front edge a fingertip may be and still be
+/// credited with pressing it, in millimetres.
+///
+/// Measured on three PianoVAM performances, where the piano recorded every key: when a
+/// black key went down, the fingertip over it was a median 76 to 91 mm into the
+/// keyboard, and 95% of the time more than 61 mm — past the black keys' front edge at
+/// 55. The slack is for the calibration and the tracking, not for the hand.
+const BLACK_KEY_SLACK_MM: f32 = 15.0;
 
 /// How close two frames' key sets have to be in time to count as the same event.
 const ONSET_WINDOW_SECONDS: f64 = 0.05;
@@ -483,6 +492,12 @@ fn assign(
             if tip.y < f64::from(-MAX_OVERHANG_MM) {
                 continue;
             }
+            // A black key is pressed on its own length, which starts well back from the
+            // front of the keyboard: a fingertip out in front of it is on a white key,
+            // however nearly it lines up across.
+            if is_black(*midi) && tip.y < f64::from(BLACK_KEY_FRONT_Y - BLACK_KEY_SLACK_MM) {
+                continue;
+            }
             let offset = (tip.x - centre).abs();
             if offset > reach {
                 continue;
@@ -882,6 +897,41 @@ mod tests {
         assert_eq!(piece.notes.len(), 1);
         assert_eq!(piece.notes[0].midi, 64);
         assert_eq!(piece.notes[0].finger, Some(3), "the middle finger was over E");
+    }
+
+    /// The pixel that lands at a point on the keyboard, by search.
+    fn pixel_at(homography: &Homography, want: Millimetres) -> Pixel {
+        let mut best = ((0.0, 0.0), f64::MAX);
+        for x in 0..1921 {
+            for y in 0..301 {
+                let got = homography.to_keyboard((f64::from(x), f64::from(y)));
+                let error = (got.0 - want.0).abs() + (got.1 - want.1).abs();
+                if error < best.1 {
+                    best = ((f64::from(x), f64::from(y)), error);
+                }
+            }
+        }
+        best.0
+    }
+
+    #[test]
+    fn a_fingertip_in_front_of_a_black_key_is_not_pressing_it() {
+        let homography = overhead();
+        let keyboard = Keyboard::new();
+        let across = f64::from(keyboard.centre_x(61));
+        // The thumb lies exactly in line with C#4 but out on the white keys in front of
+        // it; the index is a little to the side, on the black key itself. Only the index
+        // can have played it.
+        let mut hand = hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67]);
+        hand.fingertips[0] = pixel_at(&homography, (across, 15.0));
+        hand.fingertips[1] = pixel_at(&homography, (across + 5.0, 100.0));
+        let watched = Watched {
+            source: "test".into(),
+            offset: 0.0,
+            frames: vec![Frame { time: 1.0, hands: vec![hand] }],
+        };
+        let piece = extract(&watched, &[Onset { midi: 61, time: 1.0 }], &homography, "test", "1");
+        assert_eq!(piece.notes[0].finger, Some(2), "the thumb was credited from in front");
     }
 
     #[test]

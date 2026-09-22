@@ -61,3 +61,5 @@ __pycache__/
 /tools/tune_stop.bat
 /tools/watch_pianist.py
 /docs/TRAINING.md
+/pianovam/
+/tools/keyboard.py
