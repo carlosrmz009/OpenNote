@@ -249,6 +249,7 @@ mod tests {
             cost: 0.0,
             explanations: Vec::new(),
             agreement: None,
+            path: Vec::new(),
         };
 
         assert_eq!(
@@ -265,6 +266,7 @@ mod tests {
             cost: 0.0,
             explanations: Vec::new(),
             agreement: None,
+            path: Vec::new(),
         };
         assert_eq!(fingering_line(&score, &solution, Hand::Left), None);
     }

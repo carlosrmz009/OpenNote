@@ -394,7 +394,7 @@ fn ratio(total: f32, count: usize) -> f32 {
 /// note the same length is not the piece that was fingered, and measuring against it
 /// measures the wrong thing. Entries written before lengths were recorded fall back to
 /// an eighth note, which is what this used to assume for everything.
-fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
+pub(crate) fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
     // A corpus entry keeps its timings in seconds, and a score keeps them in ticks
     // against a tempo. `finalise` recomputes the seconds from the ticks, so the two have
     // to agree or the piece comes out at the wrong speed — and how much time there is

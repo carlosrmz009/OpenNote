@@ -183,6 +183,81 @@ pub struct EvalArgs {
     pub weights: ModelArgs,
 }
 
+/// Teach the search to finger like the pianists in the corpus.
+#[derive(Debug, Args)]
+pub struct RerankArgs {
+    /// The corpus directory.
+    #[arg(long, default_value = CORPUS_DIR)]
+    pub corpus: PathBuf,
+
+    /// Where to write the model. Used with `--model`, like any other.
+    #[arg(long, short, default_value = "models/rerank.json")]
+    pub out: PathBuf,
+
+    /// Passes over the training pieces.
+    #[arg(long, default_value_t = 6)]
+    pub epochs: usize,
+
+    /// How far one disagreement moves a weight, in the cost function's own units.
+    #[arg(long, default_value_t = 0.2)]
+    pub rate: f32,
+
+    /// Fingers read with less confidence than this are neither learned from nor
+    /// measured against. 0.4 is where the harvested readings were measured 98.8% right.
+    #[arg(long, default_value_t = 0.4)]
+    pub min_confidence: f32,
+
+    /// The fraction of pieces held back to measure on.
+    #[arg(long, default_value_t = 0.2)]
+    pub held_out: f32,
+
+    /// Pieces each pass learns from, drawn afresh; 0 for all of them.
+    #[arg(long, default_value_t = 0)]
+    pub per_pass: usize,
+
+    /// Pieces fingered at once. One per core by default.
+    #[arg(long)]
+    pub threads: Option<usize>,
+
+    #[command(flatten)]
+    pub weights: ModelArgs,
+}
+
+/// Run `opennote rerank`.
+pub fn rerank(args: RerankArgs) -> Result<()> {
+    let pieces = Corpus::at(&args.corpus)?.load()?;
+    if pieces.is_empty() {
+        bail!("the corpus at {} is empty", args.corpus.display());
+    }
+    let options = args.weights.options()?;
+    let config = on_train::rerank::Config {
+        epochs: args.epochs,
+        rate: args.rate,
+        floor: args.min_confidence,
+        held_out: args.held_out,
+        per_epoch: args.per_pass,
+        threads: args
+            .threads
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
+    };
+    let report = on_train::rerank::train(&pieces, &options, &config, |line| println!("{line}"));
+    if report.best == 0 {
+        println!("\nNo pass beat the rules alone on the held-back pieces; nothing written.");
+        return Ok(());
+    }
+    let kept = &report.passes[report.best - 1];
+    report.model.save(&args.out)?;
+    println!(
+        "\nKept pass {}: {:.1}% against {:.1}% for the rules alone, on {} held-back pieces.",
+        report.best,
+        kept.general * 100.0,
+        report.before.general * 100.0,
+        report.sizes.1
+    );
+    println!("Written to {}. Use it with --model {}.", args.out.display(), args.out.display());
+    Ok(())
+}
+
 /// Measure the fingering against a dataset, without learning anything from it.
 #[derive(Debug, Args)]
 pub struct BenchArgs {

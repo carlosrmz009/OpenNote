@@ -127,6 +127,40 @@ pub trait FingeringPrior: Sync {
         prev: Option<Placement>,
         current: Placement,
     ) -> f32;
+
+    /// A learned adjustment to the cost of holding a chord shape. None by default.
+    fn chord_cost(&self, _hand: Hand, _notes: &[u8], _fingers: &[Finger]) -> f32 {
+        0.0
+    }
+
+    /// A learned adjustment to the cost of moving from one chord shape to the next.
+    /// None by default.
+    fn step_cost(
+        &self,
+        _hand: Hand,
+        _from: (&[u8], &[Finger]),
+        _to: (&[u8], &[Finger]),
+        _seconds: f64,
+    ) -> f32 {
+        0.0
+    }
+}
+
+/// One chord of the path a search chose, as the search saw it: every note the hand had
+/// down, and the finger on each.
+///
+/// What a learned model is trained on. The same features are read off this as the
+/// search charged while it was choosing, so the two cannot drift apart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Step {
+    /// Which hand.
+    pub hand: Hand,
+    /// The notes, low to high, held ones included.
+    pub notes: Vec<u8>,
+    /// The finger on each.
+    pub fingers: Vec<Finger>,
+    /// When the chord sounds.
+    pub onset_seconds: f64,
 }
 
 /// One chord of one hand: the unit the search steps through.
@@ -181,6 +215,10 @@ pub struct CostBreakdown {
     /// What the statistical model charged for this chord given the two before it: minus
     /// its log-probability, scaled. Zero unless a model was loaded.
     pub prior: f32,
+    /// What a learned model adjusted the cost of holding this chord shape by. Zero
+    /// unless a model with learned weights was loaded. The adjustment to moving into it
+    /// is part of `motion`.
+    pub learned: f32,
 }
 
 impl CostBreakdown {
@@ -190,7 +228,13 @@ impl CostBreakdown {
     /// see [`HandSolver::assemble`] for how the terms the search charges between chords
     /// are shared out, so that each is counted once and by one chord.
     pub fn total(&self) -> f32 {
-        self.rules + self.posture + self.pattern + self.motion + self.agreement + self.prior
+        self.rules
+            + self.posture
+            + self.pattern
+            + self.motion
+            + self.agreement
+            + self.prior
+            + self.learned
     }
 }
 
@@ -230,6 +274,8 @@ pub struct Solution {
     /// so a caller wanting the figure does not have to run the four searches a second
     /// time to get it — which is four fifths of the work of a consensus run.
     pub agreement: Option<(usize, usize)>,
+    /// The chords the search chose, hand by hand in order, as it saw them.
+    pub path: Vec<Step>,
 }
 
 impl Solution {
@@ -465,17 +511,19 @@ fn solve_score(
 
     let mut fingerings = Vec::new();
     let mut explanations = Vec::new();
+    let mut path = Vec::new();
     let mut cost = 0.0;
     for solved in solved.into_iter().flatten() {
         cost += solved.cost;
         fingerings.extend(solved.fingerings);
         explanations.extend(solved.explanations);
+        path.extend(solved.path);
     }
 
     finger_the_twins(score, &mut fingerings);
     fingerings.sort_by_key(|f| f.note);
     explanations.sort_by_key(|e| e.note);
-    Solution { fingerings, cost, explanations, agreement: None }
+    Solution { fingerings, cost, explanations, agreement: None, path }
 }
 
 /// Give the same finger to notes the search collapsed into one.
@@ -906,6 +954,11 @@ impl<'a> HandSolver<'a> {
         if !outcome.reachable {
             posture += crate::biomech::UNREACHABLE_PENALTY + outcome.shortfall_mm;
         }
+        let learned = self.prior.map_or(0.0, |model| {
+            model
+                .chord_cost(self.hand, &event.notes, &candidate.fingers)
+                .clamp(-crate::learned::LIMIT, crate::learned::LIMIT)
+        });
         CostBreakdown {
             rules: self.options.rule_scale * rules,
             posture,
@@ -915,6 +968,7 @@ impl<'a> HandSolver<'a> {
             // Charged between chords rather than for one, so it is added where the
             // chord's share of the total is worked out, not here.
             prior: 0.0,
+            learned,
         }
     }
 
@@ -975,7 +1029,17 @@ impl<'a> HandSolver<'a> {
             &self.grip(to.0, to.1),
             seconds,
         );
-        travel + SUBSTITUTION_COST * self.substitutions(from, to) as f32
+        let learned = self.prior.map_or(0.0, |model| {
+            model
+                .step_cost(
+                    self.hand,
+                    (&from.0.notes, &from.1.fingers),
+                    (&to.0.notes, &to.1.fingers),
+                    seconds,
+                )
+                .clamp(-crate::learned::LIMIT, crate::learned::LIMIT)
+        });
+        travel + SUBSTITUTION_COST * self.substitutions(from, to) as f32 + learned
     }
 
     /// How many notes are down through both events on a different finger in each.
@@ -1189,9 +1253,16 @@ impl<'a> HandSolver<'a> {
     ) -> Solution {
         let mut fingerings = Vec::new();
         let mut explanations = Vec::new();
+        let mut path = Vec::with_capacity(events.len());
 
         for (i, event) in events.iter().enumerate() {
             let candidate = &all[i][chosen[i]];
+            path.push(Step {
+                hand: self.hand,
+                notes: event.notes.clone(),
+                fingers: candidate.fingers.clone(),
+                onset_seconds: event.onset_seconds,
+            });
             let grip = self.grip(event, candidate);
             let outcome = self.biomech.grip_outcome(&grip);
 
@@ -1266,7 +1337,7 @@ impl<'a> HandSolver<'a> {
             }
         }
 
-        Solution { fingerings, cost, explanations, agreement: None }
+        Solution { fingerings, cost, explanations, agreement: None, path }
     }
 }
 

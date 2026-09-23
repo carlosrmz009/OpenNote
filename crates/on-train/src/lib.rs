@@ -16,6 +16,7 @@
 pub mod corpus;
 pub mod hash;
 pub mod eval;
+pub mod rerank;
 pub mod train;
 pub mod tune;
 pub mod video;

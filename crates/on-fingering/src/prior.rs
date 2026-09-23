@@ -242,6 +242,10 @@ pub struct NgramPrior {
     /// Which symmetries fill that table. Measured rather than assumed; see
     /// `cargo run -p on-fingering --example symmetry`.
     symmetries: Symmetries,
+    /// Weights learned by running the search itself over known fingerings, carried in
+    /// the same file so that anything that takes a model takes these too. See
+    /// [`crate::learned`].
+    pub learned: Option<crate::learned::Learned>,
 }
 
 /// Which of the two symmetries the pooled table is allowed to assume.
@@ -387,6 +391,7 @@ impl NgramPrior {
             right: serialize_hand(&self.hands[Hand::Right as usize]),
             pooled_left: serialize_hand(&self.pooled[Hand::Left as usize]),
             pooled_right: serialize_hand(&self.pooled[Hand::Right as usize]),
+            learned: self.learned.clone(),
         };
         let text = serde_json::to_string_pretty(&stored)?;
         std::fs::write(path, text)?;
@@ -407,6 +412,7 @@ impl NgramPrior {
         prior.pooled[Hand::Left as usize] = deserialize_hand(&stored.pooled_left);
         prior.pooled[Hand::Right as usize] = deserialize_hand(&stored.pooled_right);
         prior.symmetries = stored.symmetries;
+        prior.learned = stored.learned;
         Ok(prior)
     }
 
@@ -545,6 +551,20 @@ impl FingeringPrior for NgramPrior {
             .max(1e-4)
             .ln()
     }
+
+    fn chord_cost(&self, hand: Hand, notes: &[u8], fingers: &[Finger]) -> f32 {
+        self.learned.as_ref().map_or(0.0, |l| l.chord(hand, notes, fingers))
+    }
+
+    fn step_cost(
+        &self,
+        hand: Hand,
+        from: (&[u8], &[Finger]),
+        to: (&[u8], &[Finger]),
+        seconds: f64,
+    ) -> f32 {
+        self.learned.as_ref().map_or(0.0, |l| l.step(hand, from, to, seconds))
+    }
 }
 
 /// The model as it is stored on disk.
@@ -563,6 +583,10 @@ struct StoredModel {
     /// every left-hand lookup.
     #[serde(default)]
     symmetries: Symmetries,
+    /// Learned weights, where there are any. Absent from models trained before them,
+    /// which read back without.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    learned: Option<crate::learned::Learned>,
 }
 
 fn serialize_hand(counts: &HandCounts) -> HashMap<String, Tally> {

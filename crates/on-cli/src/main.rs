@@ -55,6 +55,9 @@ enum Command {
     Tune(learn::TuneArgs),
     /// Measure against a dataset without learning anything from it.
     Bench(learn::BenchArgs),
+    /// Teach the search to finger like the pianists in the corpus: the rules propose,
+    /// what is learned decides between them.
+    Rerank(learn::RerankArgs),
 }
 
 /// How big the pianist's hand is, and which rule set to score with.
@@ -230,5 +233,6 @@ fn main() -> Result<()> {
         Command::Eval(args) => learn::eval(args),
         Command::Tune(args) => learn::tune(args),
         Command::Bench(args) => learn::bench(args),
+        Command::Rerank(args) => learn::rerank(args),
     }
 }
