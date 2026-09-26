@@ -628,6 +628,12 @@ fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
     for index in 0..events.len() {
         let now = events[index].onset_seconds;
         sounding.retain(|s| s.until > now + 1e-6);
+        // A key struck again is not still held: pressing it means it came up first, so
+        // whatever was sounding on it has ended, however long its written duration. Kept,
+        // it put the same key in the chord twice — once held, once struck — and the search
+        // had to find it two fingers.
+        let restruck: Vec<u8> = events[index].notes.clone();
+        sounding.retain(|s| !restruck.contains(&s.midi) || events[index].ids.contains(&s.id));
 
         let struck: Vec<(NoteId, u8)> = events[index]
             .ids
@@ -1402,6 +1408,22 @@ mod tests {
         }
         score.finalise();
         score
+    }
+
+    #[test]
+    fn a_key_struck_again_is_not_also_held() {
+        // A repeated note whose first sounding is written, or was transcribed, to run on
+        // past the second strike — as overlapping repeats constantly do in MIDI files.
+        let mut score = melody(&[60, 60, 64], Hand::Right, 1.0);
+        score.notes[0].duration *= 3;
+        score.finalise();
+        let mut events = build_events(&score, Hand::Right);
+        hold_sustained(&mut events, &score, 14);
+        for event in &events {
+            let mut keys = event.notes.clone();
+            keys.dedup();
+            assert_eq!(keys, event.notes, "the same key twice in one chord: {:?}", event.notes);
+        }
     }
 
     /// Passages that exercise every term the search charges: steps, leaps, a turn,

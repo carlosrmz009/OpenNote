@@ -219,12 +219,35 @@ pub struct RerankArgs {
     #[arg(long)]
     pub threads: Option<usize>,
 
+    /// Instead of training, say what the model at `--out` learned: its strongest
+    /// weights, in words, the fingerings it made cheaper first.
+    #[arg(long)]
+    pub explain: bool,
+
     #[command(flatten)]
     pub weights: ModelArgs,
 }
 
 /// Run `opennote rerank`.
 pub fn rerank(args: RerankArgs) -> Result<()> {
+    if args.explain {
+        let model = NgramPrior::load(&args.out)
+            .with_context(|| format!("reading the model at {}", args.out.display()))?;
+        let Some(learned) = model.learned else {
+            bail!("{} has no learned weights in it", args.out.display());
+        };
+        let mut weights: Vec<(u64, f32)> = learned.weights.into_iter().collect();
+        weights.sort_by(|a, b| a.1.total_cmp(&b.1));
+        println!("{} learned weights. Made cheaper (preferred):", weights.len());
+        for (fact, weight) in weights.iter().take(25) {
+            println!("  {weight:+7.2}  {}", on_fingering::learned::describe(*fact));
+        }
+        println!("\nMade dearer (avoided):");
+        for (fact, weight) in weights.iter().rev().take(25) {
+            println!("  {weight:+7.2}  {}", on_fingering::learned::describe(*fact));
+        }
+        return Ok(());
+    }
     let pieces = Corpus::at(&args.corpus)?.load()?;
     if pieces.is_empty() {
         bail!("the corpus at {} is empty", args.corpus.display());

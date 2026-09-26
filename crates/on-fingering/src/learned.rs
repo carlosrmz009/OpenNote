@@ -170,8 +170,80 @@ pub fn step_features(
     }
 }
 
+/// A packed fact, said in words: the inverse of [`chord_features`] and
+/// [`step_features`], for reading what a model learned.
+pub fn describe(fact: u64) -> String {
+    // Each kind of fact packs to its own range of numbers, since the kind sits above a
+    // fixed number of bits of fields.
+    let layouts: [(u64, &[u32]); 4] = [
+        (1, &[1, 3, 1, 3]),
+        (2, &[1, 3, 3, 6, 1, 1]),
+        (3, &[1, 2, 3, 3, 6, 1, 1]),
+        (4, &[1, 2, 3, 3, 2, 2]),
+    ];
+    for (kind, bits) in layouts {
+        let width: u32 = bits.iter().sum();
+        if fact >> width != kind {
+            continue;
+        }
+        let mut fields = Vec::with_capacity(bits.len());
+        let mut shift = width;
+        for b in bits {
+            shift -= b;
+            fields.push((fact >> shift) & ((1 << b) - 1));
+        }
+        let hand = if fields[0] == 0 { "left" } else { "right" };
+        let key = |c: u64| if c == 1 { "black" } else { "white" };
+        let side = |s: u64| match s {
+            0 => "lowest voice",
+            1 => "highest voice",
+            _ => "line",
+        };
+        return match kind {
+            1 => format!("{hand} hand, finger {} on a {} key, in a {}-note chord", fields[1] + 1, key(fields[2]), fields[3]),
+            2 => format!(
+                "{hand} hand chord, fingers {}-{} a {} semitones apart, {} then {}",
+                fields[1] + 1,
+                fields[2] + 1,
+                fields[3] as i64 - 24,
+                key(fields[4]),
+                key(fields[5])
+            ),
+            3 => format!(
+                "{hand} hand {}, finger {} to {} moving {:+} semitones, {} to {}",
+                side(fields[1]),
+                fields[2] + 1,
+                fields[3] + 1,
+                fields[4] as i64 - 16,
+                key(fields[5]),
+                key(fields[6])
+            ),
+            _ => format!(
+                "{hand} hand {}, finger {} to {} {}, {}",
+                side(fields[1]),
+                fields[2] + 1,
+                fields[3] + 1,
+                ["downwards", "on the same key", "upwards"][fields[4].min(2) as usize],
+                ["fast", "moderately", "slowly", "after a pause"][fields[5] as usize]
+            ),
+        };
+    }
+    format!("unknown fact {fact}")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_fact_can_be_read_back() {
+        let mut facts = Vec::new();
+        chord_features(Hand::Left, &[48, 52], &[Finger::Little, Finger::Middle], &mut facts);
+        step_features(Hand::Right, (&[61], &[Finger::Middle]), (&[60], &[Finger::Thumb]), 0.1, &mut facts);
+        let said: Vec<String> = facts.iter().map(|f| describe(*f)).collect();
+        assert!(said.iter().all(|s| !s.starts_with("unknown")), "{said:?}");
+        assert!(said.contains(&"left hand chord, fingers 5-3 a 4 semitones apart, white then white".to_string()), "{said:?}");
+        assert!(said.contains(&"right hand line, finger 3 to 1 moving -1 semitones, black to white".to_string()), "{said:?}");
+    }
+
     use super::*;
 
     #[test]
