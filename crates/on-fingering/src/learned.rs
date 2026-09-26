@@ -26,11 +26,47 @@ use serde::{Deserialize, Serialize};
 /// however strong, can buy a shape the hand cannot reach.
 pub const LIMIT: f32 = 20.0;
 
+/// The most any one fact's weight may reach. A quarter of [`LIMIT`], so it takes
+/// several facts agreeing to move a chord as far as the cap allows, and no single one
+/// can swamp the rules on its own.
+pub const WEIGHT_LIMIT: f32 = LIMIT / 4.0;
+
+/// Whose fingering a model imitates.
+///
+/// One model carries both. Every fact has a shared weight, learned from every piece, and
+/// a weight for each style, learned only from that style's pieces; fingering in a style
+/// charges the shared weight plus that style's. What is true of hands in general ends up
+/// shared, and what is a convention ends up in the style (Daumé, *Frustratingly Easy
+/// Domain Adaptation*, 2007).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Style {
+    /// How pianists play: learned from performances.
+    #[default]
+    Performance,
+    /// How editions are fingered: learned from written fingerings.
+    Classical,
+}
+
+impl Style {
+    /// A fact's key within this style.
+    pub fn tag(self, fact: u64) -> u64 {
+        let style = match self {
+            Style::Performance => 1u64,
+            Style::Classical => 2,
+        };
+        fact | (style << 56)
+    }
+}
+
 /// Learned weights, one per fact.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Learned {
-    /// Keyed by the packed fact; see [`chord_features`] and [`step_features`].
+    /// Keyed by the packed fact, shared; or by [`Style::tag`] of it, for one style.
     pub weights: HashMap<u64, f32>,
+    /// Which style this copy of the model fingers in. Chosen when it is used, not
+    /// stored.
+    #[serde(skip)]
+    pub style: Style,
 }
 
 impl Learned {
@@ -60,7 +96,10 @@ impl Learned {
         }
         facts
             .iter()
-            .filter_map(|fact| self.weights.get(fact))
+            .map(|fact| {
+                self.weights.get(fact).copied().unwrap_or(0.0)
+                    + self.weights.get(&self.style.tag(*fact)).copied().unwrap_or(0.0)
+            })
             .sum::<f32>()
             .clamp(-LIMIT, LIMIT)
     }
@@ -173,6 +212,15 @@ pub fn step_features(
 /// A packed fact, said in words: the inverse of [`chord_features`] and
 /// [`step_features`], for reading what a model learned.
 pub fn describe(fact: u64) -> String {
+    let style = match fact >> 56 {
+        1 => "[performance] ",
+        2 => "[classical] ",
+        _ => "",
+    };
+    format!("{style}{}", describe_fact(fact & ((1 << 56) - 1)))
+}
+
+fn describe_fact(fact: u64) -> String {
     // Each kind of fact packs to its own range of numbers, since the kind sits above a
     // fixed number of bits of fields.
     let layouts: [(u64, &[u32]); 4] = [
@@ -260,7 +308,7 @@ mod tests {
     fn no_weight_can_move_a_chord_past_the_limit() {
         let mut facts = Vec::new();
         chord_features(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle], &mut facts);
-        let model = Learned { weights: facts.iter().map(|f| (*f, -1000.0)).collect() };
+        let model = Learned { weights: facts.iter().map(|f| (*f, -1000.0)).collect(), ..Default::default() };
         assert_eq!(model.chord(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle]), -LIMIT);
     }
 

@@ -63,3 +63,5 @@ __pycache__/
 /docs/TRAINING.md
 /pianovam/
 /tools/keyboard.py
+/tools/pdmx_fingerings.py
+/corpus-classical*/

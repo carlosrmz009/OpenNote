@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use on_fingering::learned::{chord_features, step_features, Learned};
+use on_fingering::learned::{chord_features, step_features, Learned, Style, WEIGHT_LIMIT};
 use on_fingering::{finger_score_with_prior, FingeringOptions, NgramPrior, Step};
 use on_hand::Finger;
 use on_score::{NoteId, Score};
@@ -38,16 +38,25 @@ pub struct Config {
     pub per_epoch: usize,
     /// Pieces fingered at once.
     pub threads: usize,
+    /// Who played each piece, where that is known: a channel, a pianist. Pieces are then
+    /// held back a whole group at a time, so what is measured is how well the model does
+    /// on players it has never seen, not on more pieces by the ones it learned from.
+    /// Pieces without a group are held back on their own.
+    pub groups: HashMap<String, String>,
+    /// Hold back exactly these groups, rather than a share of them chosen by hash. With
+    /// few groups a hash puts them on either side by luck; naming them is the honest way
+    /// to ask "how does it do on this pianist, having never seen them?".
+    pub test_groups: Vec<String>,
 }
 
 /// What a training run did.
 pub struct Report {
-    /// The model: an empty n-gram table carrying the learned weights.
+    /// The model: an empty n-gram table carrying the learned weights, both styles.
     pub model: NgramPrior,
-    /// The held-back pieces fingered by the rules alone.
-    pub before: MatchRates,
+    /// The held-back pieces of each style fingered by the rules alone.
+    pub before: Vec<(Style, MatchRates)>,
     /// The same after each pass, with that pass's averaged weights.
-    pub passes: Vec<MatchRates>,
+    pub passes: Vec<Vec<(Style, MatchRates)>>,
     /// Which pass was kept.
     pub best: usize,
     /// How many training and held-back pieces there were.
@@ -58,6 +67,17 @@ pub struct Report {
 struct Example {
     free: Score,
     pinned: Score,
+    style: Style,
+}
+
+/// Which style a piece teaches: anything read off a performance video the performance
+/// one, and everything written down — an edition's printed fingering — the classical one.
+pub fn style_of(piece: &Piece) -> Style {
+    if piece.annotator == "video" {
+        Style::Performance
+    } else {
+        Style::Classical
+    }
 }
 
 /// A piece with its confident fingers pinned — where they make a shape a hand can hold.
@@ -96,7 +116,7 @@ fn example(piece: &Piece, floor: f32) -> Option<Example> {
             pins += 1;
         }
     }
-    (pins > 0).then_some(Example { free, pinned })
+    (pins > 0).then_some(Example { free, pinned, style: style_of(piece) })
 }
 
 /// Every fact a path used, counted.
@@ -122,10 +142,37 @@ fn facts(path: &[Step]) -> HashMap<u64, f32> {
     counts
 }
 
-fn model_of(weights: &HashMap<u64, f32>) -> NgramPrior {
+fn model_of(weights: &HashMap<u64, f32>, style: Style) -> NgramPrior {
     let mut model = NgramPrior::new();
-    model.learned = Some(Learned { weights: weights.clone() });
+    model.learned = Some(Learned { weights: weights.clone(), style });
     model
+}
+
+const STYLES: [Style; 2] = [Style::Performance, Style::Classical];
+
+/// Each style's held-back pieces, measured in that style.
+fn measure_styles(
+    test: &[(Style, Vec<Piece>)],
+    options: &FingeringOptions,
+    weights: Option<&HashMap<u64, f32>>,
+    threads: usize,
+) -> Vec<(Style, MatchRates)> {
+    test.iter()
+        .map(|(style, pieces)| {
+            let model = weights.map(|w| model_of(w, *style));
+            (*style, measure(pieces, options, model.as_ref(), threads))
+        })
+        .collect()
+}
+
+/// The figure a pass is chosen by: each style's agreement, averaged, so neither can be
+/// bought at the other's expense unnoticed.
+fn overall(rates: &[(Style, MatchRates)]) -> f32 {
+    rates.iter().map(|(_, r)| r.general).sum::<f32>() / rates.len().max(1) as f32
+}
+
+fn describe_rates(rates: &[(Style, MatchRates)]) -> String {
+    rates.iter().map(|(style, r)| format!("{style:?} {:.1}%", r.general * 100.0)).collect::<Vec<_>>().join(", ")
 }
 
 /// Finger pieces on several threads, and put the measurements back together.
@@ -145,6 +192,31 @@ fn measure(pieces: &[Piece], options: &FingeringOptions, model: Option<&NgramPri
     combine(&parts)
 }
 
+/// Divide pieces a whole group at a time, by a hash of the group, so it is the same
+/// division every run.
+fn split_by_group(
+    pieces: &[Piece],
+    held_out: f32,
+    groups: &HashMap<String, String>,
+    test_groups: &[String],
+) -> crate::Split {
+    let mut split = crate::Split { train: Vec::new(), test: Vec::new() };
+    for piece in pieces {
+        let group = groups.get(&piece.piece).unwrap_or(&piece.piece);
+        let chosen = if test_groups.is_empty() {
+            crate::hash::share(group) < f64::from(held_out)
+        } else {
+            test_groups.iter().any(|g| g == group)
+        };
+        if chosen {
+            split.test.push(piece.clone());
+        } else {
+            split.train.push(piece.clone());
+        }
+    }
+    split
+}
+
 /// Train, keeping the weights from the pass that did best on the held-back pieces.
 pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut say: impl FnMut(&str)) -> Report {
     on_fingering::set_inner_threads(false);
@@ -153,17 +225,37 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
     // empty and is not asked.
     options.prior_scale = 0.0;
 
-    let split = split(pieces, config.held_out);
-    let test: Vec<Piece> = split.test.iter().map(|p| p.trusted(config.floor)).collect();
+    let split = if config.groups.is_empty() {
+        split(pieces, config.held_out)
+    } else {
+        split_by_group(pieces, config.held_out, &config.groups, &config.test_groups)
+    };
+    let test: Vec<(Style, Vec<Piece>)> = STYLES
+        .iter()
+        .map(|style| {
+            let pieces: Vec<Piece> = split
+                .test
+                .iter()
+                .filter(|p| style_of(p) == *style)
+                .map(|p| p.trusted(config.floor))
+                .collect();
+            (*style, pieces)
+        })
+        .filter(|(_, pieces)| !pieces.is_empty())
+        .collect();
     let examples: Vec<Example> = split.train.iter().filter_map(|p| example(p, config.floor)).collect();
-    say(&format!(
-        "{} pieces to learn from, {} held back to measure on.",
-        examples.len(),
-        test.len()
-    ));
+    for style in STYLES {
+        say(&format!(
+            "{style:?}: {} pieces to learn from, {} held back to measure on.",
+            examples.iter().filter(|e| e.style == style).count(),
+            test.iter().find(|(s, _)| *s == style).map_or(0, |(_, p)| p.len())
+        ));
+    }
 
-    let before = measure(&test, &options, None, config.threads);
-    say(&format!("rules alone:   {before}"));
+    let before = measure_styles(&test, &options, None, config.threads);
+    for (style, rates) in &before {
+        say(&format!("rules alone, {style:?}: {rates}"));
+    }
 
     let mut weights: HashMap<u64, f32> = HashMap::new();
     // The running sums that make the average (Daumé's trick): the average of the
@@ -171,7 +263,7 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
     let mut total: HashMap<u64, f32> = HashMap::new();
     let mut batches = 1.0f32;
     let mut passes = Vec::new();
-    let mut best = (before.general, None::<HashMap<u64, f32>>, 0usize);
+    let mut best = (overall(&before), None::<HashMap<u64, f32>>, 0usize);
 
     for pass in 0..config.epochs {
         // A fresh, repeatable order each pass.
@@ -181,25 +273,47 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
             order.truncate(config.per_epoch);
         }
         for batch in order.chunks(config.threads.max(1) * 4) {
-            let model = model_of(&weights);
+            let models: Vec<(Style, NgramPrior)> =
+                STYLES.iter().map(|s| (*s, model_of(&weights, *s))).collect();
             let deltas: Vec<HashMap<u64, f32>> = std::thread::scope(|scope| {
                 let running: Vec<_> = batch
                     .chunks(4)
                     .map(|part| {
-                        let (model, options, examples) = (&model, &options, &examples);
+                        let (models, options, examples) = (&models, &options, &examples);
                         scope.spawn(move || {
                             let mut delta: HashMap<u64, f32> = HashMap::new();
                             for &i in part {
-                                let free = finger_score_with_prior(&examples[i].free, options, Some(model));
-                                let gold = finger_score_with_prior(&examples[i].pinned, options, Some(model));
-                                if free.path == gold.path {
+                                let example = &examples[i];
+                                let model = &models.iter().find(|(s, _)| *s == example.style).expect("every style has a model").1;
+                                let free = finger_score_with_prior(&example.free, options, Some(model));
+                                let gold = finger_score_with_prior(&example.pinned, options, Some(model));
+                                // A written fingering that forces a stretch the hand cannot
+                                // make is an engraving slip, not a lesson.
+                                if gold.explanations.iter().any(|e| !e.reachable) {
                                     continue;
                                 }
+                                // Each piece moves the weights by the same amount however
+                                // long it is: by its disagreements, one unit shared among
+                                // them, so a long piece full of mistakes cannot outvote the
+                                // rest of the batch.
+                                let wrong = free.path.iter().zip(&gold.path).filter(|(a, b)| a != b).count();
+                                if wrong == 0 {
+                                    continue;
+                                }
+                                let share = 1.0 / wrong as f32;
+                                let mut piece: HashMap<u64, f32> = HashMap::new();
                                 for (fact, n) in facts(&free.path) {
-                                    *delta.entry(fact).or_insert(0.0) += n;
+                                    *piece.entry(fact).or_insert(0.0) += n;
                                 }
                                 for (fact, n) in facts(&gold.path) {
-                                    *delta.entry(fact).or_insert(0.0) -= n;
+                                    *piece.entry(fact).or_insert(0.0) -= n;
+                                }
+                                // Every fact is learned twice: shared, and for this style.
+                                for (fact, n) in piece {
+                                    if n != 0.0 {
+                                        *delta.entry(fact).or_insert(0.0) += n * share;
+                                        *delta.entry(example.style.tag(fact)).or_insert(0.0) += n * share;
+                                    }
                                 }
                             }
                             delta
@@ -213,8 +327,10 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
                     if n == 0.0 {
                         continue;
                     }
-                    let step = config.rate * n;
-                    *weights.entry(fact).or_insert(0.0) += step;
+                    let weight = weights.entry(fact).or_insert(0.0);
+                    let moved = (*weight + config.rate * n).clamp(-WEIGHT_LIMIT, WEIGHT_LIMIT);
+                    let step = moved - *weight;
+                    *weight = moved;
                     *total.entry(fact).or_insert(0.0) += batches * step;
                 }
             }
@@ -225,16 +341,16 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
             .map(|(fact, w)| (*fact, w - total.get(fact).copied().unwrap_or(0.0) / batches))
             .filter(|(_, w)| w.abs() > 1e-6)
             .collect();
-        let rates = measure(&test, &options, Some(&model_of(&averaged)), config.threads);
-        say(&format!("after pass {}: {rates}", pass + 1));
-        if rates.general > best.0 {
-            best = (rates.general, Some(averaged), pass + 1);
+        let rates = measure_styles(&test, &options, Some(&averaged), config.threads);
+        say(&format!("after pass {}: {}", pass + 1, describe_rates(&rates)));
+        if overall(&rates) > best.0 {
+            best = (overall(&rates), Some(averaged), pass + 1);
         }
         passes.push(rates);
     }
 
-    let model = best.1.map(|w| model_of(&w)).unwrap_or_default();
-    Report { model, before, passes, best: best.2, sizes: (examples.len(), test.len()) }
+    let model = best.1.map(|w| model_of(&w, Style::Performance)).unwrap_or_default();
+    Report { model, before, passes, best: best.2, sizes: (examples.len(), test.iter().map(|(_, p)| p.len()).sum()) }
 }
 
 #[cfg(test)]
@@ -264,15 +380,36 @@ mod tests {
     fn training_teaches_the_search_a_pianists_habit() {
         let pieces: Vec<Piece> = (0..12).map(|i| quirky(&format!("piece {i}"))).collect();
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
-        let config = Config { epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2 };
+        let config = Config { epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new() };
         let report = train(&pieces, &options, &config, |_| {});
-        let learned = report.passes.iter().map(|r| r.general).fold(0.0, f32::max);
+        let learned = report.passes.iter().map(|r| overall(r)).fold(0.0, f32::max);
+        let before = overall(&report.before);
         assert!(
-            learned > report.before.general + 0.2 && learned > 0.95,
-            "rules alone {:.3}, best pass {:.3}",
-            report.before.general,
-            learned
+            learned > before + 0.2 && learned > 0.95,
+            "rules alone {before:.3}, best pass {learned:.3}"
         );
+    }
+
+    #[test]
+    fn two_styles_keep_opposite_habits_apart() {
+        // The same line, fingered one way in performances and another in editions.
+        let habit = |name: String, annotator: &str, fingers: [u8; 2]| {
+            let mut piece = quirky(&name);
+            piece.annotator = annotator.into();
+            for note in &mut piece.notes {
+                note.finger = Some(if note.midi == 60 { fingers[0] } else if note.midi == 64 { fingers[1] } else { note.finger.unwrap_or(1) });
+            }
+            piece
+        };
+        let mut pieces: Vec<Piece> = (0..12).map(|i| habit(format!("seen {i}"), "video", [2, 4])).collect();
+        pieces.extend((0..12).map(|i| habit(format!("written {i}"), "edition", [1, 3])));
+        let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
+        let config = Config { epochs: 8, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new() };
+        let report = train(&pieces, &options, &config, |_| {});
+        let best = &report.passes[report.best.max(1) - 1];
+        for (style, rates) in best {
+            assert!(rates.general > 0.9, "{style:?} only reached {:.3}: {}", rates.general, describe_rates(best));
+        }
     }
 
     #[test]

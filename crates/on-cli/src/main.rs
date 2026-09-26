@@ -86,6 +86,12 @@ pub struct ModelArgs {
     #[arg(long)]
     pub model: Option<std::path::PathBuf>,
 
+    /// Whose fingering a model with learned weights imitates: `performance`, how
+    /// pianists play (the default), or `classical`, how editions are fingered. Ignored
+    /// without `--model`.
+    #[arg(long, value_enum, default_value_t = StyleArg::Performance)]
+    pub style: StyleArg,
+
     /// How far the trained model is trusted against the rules. Ignored without
     /// `--model`.
     #[arg(long, default_value_t = 1.0)]
@@ -148,9 +154,31 @@ impl ModelArgs {
         let Some(path) = &self.model else {
             return Ok(None);
         };
-        let prior = on_fingering::NgramPrior::load(path)
+        let mut prior = on_fingering::NgramPrior::load(path)
             .with_context(|| format!("reading the model at {}", path.display()))?;
+        if let Some(learned) = &mut prior.learned {
+            learned.style = self.style.into();
+        }
         Ok(Some(std::sync::Arc::new(prior)))
+    }
+}
+
+/// Fingering style, on the command line.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum StyleArg {
+    /// How pianists play: learned from performances.
+    Performance,
+    /// How editions are fingered: learned from written fingerings.
+    Classical,
+}
+
+impl From<StyleArg> for on_fingering::learned::Style {
+    fn from(value: StyleArg) -> Self {
+        match value {
+            StyleArg::Performance => Self::Performance,
+            StyleArg::Classical => Self::Classical,
+        }
     }
 }
 

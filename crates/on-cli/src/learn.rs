@@ -186,9 +186,21 @@ pub struct EvalArgs {
 /// Teach the search to finger like the pianists in the corpus.
 #[derive(Debug, Args)]
 pub struct RerankArgs {
-    /// The corpus directory.
-    #[arg(long, default_value = CORPUS_DIR)]
-    pub corpus: PathBuf,
+    /// The corpus directories: performances and written fingerings train their own
+    /// styles, so both can be given.
+    #[arg(long, num_args = 1.., default_value = CORPUS_DIR)]
+    pub corpus: Vec<PathBuf>,
+
+    /// A file saying who played each piece, one `piece<TAB>group` a line (extra columns
+    /// are ignored): a channel, a pianist. Pieces are then held back a whole group at a
+    /// time, measuring the model on players it has never seen.
+    #[arg(long)]
+    pub groups: Option<PathBuf>,
+
+    /// Hold back exactly these groups (from `--groups`), comma-separated, rather than a
+    /// share of them chosen by hash.
+    #[arg(long, value_delimiter = ',')]
+    pub test_groups: Vec<String>,
 
     /// Where to write the model. Used with `--model`, like any other.
     #[arg(long, short, default_value = "models/rerank.json")]
@@ -248,9 +260,23 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         }
         return Ok(());
     }
-    let pieces = Corpus::at(&args.corpus)?.load()?;
+    let mut pieces = Vec::new();
+    for corpus in &args.corpus {
+        pieces.extend(Corpus::at(corpus)?.load()?);
+    }
     if pieces.is_empty() {
-        bail!("the corpus at {} is empty", args.corpus.display());
+        bail!("the corpora given are empty");
+    }
+    let mut groups = std::collections::HashMap::new();
+    if let Some(path) = &args.groups {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading the groups at {}", path.display()))?;
+        for line in text.lines() {
+            let mut fields = line.trim_start_matches('\u{feff}').split('\t');
+            if let (Some(piece), Some(group)) = (fields.next(), fields.next()) {
+                groups.insert(piece.trim().to_string(), group.trim().to_string());
+            }
+        }
     }
     let options = args.weights.options()?;
     let config = on_train::rerank::Config {
@@ -262,6 +288,8 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         threads: args
             .threads
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
+        groups,
+        test_groups: args.test_groups.clone(),
     };
     let report = on_train::rerank::train(&pieces, &options, &config, |line| println!("{line}"));
     if report.best == 0 {
@@ -270,13 +298,14 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
     }
     let kept = &report.passes[report.best - 1];
     report.model.save(&args.out)?;
-    println!(
-        "\nKept pass {}: {:.1}% against {:.1}% for the rules alone, on {} held-back pieces.",
-        report.best,
-        kept.general * 100.0,
-        report.before.general * 100.0,
-        report.sizes.1
-    );
+    println!("\nKept pass {}, on {} held-back pieces:", report.best, report.sizes.1);
+    for ((style, after), (_, before)) in kept.iter().zip(&report.before) {
+        println!(
+            "  {style:?}: {:.1}% against {:.1}% for the rules alone",
+            after.general * 100.0,
+            before.general * 100.0
+        );
+    }
     println!("Written to {}. Use it with --model {}.", args.out.display(), args.out.display());
     Ok(())
 }

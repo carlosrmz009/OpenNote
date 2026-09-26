@@ -343,7 +343,10 @@ fn collect(path: &Path, pieces: &mut Vec<Piece>, skipped: &mut Vec<String>) -> R
         .to_ascii_lowercase();
     let read = match extension.as_str() {
         "txt" => read_pig(path),
-        "musicxml" | "mxl" | "xml" => read_musicxml(path),
+        // The MusicXML parser is a dependency, and some malformed files make it panic
+        // rather than return an error; one bad file must not take a whole batch with it.
+        "musicxml" | "mxl" | "xml" => std::panic::catch_unwind(|| read_musicxml(path))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the MusicXML parser crashed on this file"))),
         // Not a mistake, just not data: a README, a licence, a MIDI file with no
         // fingering alongside it.
         _ => return Ok(()),
