@@ -236,6 +236,11 @@ pub struct RerankArgs {
     #[arg(long)]
     pub explain: bool,
 
+    /// Instead of training, measure the model at `--out` against the rules alone on the
+    /// pieces a training run with these settings holds back, paired.
+    #[arg(long)]
+    pub measure: bool,
+
     #[command(flatten)]
     pub weights: ModelArgs,
 }
@@ -291,6 +296,28 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         groups,
         test_groups: args.test_groups.clone(),
     };
+    if args.measure {
+        let model = NgramPrior::load(&args.out)
+            .with_context(|| format!("reading the model at {}", args.out.display()))?;
+        let Some(learned) = model.learned else {
+            bail!("{} has no learned weights in it", args.out.display());
+        };
+        for (style, before, after, gap) in
+            on_train::rerank::measure_model(&pieces, &options, &config, &learned.weights)
+        {
+            println!(
+                "{style:?}: {:.1}% against {:.1}% for the rules alone; paired {:+.1} points \
+                 (95% interval {:+.1} to {:+.1}){}",
+                after.general * 100.0,
+                before.general * 100.0,
+                gap.point * 100.0,
+                gap.low * 100.0,
+                gap.high * 100.0,
+                if gap.low > 0.0 { ", a real improvement" } else { ", not distinguishable from no change" }
+            );
+        }
+        return Ok(());
+    }
     let report = on_train::rerank::train(&pieces, &options, &config, |line| println!("{line}"));
     if report.best == 0 {
         println!("\nNo pass beat the rules alone on the held-back pieces; nothing written.");
@@ -305,6 +332,15 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
             after.general * 100.0,
             before.general * 100.0
         );
+        if let Some((_, gap)) = report.gains.iter().find(|(s, _)| s == style) {
+            println!(
+                "    paired: {:+.1} points (95% interval {:+.1} to {:+.1}){}",
+                gap.point * 100.0,
+                gap.low * 100.0,
+                gap.high * 100.0,
+                if gap.low > 0.0 { ", a real improvement" } else { ", not distinguishable from no change" }
+            );
+        }
     }
     println!("Written to {}. Use it with --model {}.", args.out.display(), args.out.display());
     Ok(())

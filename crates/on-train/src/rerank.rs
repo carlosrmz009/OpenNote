@@ -61,6 +61,11 @@ pub struct Report {
     pub best: usize,
     /// How many training and held-back pieces there were.
     pub sizes: (usize, usize),
+    /// For the pass kept, how much better than the rules alone each style is on its
+    /// held-back pieces, paired: the pieces resampled together (see
+    /// [`crate::eval::paired`]). This, not the pass-by-pass figure, says whether a gain
+    /// is real.
+    pub gains: Vec<(Style, crate::eval::Interval)>,
 }
 
 /// One training piece, ready to finger both ways.
@@ -186,6 +191,16 @@ fn describe_rates(rates: &[(Style, MatchRates)]) -> String {
 
 /// Finger pieces on several threads, and put the measurements back together.
 fn measure(pieces: &[Piece], options: &FingeringOptions, model: Option<&NgramPrior>, threads: usize) -> MatchRates {
+    combine(&measure_pieces(pieces, options, model, threads))
+}
+
+/// The same, each piece's measurement kept apart, in the order the pieces were given.
+fn measure_pieces(
+    pieces: &[Piece],
+    options: &FingeringOptions,
+    model: Option<&NgramPrior>,
+    threads: usize,
+) -> Vec<crate::eval::PieceRates> {
     let chunk = pieces.len().div_ceil(threads.max(1)).max(1);
     let parts: Vec<_> = std::thread::scope(|scope| {
         let running: Vec<_> = pieces
@@ -198,7 +213,7 @@ fn measure(pieces: &[Piece], options: &FingeringOptions, model: Option<&NgramPri
             .collect();
         running.into_iter().flat_map(|t| t.join().expect("a fingering thread panicked")).collect()
     });
-    combine(&parts)
+    parts
 }
 
 /// Divide pieces a whole group at a time, by a hash of the group, so it is the same
@@ -225,6 +240,41 @@ fn split_by_group(
         }
     }
     split
+}
+
+/// A trained model's gain over the rules alone, style by style, on exactly the pieces a
+/// training run with this configuration would have held back.
+pub fn measure_model(
+    pieces: &[Piece],
+    options: &FingeringOptions,
+    config: &Config,
+    weights: &HashMap<u64, f32>,
+) -> Vec<(Style, MatchRates, MatchRates, crate::eval::Interval)> {
+    on_fingering::set_inner_threads(false);
+    let mut options = options.clone();
+    options.prior_scale = 0.0;
+    let split = if config.groups.is_empty() {
+        split(pieces, config.held_out)
+    } else {
+        split_by_group(pieces, config.held_out, &config.groups, &config.test_groups)
+    };
+    STYLES
+        .iter()
+        .filter_map(|style| {
+            let held: Vec<Piece> = split
+                .test
+                .iter()
+                .filter(|p| style_of(p) == *style)
+                .map(|p| p.trusted(config.floor))
+                .collect();
+            if held.is_empty() {
+                return None;
+            }
+            let ours = measure_pieces(&held, &options, Some(&model_of(weights, *style)), config.threads);
+            let theirs = measure_pieces(&held, &options, None, config.threads);
+            Some((*style, combine(&theirs), combine(&ours), crate::eval::paired(&ours, &theirs, 1000)))
+        })
+        .collect()
 }
 
 /// Train, keeping the weights from the pass that did best on the held-back pieces.
@@ -359,8 +409,23 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
         passes.push(rates);
     }
 
+    let mut gains = Vec::new();
+    if let Some(weights) = &best.1 {
+        for (style, pieces) in &test {
+            let ours = measure_pieces(pieces, &options, Some(&model_of(weights, *style)), config.threads);
+            let theirs = measure_pieces(pieces, &options, None, config.threads);
+            gains.push((*style, crate::eval::paired(&ours, &theirs, 1000)));
+        }
+    }
     let model = best.1.map(|w| model_of(&w, Style::Performance)).unwrap_or_default();
-    Report { model, before, passes, best: best.2, sizes: (examples.len(), test.iter().map(|(_, p)| p.len()).sum()) }
+    Report {
+        model,
+        before,
+        passes,
+        best: best.2,
+        sizes: (examples.len(), test.iter().map(|(_, p)| p.len()).sum()),
+        gains,
+    }
 }
 
 #[cfg(test)]
