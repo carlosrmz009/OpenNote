@@ -90,6 +90,20 @@ impl Learned {
         self.sum(&facts)
     }
 
+    /// What the correction charges for three chords in a row, the move into the middle
+    /// one and the move out of it read together.
+    pub fn trigram(
+        &self,
+        hand: Hand,
+        a: (&[u8], &[Finger]),
+        b: (&[u8], &[Finger]),
+        c: (&[u8], &[Finger]),
+    ) -> f32 {
+        let mut facts = Vec::with_capacity(4);
+        trigram_features(hand, a, b, c, &mut facts);
+        self.sum(&facts)
+    }
+
     fn sum(&self, facts: &[u64]) -> f32 {
         if self.weights.is_empty() {
             return 0.0;
@@ -209,6 +223,61 @@ pub fn step_features(
     }
 }
 
+/// A signed step in semitones, in seven buckets: down far, down a third or fourth, down a
+/// step, the same key, and the same upwards.
+fn step_bucket(from: u8, to: u8) -> u64 {
+    match i32::from(to) - i32::from(from) {
+        i32::MIN..=-5 => 0,
+        -4..=-3 => 1,
+        -2..=-1 => 2,
+        0 => 3,
+        1..=2 => 4,
+        3..=4 => 5,
+        _ => 6,
+    }
+}
+
+/// The facts about three chords in a row along each outer voice: the three fingers, the
+/// two steps between them, and whether the middle key is black. This is where a thumb
+/// passing under, or a hand shifting to a new position, shows — a decision about three
+/// notes that no fact about two can see.
+pub fn trigram_features(
+    hand: Hand,
+    a: (&[u8], &[Finger]),
+    b: (&[u8], &[Finger]),
+    c: (&[u8], &[Finger]),
+    out: &mut Vec<u64>,
+) {
+    if a.0.is_empty() || b.0.is_empty() || c.0.is_empty() {
+        return;
+    }
+    let h = hand as u64;
+    let line = a.0.len() == 1 && b.0.len() == 1 && c.0.len() == 1;
+    let sides: &[u64] = if line { &[2] } else { &[0, 1] };
+    for &side in sides {
+        let pick = |chord: (&[u8], &[Finger])| {
+            let i = if side == 0 { 0 } else { chord.0.len() - 1 };
+            (chord.0[i], chord.1.get(i).copied())
+        };
+        let ((pa, Some(fa)), (pb, Some(fb)), (pc, Some(fc))) = (pick(a), pick(b), pick(c)) else {
+            continue;
+        };
+        out.push(pack(
+            5,
+            &[
+                (h, 1),
+                (side, 2),
+                (finger(fa), 3),
+                (finger(fb), 3),
+                (finger(fc), 3),
+                (step_bucket(pa, pb), 3),
+                (step_bucket(pb, pc), 3),
+                (colour(pb), 1),
+            ],
+        ));
+    }
+}
+
 /// A packed fact, said in words: the inverse of [`chord_features`] and
 /// [`step_features`], for reading what a model learned.
 pub fn describe(fact: u64) -> String {
@@ -223,11 +292,12 @@ pub fn describe(fact: u64) -> String {
 fn describe_fact(fact: u64) -> String {
     // Each kind of fact packs to its own range of numbers, since the kind sits above a
     // fixed number of bits of fields.
-    let layouts: [(u64, &[u32]); 4] = [
+    let layouts: [(u64, &[u32]); 5] = [
         (1, &[1, 3, 1, 3]),
         (2, &[1, 3, 3, 6, 1, 1]),
         (3, &[1, 2, 3, 3, 6, 1, 1]),
         (4, &[1, 2, 3, 3, 2, 2]),
+        (5, &[1, 2, 3, 3, 3, 3, 3, 1]),
     ];
     for (kind, bits) in layouts {
         let width: u32 = bits.iter().sum();
@@ -266,6 +336,19 @@ fn describe_fact(fact: u64) -> String {
                 key(fields[5]),
                 key(fields[6])
             ),
+            5 => {
+                let step = |b: u64| ["down far", "down a third", "down a step", "repeated", "up a step", "up a third", "up far"][b.min(6) as usize];
+                format!(
+                    "{hand} hand {}, fingers {}-{}-{}, {} then {}, middle key {}",
+                    side(fields[1]),
+                    fields[2] + 1,
+                    fields[3] + 1,
+                    fields[4] + 1,
+                    step(fields[5]),
+                    step(fields[6]),
+                    key(fields[7])
+                )
+            }
             _ => format!(
                 "{hand} hand {}, finger {} to {} {}, {}",
                 side(fields[1]),
@@ -281,6 +364,32 @@ fn describe_fact(fact: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_thumb_passing_under_is_a_fact_of_its_own() {
+        let mut facts = Vec::new();
+        trigram_features(
+            Hand::Right,
+            (&[62], &[Finger::Index]),
+            (&[64], &[Finger::Middle]),
+            (&[65], &[Finger::Thumb]),
+            &mut facts,
+        );
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            describe(facts[0]),
+            "right hand line, fingers 2-3-1, up a step then up a step, middle key white"
+        );
+        let mut other = Vec::new();
+        trigram_features(
+            Hand::Right,
+            (&[62], &[Finger::Thumb]),
+            (&[64], &[Finger::Middle]),
+            (&[65], &[Finger::Thumb]),
+            &mut other,
+        );
+        assert_ne!(facts, other, "the first finger must count");
+    }
+
     #[test]
     fn every_fact_can_be_read_back() {
         let mut facts = Vec::new();

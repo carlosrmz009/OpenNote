@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use on_fingering::learned::{chord_features, step_features, Learned, Style, WEIGHT_LIMIT};
+use on_fingering::learned::{chord_features, step_features, trigram_features, Learned, Style, WEIGHT_LIMIT};
 use on_fingering::{finger_score_with_prior, FingeringOptions, NgramPrior, Step};
 use on_hand::Finger;
 use on_score::{NoteId, Score};
@@ -134,6 +134,15 @@ fn facts(path: &[Step]) -> HashMap<u64, f32> {
                 step.onset_seconds - previous.onset_seconds,
                 &mut scratch,
             );
+            if let Some(before) = i.checked_sub(2).map(|j| &path[j]).filter(|p| p.hand == step.hand) {
+                trigram_features(
+                    step.hand,
+                    (&before.notes, &before.fingers),
+                    (&previous.notes, &previous.fingers),
+                    (&step.notes, &step.fingers),
+                    &mut scratch,
+                );
+            }
         }
         for fact in &scratch {
             *counts.entry(*fact).or_insert(0.0) += 1.0;

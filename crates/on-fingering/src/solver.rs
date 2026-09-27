@@ -144,6 +144,17 @@ pub trait FingeringPrior: Sync {
     ) -> f32 {
         0.0
     }
+
+    /// A learned adjustment to the cost of three chords in a row. None by default.
+    fn trigram_cost(
+        &self,
+        _hand: Hand,
+        _a: (&[u8], &[Finger]),
+        _b: (&[u8], &[Finger]),
+        _c: (&[u8], &[Finger]),
+    ) -> f32 {
+        0.0
+    }
 }
 
 /// One chord of the path a search chose, as the search saw it: every note the hand had
@@ -1018,13 +1029,27 @@ impl<'a> HandSolver<'a> {
         current: (&Event, &Candidate),
     ) -> f32 {
         let Some(prior) = self.prior else { return 0.0 };
+        // A learned model's facts about three chords in a row are charged here, the one
+        // term the search already reads over three chords, so the explanation and the
+        // margins account for them exactly as the search did.
+        let learned = match (prev2, prev) {
+            (Some(a), Some(b)) => prior
+                .trigram_cost(
+                    self.hand,
+                    (&a.0.notes, &a.1.fingers),
+                    (&b.0.notes, &b.1.fingers),
+                    (&current.0.notes, &current.1.fingers),
+                )
+                .clamp(-crate::learned::LIMIT, crate::learned::LIMIT),
+            _ => 0.0,
+        };
         if self.options.prior_scale == 0.0 {
-            return 0.0;
+            return learned;
         }
         let top = |pair: Option<(&Event, &Candidate)>| pair.map(|(e, c)| self.outer(e, c).1);
         let (_, here) = self.outer(current.0, current.1);
         let logp = prior.log_probability(self.hand, top(prev2), top(prev), here);
-        -self.options.prior_scale * logp
+        learned - self.options.prior_scale * logp
     }
 
     /// Cost of moving the hand between two chords.

@@ -565,6 +565,16 @@ impl FingeringPrior for NgramPrior {
     ) -> f32 {
         self.learned.as_ref().map_or(0.0, |l| l.step(hand, from, to, seconds))
     }
+
+    fn trigram_cost(
+        &self,
+        hand: Hand,
+        a: (&[u8], &[Finger]),
+        b: (&[u8], &[Finger]),
+        c: (&[u8], &[Finger]),
+    ) -> f32 {
+        self.learned.as_ref().map_or(0.0, |l| l.trigram(hand, a, b, c))
+    }
 }
 
 /// The model as it is stored on disk.
