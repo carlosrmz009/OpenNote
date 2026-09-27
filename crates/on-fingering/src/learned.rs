@@ -45,14 +45,20 @@ pub enum Style {
     Performance,
     /// How editions are fingered: learned from written fingerings.
     Classical,
+    /// One model for everything: only what was learned from every source together,
+    /// with no style's conventions on top. What the model adapts to is the music itself —
+    /// its intervals, its pace, its chord shapes — which the facts already describe.
+    Unified,
 }
 
 impl Style {
-    /// A fact's key within this style.
+    /// A fact's key within this style. A unified model has no style keys: it is the
+    /// shared weights alone.
     pub fn tag(self, fact: u64) -> u64 {
         let style = match self {
             Style::Performance => 1u64,
             Style::Classical => 2,
+            Style::Unified => return fact,
         };
         fact | (style << 56)
     }
@@ -111,8 +117,11 @@ impl Learned {
         facts
             .iter()
             .map(|fact| {
-                self.weights.get(fact).copied().unwrap_or(0.0)
-                    + self.weights.get(&self.style.tag(*fact)).copied().unwrap_or(0.0)
+                let shared = self.weights.get(fact).copied().unwrap_or(0.0);
+                if self.style == Style::Unified {
+                    return shared;
+                }
+                shared + self.weights.get(&self.style.tag(*fact)).copied().unwrap_or(0.0)
             })
             .sum::<f32>()
             .clamp(-LIMIT, LIMIT)

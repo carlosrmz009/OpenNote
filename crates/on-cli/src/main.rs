@@ -86,10 +86,11 @@ pub struct ModelArgs {
     #[arg(long)]
     pub model: Option<std::path::PathBuf>,
 
-    /// Whose fingering a model with learned weights imitates: `performance`, how
-    /// pianists play (the default), or `classical`, how editions are fingered. Ignored
-    /// without `--model`.
-    #[arg(long, value_enum, default_value_t = StyleArg::Performance)]
+    /// Which of a model's learned weights to finger with: `unified`, one model for
+    /// everything (the default); or, for a model trained with separate styles,
+    /// `performance` (how pianists play) or `classical` (how editions are fingered).
+    /// Ignored without `--model`.
+    #[arg(long, value_enum, default_value_t = StyleArg::Unified)]
     pub style: StyleArg,
 
     /// How far the trained model is trusted against the rules. Ignored without
@@ -167,6 +168,8 @@ impl ModelArgs {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum StyleArg {
+    /// One model for everything.
+    Unified,
     /// How pianists play: learned from performances.
     Performance,
     /// How editions are fingered: learned from written fingerings.
@@ -176,6 +179,7 @@ pub enum StyleArg {
 impl From<StyleArg> for on_fingering::learned::Style {
     fn from(value: StyleArg) -> Self {
         match value {
+            StyleArg::Unified => Self::Unified,
             StyleArg::Performance => Self::Performance,
             StyleArg::Classical => Self::Classical,
         }

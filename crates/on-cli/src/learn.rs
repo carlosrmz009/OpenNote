@@ -241,8 +241,29 @@ pub struct RerankArgs {
     #[arg(long)]
     pub measure: bool,
 
+    /// Learn one model for everything, rather than a style per source. The sources still
+    /// decide what is held back and how results are reported.
+    #[arg(long)]
+    pub unified: bool,
+
     #[command(flatten)]
     pub weights: ModelArgs,
+}
+
+/// What a fingering costs a hand, rules alone against the model, in one line each.
+fn print_comfort(before: &on_fingering::Playability, after: &on_fingering::Playability) {
+    let line = |label: &str, p: &on_fingering::Playability| {
+        println!(
+            "    {label:<12} unplayable {:.2}%, hand moves {:.1} per 100 notes, travel {:.1} mm a note, \
+             stretched pairs {:.1}%",
+            p.unplayable_rate() * 100.0,
+            p.change_rate() * 100.0,
+            p.travel_mm / p.transitions.max(1) as f64,
+            p.stretched_rate() * 100.0
+        );
+    };
+    line("rules alone", before);
+    line("with model", after);
 }
 
 /// Run `opennote rerank`.
@@ -295,6 +316,7 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
         groups,
         test_groups: args.test_groups.clone(),
+        unified: args.unified,
     };
     if args.measure {
         let model = NgramPrior::load(&args.out)
@@ -302,7 +324,7 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         let Some(learned) = model.learned else {
             bail!("{} has no learned weights in it", args.out.display());
         };
-        for (style, before, after, gap) in
+        for (style, before, after, gap, hand_before, hand_after) in
             on_train::rerank::measure_model(&pieces, &options, &config, &learned.weights)
         {
             println!(
@@ -315,6 +337,7 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
                 gap.high * 100.0,
                 if gap.low > 0.0 { ", a real improvement" } else { ", not distinguishable from no change" }
             );
+            print_comfort(&hand_before, &hand_after);
         }
         return Ok(());
     }
@@ -332,6 +355,9 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
             after.general * 100.0,
             before.general * 100.0
         );
+        if let Some((_, hand_before, hand_after)) = report.comfort.iter().find(|(s, _, _)| s == style) {
+            print_comfort(hand_before, hand_after);
+        }
         if let Some((_, gap)) = report.gains.iter().find(|(s, _)| s == style) {
             println!(
                 "    paired: {:+.1} points (95% interval {:+.1} to {:+.1}){}",
