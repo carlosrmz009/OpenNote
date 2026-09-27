@@ -202,11 +202,12 @@ fn split_by_group(
 ) -> crate::Split {
     let mut split = crate::Split { train: Vec::new(), test: Vec::new() };
     for piece in pieces {
-        let group = groups.get(&piece.piece).unwrap_or(&piece.piece);
-        let chosen = if test_groups.is_empty() {
-            crate::hash::share(group) < f64::from(held_out)
-        } else {
-            test_groups.iter().any(|g| g == group)
+        // A piece whose player is known goes with its group; one whose player is not — a
+        // written fingering, say — is held back on its own, by the same hash as ever.
+        let chosen = match groups.get(&piece.piece) {
+            Some(group) if !test_groups.is_empty() => test_groups.iter().any(|g| g == group),
+            Some(group) => crate::hash::share(group) < f64::from(held_out),
+            None => crate::hash::share(&piece.piece) < f64::from(held_out),
         };
         if chosen {
             split.test.push(piece.clone());

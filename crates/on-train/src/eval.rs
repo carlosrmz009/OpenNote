@@ -276,6 +276,39 @@ impl std::fmt::Display for Confidence {
 /// would report an interval several times too narrow.
 ///
 /// Deterministic: the same pieces give the same interval every time.
+/// How much better one fingering is than another on the same pieces, with a 95%
+/// interval: the difference in the general rate, the pieces resampled together.
+///
+/// The intervals [`confidence`] gives are for one system's rate, and most of their width
+/// is which pieces happen to be in the set — easy ones lift every system at once. Two
+/// systems measured on the same pieces share that, so the question worth asking is
+/// whether the *difference* holds up when the pieces are resampled, and that interval is
+/// far narrower. It is what decides whether a model is better, rather than looks it.
+pub fn paired(ours: &[PieceRates], theirs: &[PieceRates], rounds: usize) -> Interval {
+    assert_eq!(ours.len(), theirs.len(), "the two were measured on different pieces");
+    let gap = |indices: &mut dyn Iterator<Item = usize>| {
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for i in indices {
+            a.push(ours[i].clone());
+            b.push(theirs[i].clone());
+        }
+        combine(&a).general - combine(&b).general
+    };
+    let point = gap(&mut (0..ours.len()));
+    let mut draws = Vec::with_capacity(rounds);
+    let mut rng: u64 = 0x2545_f491_4f6c_dd1d;
+    for _ in 0..rounds.max(1) {
+        let mut drawn = (0..ours.len()).map(|_| {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (rng >> 33) as usize % ours.len().max(1)
+        });
+        draws.push(gap(&mut drawn));
+    }
+    draws.sort_by(f32::total_cmp);
+    let at = |q: f64| draws[((draws.len() - 1) as f64 * q).round() as usize];
+    Interval { point, low: at(0.025), high: at(0.975) }
+}
+
 pub fn confidence(pieces: &[PieceRates], rounds: usize) -> Confidence {
     let point = combine(pieces);
     let mut draws: Vec<MatchRates> = Vec::with_capacity(rounds);
@@ -440,6 +473,27 @@ pub(crate) fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
 mod tests {
     use super::*;
     use crate::corpus::FingeredNote;
+
+    fn rates(general: f32) -> PieceRates {
+        PieceRates { general: vec![general], highest: general, soft: (0, 0), recombined: None }
+    }
+
+    #[test]
+    fn a_system_against_itself_differs_by_nothing() {
+        let pieces: Vec<PieceRates> = (0..20).map(|i| rates(0.5 + i as f32 / 100.0)).collect();
+        let gap = paired(&pieces, &pieces, 500);
+        assert_eq!((gap.point, gap.low, gap.high), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_small_gain_on_every_piece_is_real_even_when_the_pieces_vary_widely() {
+        // The pieces range from 30% to 90%, so each system's own interval is wide; but one
+        // is two points better on every piece, and that is what the paired interval sees.
+        let theirs: Vec<PieceRates> = (0..20).map(|i| rates(0.3 + i as f32 * 0.03)).collect();
+        let ours: Vec<PieceRates> = (0..20).map(|i| rates(0.32 + i as f32 * 0.03)).collect();
+        let gap = paired(&ours, &theirs, 500);
+        assert!(gap.low > 0.0 && (gap.point - 0.02).abs() < 1e-4, "{gap}");
+    }
 
     fn piece(name: &str, annotator: &str, fingers: &[(u8, u8)]) -> Piece {
         Piece {

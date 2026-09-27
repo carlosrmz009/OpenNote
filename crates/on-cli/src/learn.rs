@@ -400,6 +400,20 @@ pub fn bench(args: BenchArgs) -> Result<()> {
     let confidence = on_train::eval::confidence(&measured, args.rounds);
 
     println!("\n{confidence}");
+    if prior.is_some() {
+        // The same pieces by the rules alone, for the difference that matters.
+        let mut plain = options.clone();
+        plain.prior_scale = 0.0;
+        let rules = on_train::eval::per_piece(&pieces, &plain, None);
+        let gap = on_train::eval::paired(&measured, &rules, args.rounds);
+        println!(
+            "Against the rules alone, on the same pieces: {:+.1} points (95% interval {:+.1} to {:+.1}){}.",
+            gap.point * 100.0,
+            gap.low * 100.0,
+            gap.high * 100.0,
+            if gap.low > 0.0 { ", a real improvement" } else if gap.high < 0.0 { ", a real loss" } else { ", not distinguishable from no change" }
+        );
+    }
     println!(
         "\nTwo pianists asked to finger the same music agree about 71% of the time, so \n\
          that is what a perfect score looks like, not 100%."
