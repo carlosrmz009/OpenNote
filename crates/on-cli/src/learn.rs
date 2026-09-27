@@ -246,6 +246,12 @@ pub struct RerankArgs {
     #[arg(long)]
     pub unified: bool,
 
+    /// How much less a piece teaches where its fingering is harder on the hand than the
+    /// search's own — more position changes, more stretch. Zero learns from every
+    /// fingering alike; higher leans towards comfortable, casual playing.
+    #[arg(long, default_value_t = 0.0)]
+    pub comfort: f32,
+
     #[command(flatten)]
     pub weights: ModelArgs,
 }
@@ -317,6 +323,7 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         groups,
         test_groups: args.test_groups.clone(),
         unified: args.unified,
+        comfort: args.comfort,
     };
     if args.measure {
         let model = NgramPrior::load(&args.out)

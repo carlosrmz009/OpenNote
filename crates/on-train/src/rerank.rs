@@ -51,6 +51,12 @@ pub struct Config {
     /// than a style per source. The sources still decide which pieces are held back and
     /// how the results are reported; they no longer decide how anything is fingered.
     pub unified: bool,
+    /// How much less a piece teaches where the fingering it shows is harder on the hand
+    /// than the one the search would choose: its update is scaled by one minus this
+    /// times the excess — the extra share of moves that change hand position, plus the
+    /// extra share of finger pairs held past a comfortable span. Zero learns from every
+    /// fingering alike; higher leans the model towards comfortable, casual playing.
+    pub comfort: f32,
 }
 
 /// What a training run did.
@@ -401,6 +407,7 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
             let models: Vec<(Style, NgramPrior)> =
                 STYLES.iter().map(|s| (*s, model_of(&weights, used(*s, config.unified)))).collect();
             let unified = config.unified;
+            let comfort = config.comfort;
             let deltas: Vec<HashMap<u64, f32>> = std::thread::scope(|scope| {
                 let running: Vec<_> = batch
                     .chunks(4)
@@ -426,7 +433,18 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
                                 if wrong == 0 {
                                     continue;
                                 }
-                                let share = 1.0 / wrong as f32;
+                                let mut share = 1.0 / wrong as f32;
+                                if comfort > 0.0 {
+                                    let spans = options.span_model.table();
+                                    let theirs = on_fingering::measure_solution(&example.pinned, &gold, spans);
+                                    let ours = on_fingering::measure_solution(&example.free, &free, spans);
+                                    let excess = (theirs.change_rate() - ours.change_rate()).max(0.0)
+                                        + (theirs.stretched_rate() - ours.stretched_rate()).max(0.0);
+                                    share *= (1.0 - comfort * excess).clamp(0.0, 1.0);
+                                    if share == 0.0 {
+                                        continue;
+                                    }
+                                }
                                 let mut piece: HashMap<u64, f32> = HashMap::new();
                                 for (fact, n) in facts(&free.path) {
                                     *piece.entry(fact).or_insert(0.0) += n;
@@ -533,7 +551,7 @@ mod tests {
     fn training_teaches_the_search_a_pianists_habit() {
         let pieces: Vec<Piece> = (0..12).map(|i| quirky(&format!("piece {i}"))).collect();
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
-        let config = Config { epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false };
+        let config = Config { epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false, comfort: 0.0 };
         let report = train(&pieces, &options, &config, |_| {});
         let learned = report.passes.iter().map(|r| overall(r)).fold(0.0, f32::max);
         let before = overall(&report.before);
@@ -557,12 +575,51 @@ mod tests {
         let mut pieces: Vec<Piece> = (0..12).map(|i| habit(format!("seen {i}"), "video", [2, 4])).collect();
         pieces.extend((0..12).map(|i| habit(format!("written {i}"), "edition", [1, 3])));
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
-        let config = Config { epochs: 8, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false };
+        let config = Config { epochs: 8, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false, comfort: 0.0 };
         let report = train(&pieces, &options, &config, |_| {});
         let best = &report.passes[report.best.max(1) - 1];
         for (style, rates) in best {
             assert!(rates.general > 0.9, "{style:?} only reached {:.3}: {}", rates.general, describe_rates(best));
         }
+    }
+
+    #[test]
+    fn a_habit_that_is_hard_on_the_hand_is_learned_less_when_comfort_counts() {
+        // Every note of a scale played with the index finger: learnable, and exactly the
+        // kind of fingering that makes a hand shift on every note.
+        let hard = |name: String| {
+            let line = [60u8, 62, 64, 65, 67, 65, 64, 62];
+            let notes = (0..8)
+                .flat_map(|bar| {
+                    line.iter().enumerate().map(move |(i, midi)| FingeredNote {
+                        midi: *midi,
+                        onset: f64::from(bar * 8 + i as i32) * 0.4,
+                        duration: 0.3,
+                        hand: HandLabel::Right,
+                        finger: Some(2),
+                        confidence: Some(0.9),
+                    })
+                })
+                .collect();
+            Piece { piece: name, annotator: "video".into(), source: "test".into(), notes }
+        };
+        let pieces: Vec<Piece> = (0..12).map(|i| hard(format!("hard {i}"))).collect();
+        let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
+        let learned = |comfort: f32| {
+            let config = Config {
+                epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2,
+                groups: HashMap::new(), test_groups: Vec::new(), unified: true, comfort,
+            };
+            let report = train(&pieces, &options, &config, |_| {});
+            let before = overall(&report.before);
+            (before, report.passes.iter().map(|r| overall(r)).fold(before, f32::max))
+        };
+        let ((before, freely), (_, comfortably)) = (learned(0.0), learned(5.0));
+        assert!(
+            freely > before + 0.1 && comfortably <= before + 0.02,
+            "the rules alone {before:.3}; the hard habit learned to {freely:.3} freely and \
+             {comfortably:.3} with comfort counting"
+        );
     }
 
     #[test]
