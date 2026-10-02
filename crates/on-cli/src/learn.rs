@@ -402,6 +402,11 @@ pub struct BenchmarkArgs {
     #[arg(long)]
     pub sealed: bool,
 
+    /// Instead of measuring, write passages where the model disagrees with the rules or
+    /// the people, for the training suite's blind judge (needs --model).
+    #[arg(long)]
+    pub excerpts: Option<PathBuf>,
+
     #[command(flatten)]
     pub weights: ModelArgs,
 }
@@ -414,6 +419,13 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
     let threads = args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
     on_fingering::set_inner_threads(false);
     let name = args.weights.model.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+    if let Some(path) = &args.excerpts {
+        let Some(prior) = prior.as_deref() else { anyhow::bail!("--excerpts compares a model with the rules: give --model") };
+        let excerpts = on_train::bench::excerpts(&manifest, &options, prior as &dyn on_fingering::FingeringPrior, 30)?;
+        std::fs::write(path, on_train::bench::excerpts_json(name, &excerpts)?)?;
+        println!("{} passages to judge -> {}", excerpts.len(), path.display());
+        return Ok(());
+    }
     let card = on_train::bench::run(
         &manifest,
         &options,

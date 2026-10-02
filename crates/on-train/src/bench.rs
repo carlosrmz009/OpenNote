@@ -1,7 +1,7 @@
 //! OpenNote's own benchmark: a manifest of frozen tiers, measured into one scorecard.
 //!
-//! A tier is a set of fingered pieces with one kind of truth — pianists read off video,
-//! editors' printed fingerings, several experts on the same music — and each is measured
+//! A tier is a set of fingered pieces with one kind of truth â€” pianists read off video,
+//! editors' printed fingerings, several experts on the same music â€” and each is measured
 //! the same way: the rules alone and the model on exactly the same notes, every rate of
 //! [`crate::eval`], the gain paired piece by piece (whole groups resampled where the
 //! pieces of one group are not independent), how comfortable each fingering is to play,
@@ -274,8 +274,8 @@ impl Probes {
 /// How many pieces of a tier the probes take, the first by name: a fixed sample.
 const PROBE_PIECES: usize = 100;
 
-/// The consistency probes. An octave changes nothing a hand feels — the same keys, the
-/// same black and white — so the fingering should not move; neither should a timing
+/// The consistency probes. An octave changes nothing a hand feels â€” the same keys, the
+/// same black and white â€” so the fingering should not move; neither should a timing
 /// wobble too small to matter. A fingering that does is responding to noise.
 pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Probes {
     let mut firsts: Vec<&Piece> = by_piece(pieces).into_values().map(|a| a[0]).collect();
@@ -330,12 +330,95 @@ pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn Fi
 /// FNV-1a of a file's bytes, as hex: what the manifest pins.
 pub fn hash_file(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(format!("{:016x}", fnv(&bytes)))
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
+    for &byte in bytes {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
-    Ok(format!("{hash:016x}"))
+    hash
+}
+
+/// A passage where the model and another fingering disagree, for a person to judge
+/// blind which is more comfortable (tools/training_suite.py's judge screen).
+#[derive(Debug, Clone, Serialize)]
+pub struct Excerpt {
+    pub tier: String,
+    pub piece: String,
+    /// The passage's notes, fingers left out.
+    pub notes: Vec<crate::corpus::FingeredNote>,
+    /// "model" and either "rules" or "people", each a finger per note.
+    pub fingerings: BTreeMap<String, Vec<Option<u8>>>,
+}
+
+/// The judge screen's file: which model, and its passages.
+pub fn excerpts_json(model: Option<String>, excerpts: &[Excerpt]) -> Result<String> {
+    Ok(serde_json::to_string(&serde_json::json!({ "model": model, "excerpts": excerpts }))?)
+}
+
+/// Notes in a judged passage: a few bars of a casual piece.
+const EXCERPT_NOTES: usize = 32;
+/// Fewest notes the two fingerings must differ on for a passage to be worth judging.
+const EXCERPT_DIFFERENCES: usize = 3;
+
+/// Passages to judge from every dev tier but the conventions: per tier, up to `count`
+/// against the rules and `count` against what the people played, one of each per piece
+/// at most, each the window where the two disagree most. Pieces are taken in an order
+/// fixed by their names' hash, so the same bench always offers the same passages.
+pub fn excerpts(manifest: &Manifest, options: &FingeringOptions, prior: &dyn FingeringPrior, count: usize) -> Result<Vec<Excerpt>> {
+    let mut rules_only = options.clone();
+    rules_only.prior_scale = 0.0;
+    let mut out = Vec::new();
+    for spec in manifest.tiers.iter().filter(|t| !t.sealed && !t.id.starts_with("T0")) {
+        let mut pieces = Vec::new();
+        for dir in &spec.corpora {
+            pieces.extend(Corpus::at(dir)?.load()?);
+        }
+        if let Some(floor) = spec.min_confidence {
+            pieces = pieces.iter().map(|p| p.trusted(floor)).collect();
+        }
+        let mut order: Vec<Vec<&Piece>> = by_piece(&pieces).into_values().collect();
+        order.sort_by_key(|a| fnv(a[0].piece.as_bytes()));
+        let (mut against_rules, mut against_people) = (0, 0);
+        for annotations in order {
+            if against_rules >= count && against_people >= count {
+                break;
+            }
+            let piece = annotations[0];
+            let Some(model) = crate::eval::solve(piece, options, Some(prior)) else { continue };
+            let people: Vec<Option<u8>> = piece.notes.iter().map(|n| n.finger).collect();
+            let mut others = Vec::new();
+            if against_rules < count {
+                if let Some(rules) = crate::eval::solve(piece, &rules_only, None) {
+                    others.push(("rules", rules));
+                }
+            }
+            if against_people < count {
+                others.push(("people", people));
+            }
+            for (label, other) in others {
+                // The window with the most disagreement, among those the other fingers almost whole.
+                let best = (0..piece.notes.len().saturating_sub(EXCERPT_NOTES - 1))
+                    .step_by(EXCERPT_NOTES / 4)
+                    .filter(|&i| other[i..i + EXCERPT_NOTES].iter().filter(|f| f.is_some()).count() >= EXCERPT_NOTES * 9 / 10)
+                    .map(|i| (model[i..i + EXCERPT_NOTES].iter().zip(&other[i..i + EXCERPT_NOTES]).filter(|(a, b)| b.is_some() && a != b).count(), i))
+                    .max();
+                let Some((differences, at)) = best else { continue };
+                if differences < EXCERPT_DIFFERENCES {
+                    continue;
+                }
+                let range = at..at + EXCERPT_NOTES;
+                let notes = piece.notes[range.clone()].iter().map(|n| crate::corpus::FingeredNote { finger: None, ..*n }).collect();
+                let fingerings = BTreeMap::from([("model".to_string(), model[range.clone()].to_vec()), (label.to_string(), other[range].to_vec())]);
+                out.push(Excerpt { tier: spec.id.clone(), piece: piece.piece.clone(), notes, fingerings });
+                if label == "rules" { against_rules += 1 } else { against_people += 1 }
+            }
+        }
+    }
+    Ok(out)
 }
 
 impl Manifest {
