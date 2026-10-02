@@ -103,6 +103,14 @@ const RUN_GAP_CEILING_SECONDS: f64 = 2.0;
 /// thumb and second finger: comfortable, and what no pianist plays.
 pub const MIN_CHROMATIC_RUN: usize = 5;
 
+/// What the taught fingering of a root-position arpeggio is worth. As much as a scale's.
+pub const ARPEGGIO_BONUS: f32 = SCALE_BONUS;
+
+/// Notes in the shortest arpeggio that is taught: root to root over two octaves. Within
+/// one octave the hand does not move, and books differ (the left hand's 5-3-2-1 and
+/// 5-4-2-1 are both printed); across more than one they agree.
+pub const MIN_ARPEGGIO_RUN: usize = 7;
+
 /// Split a stepwise candidate wherever its clock says the notes are not consecutive.
 ///
 /// Two passes, and the second one is the reason. Judging each gap against the gaps
@@ -333,6 +341,86 @@ pub fn find_chromatic_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize
         index = if end - index > 1 { end } else { index + 1 };
     }
     runs
+}
+
+/// Find the root-position arpeggios in a sequence of notes: a major or minor triad
+/// broken in one direction over two octaves or more, beginning and ending on its root.
+/// Returns each run's span, root (0..12) and third (3 or 4 semitones).
+///
+/// The root at both ends is what makes it the arpeggio method books print. An inversion,
+/// or a broken chord in a piece that only passes through a triad, is fingered otherwise,
+/// and is left to the ergonomic model rather than guessed at.
+pub fn find_arpeggio_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize, usize, u8, u8)> {
+    let mut runs = Vec::new();
+    let mut index = 0;
+    while index + 1 < pitches.len() {
+        let (Some(root), Some(next)) = (pitches[index], pitches[index + 1]) else {
+            index += 1;
+            continue;
+        };
+        let step = next as i32 - root as i32;
+        // From the root, the first step is the third: up a major or minor third, or down
+        // the fourth to the fifth below.
+        let third = match step {
+            4 | 3 => step as u8,
+            -5 => {
+                // Descending: the note after the fifth says which third it is.
+                match pitches.get(index + 2).copied().flatten().map(|p| next as i32 - p as i32) {
+                    Some(t @ 3) | Some(t @ 4) => 7 - t as u8,
+                    _ => {
+                        index += 1;
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        let direction = step.signum();
+        let chord = [0, third, 7];
+        let mut end = index + 1;
+        let mut previous = root;
+        while end < pitches.len() {
+            let Some(pitch) = pitches[end] else { break };
+            let step = pitch as i32 - previous as i32;
+            let class = (pitch as i32 - root as i32).rem_euclid(12) as u8;
+            if !(3..=5).contains(&step.abs()) || step.signum() != direction || !chord.contains(&class) {
+                break;
+            }
+            previous = pitch;
+            end += 1;
+        }
+        // End on the root: drop whatever follows its last appearance.
+        while end > index && (pitches[end - 1].unwrap_or(root) as i32 - root as i32).rem_euclid(12) != 0 {
+            end -= 1;
+        }
+        for (from, to) in split_on_gaps(index, end, onsets) {
+            let ends_on_roots = [from, to - 1].iter().all(|&i| pitches[i].is_some_and(|p| (p + 12 - root % 12) % 12 == 0));
+            if to - from >= MIN_ARPEGGIO_RUN && ends_on_roots {
+                runs.push((from, to, root % 12, third));
+            }
+        }
+        index = if end > index + 1 { end - 1 } else { index + 1 };
+    }
+    runs
+}
+
+/// The finger the taught arpeggio gives a root-position triad's root, third and fifth,
+/// going up or down: the right hand 1-2-3 (5 on the top root), the left 1-4-2 (5 on the
+/// bottom one). The ends are left to the model, which finds those fingers itself.
+fn arpeggio_finger(hand: Hand, class: u8) -> Option<u8> {
+    let (root, third, fifth) = match hand {
+        Hand::Right => (1, 2, 3),
+        Hand::Left => (1, 4, 2),
+    };
+    match class {
+        0 => Some(root),
+        3 | 4 => Some(third),
+        7 => Some(fifth),
+        _ => None,
+    }
 }
 
 /// A stretch of notes moving by step in one direction, all fitting one key.
@@ -614,6 +702,21 @@ pub fn scale_fingerings(
             }
         }
     }
+    for (start, end, root, third) in find_arpeggio_runs(pitches, onsets) {
+        // Taught only on the white-key triads (C, F, G, A minor, D minor, E minor): the
+        // thumb takes the root, and where a triad has a black key the books finger it
+        // otherwise, key by key.
+        if [0, third, 7].iter().any(|&step| is_black(root + step)) {
+            continue;
+        }
+        for index in (start + 1)..(end - 1) {
+            let Some(pitch) = pitches[index] else { continue };
+            let class = (pitch + 12 - root) % 12;
+            if let Some(finger) = arpeggio_finger(hand, class).and_then(Finger::from_number) {
+                out.insert(index, Taught { finger, bonus: ARPEGGIO_BONUS });
+            }
+        }
+    }
     // After the diatonic scales, since a chromatic reading is the more specific one: it
     // takes every step as a semitone, which no run of a major or minor scale does.
     for (start, end) in find_chromatic_runs(pitches, onsets) {
@@ -671,6 +774,18 @@ mod tests {
             assert_eq!(runs.len(), 1, "scale on {tonic} not found");
             assert_eq!(runs[0].tonic, tonic, "scale on {tonic} misidentified");
         }
+    }
+
+    #[test]
+    fn a_two_octave_arpeggio_is_found_up_and_down_but_an_inversion_is_not() {
+        let up = seq(&[48, 52, 55, 60, 64, 67, 72]);
+        assert_eq!(find_arpeggio_runs(&up, &even(7)), vec![(0, 7, 0, 4)]);
+        let down = seq(&[81, 76, 72, 69, 64, 60, 57]);
+        assert_eq!(find_arpeggio_runs(&down, &even(7)), vec![(0, 7, 9, 3)], "A minor, coming down");
+        let inversion = seq(&[52, 55, 60, 64, 67, 72, 76]);
+        assert!(find_arpeggio_runs(&inversion, &even(7)).is_empty(), "starting on the third is another fingering");
+        let one_octave = seq(&[48, 52, 55, 60]);
+        assert!(find_arpeggio_runs(&one_octave, &even(4)).is_empty(), "books differ within one octave");
     }
 
     #[test]

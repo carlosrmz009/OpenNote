@@ -1796,10 +1796,12 @@ mod tests {
 
     #[test]
     fn a_two_octave_arpeggio_is_fingered_the_way_the_charts_print_it() {
-        // Nothing in the code knows about arpeggios: there is no table of them the way
-        // there is for scales and for the chromatic. The published fingering falls out
-        // of the hand model on its own, which is the best evidence there is that the
-        // model is shaped right — so it is worth noticing if it ever stops.
+        // The right hand's published fingering falls out of the hand model on its own,
+        // which is the best evidence there is that the model is shaped right — so it is
+        // worth noticing if it ever stops. The left hand's does not: the model prefers
+        // 5-3-2-1, and the books print 5-4-2-1 on the white-key triads, so those are
+        // taught (scales::find_arpeggio_runs). E flat is not taught, and keeps the
+        // model's own answer.
         for (tonic, register) in [(0u8, 60u8), (5, 60), (7, 60), (3, 60)] {
             let base = tonic + register;
             let up: Vec<u8> =
@@ -1818,11 +1820,12 @@ mod tests {
             // The left hand plays the same shape from the other end.
             let score = melody(&pitches, Hand::Left, 0.5);
             let left = fingers_of(&score, &finger_score(&score, &FingeringOptions::default()));
-            assert_eq!(
-                left,
-                vec![5, 3, 2, 1, 3, 2, 1, 2, 3, 1, 2, 3, 5],
-                "left hand, arpeggio on {base}"
-            );
+            let want = if tonic == 3 {
+                vec![5, 3, 2, 1, 3, 2, 1, 2, 3, 1, 2, 3, 5]
+            } else {
+                vec![5, 4, 2, 1, 4, 2, 1, 2, 4, 1, 2, 4, 5]
+            };
+            assert_eq!(left, want, "left hand, arpeggio on {base}");
         }
     }
 

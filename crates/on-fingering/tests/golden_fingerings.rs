@@ -518,3 +518,27 @@ fn two_octaves_of_e_harmonic_minor_are_fingered_like_e_major_both_ways() {
         both_ways([5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1])
     );
 }
+
+#[test]
+fn two_octave_arpeggios_are_fingered_as_the_method_books_print_them() {
+    // Root position over two octaves, up and back down: the right hand 1 2 3 1 2 3 5,
+    // the left 5 4 2 1 4 2 1, in every white-key major and minor triad.
+    let options = FingeringOptions::default();
+    let mut wrong = Vec::new();
+    for (name, root, third) in [("C", 0u8, 4u8), ("F", 5, 4), ("G", 7, 4), ("A minor", 9, 3), ("D minor", 2, 3), ("E minor", 4, 3)] {
+        for (hand, base, up) in [(Hand::Right, 60u8, [1u8, 2, 3, 1, 2, 3, 5]), (Hand::Left, 48, [5, 4, 2, 1, 4, 2, 1])] {
+            let tonic = base + root;
+            let mut pitches: Vec<u8> = (0..2).flat_map(|o| [0, third, 7].map(|s| tonic + 12 * o + s)).collect();
+            pitches.push(tonic + 24);
+            let mut both = pitches.clone();
+            both.extend(pitches.iter().rev().skip(1));
+            let mut want = up.to_vec();
+            want.extend(up.iter().rev().skip(1));
+            let got = fingering(&melody(&both, hand, 0.25), &options);
+            if got != want {
+                wrong.push(format!("{name} {hand:?}: {got:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
