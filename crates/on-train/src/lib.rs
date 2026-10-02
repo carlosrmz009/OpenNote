@@ -13,6 +13,7 @@
 //! * [`tune`] — searching the engine's weights, for as long as it is left running
 //! * [`hash`] — the one hash every division of the data agrees on
 
+pub mod bench;
 pub mod corpus;
 pub mod hash;
 pub mod eval;

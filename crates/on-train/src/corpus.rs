@@ -397,17 +397,17 @@ fn read_pig(path: &Path) -> Result<Option<Piece>> {
             f @ 1..=5 => Some(f),
             _ => None,
         };
-        // The sign carries the hand, so an unannotated note says nothing about which
-        // hand played it and one has to be guessed. Middle C is the usual split and is
-        // what the staff would have said in a score that had one.
+        // The sign carries the hand, so an unannotated note's hand comes from the channel
+        // field instead — 0 right, 1 left, which in ThumbSet agrees with the finger's
+        // sign on every annotated note. Only without it is the hand guessed, at middle C,
+        // where the staff would usually have split it.
         let hand = match signed {
-            0 => {
-                if midi < 60 {
-                    HandLabel::Left
-                } else {
-                    HandLabel::Right
-                }
-            }
+            0 => match fields[6] {
+                "0" => HandLabel::Right,
+                "1" => HandLabel::Left,
+                _ if midi < 60 => HandLabel::Left,
+                _ => HandLabel::Right,
+            },
             n if n > 0 => HandLabel::Right,
             _ => HandLabel::Left,
         };
@@ -828,5 +828,29 @@ mod tests {
             2,
             "only the annotated notes teach the model anything"
         );
+    }
+
+    #[test]
+    fn an_unannotated_note_takes_its_hand_from_the_channel() {
+        // A left hand playing above middle C, as in a crossing or a high accompaniment:
+        // the channel says left, where guessing from the pitch would have said right.
+        let dir = std::env::temp_dir().join("opennote-corpus-channel");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("channel_fingering.txt");
+        std::fs::write(
+            &path,
+            "//Version: ThumbSet_v1\n\
+             0\t0.0\t0.5\tE4\t80\t80\t1\t0\n\
+             1\t0.0\t0.5\tC3\t80\t80\t1\t0\n\
+             2\t0.5\t1.0\tA4\t80\t80\t0\t0\n\
+             3\t0.5\t1.0\tG4\t80\t80\t1\t-1\n",
+        )
+        .unwrap();
+        let piece = read_pig(&path).unwrap().unwrap();
+        let hands: Vec<(u8, HandLabel)> = piece.notes.iter().map(|n| (n.midi, n.hand)).collect();
+        assert!(hands.contains(&(64, HandLabel::Left)), "E4 on channel 1 is the left hand: {hands:?}");
+        assert!(hands.contains(&(48, HandLabel::Left)));
+        assert!(hands.contains(&(69, HandLabel::Right)));
+        assert!(hands.contains(&(67, HandLabel::Left)), "a fingered note still goes by its sign");
     }
 }

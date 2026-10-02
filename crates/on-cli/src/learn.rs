@@ -379,6 +379,72 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
     Ok(())
 }
 
+/// Measure a model, and the rules it is built on, on OpenNote's own benchmark.
+#[derive(Debug, Args)]
+pub struct BenchmarkArgs {
+    /// The benchmark's manifest: its tiers and the hash of every file in them.
+    #[arg(long, default_value = "bench/v2/manifest.json")]
+    pub manifest: PathBuf,
+
+    /// Where to write the scorecard (JSON). Printed either way.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// How many times to resample for each interval.
+    #[arg(long, default_value_t = 1000)]
+    pub rounds: usize,
+
+    /// Pieces fingered at once. One per core by default.
+    #[arg(long)]
+    pub threads: Option<usize>,
+
+    #[command(flatten)]
+    pub weights: ModelArgs,
+}
+
+/// Run `opennote benchmark`.
+pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
+    let manifest = on_train::bench::Manifest::load(&args.manifest)?;
+    let options = args.weights.options()?;
+    let prior = args.weights.prior()?;
+    let threads = args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+    on_fingering::set_inner_threads(false);
+    let name = args.weights.model.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+    let card = on_train::bench::run(
+        &manifest,
+        &options,
+        prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
+        name,
+        args.rounds,
+        threads,
+        |line| eprintln!("{line}"),
+    )?;
+    for tier in &card.tiers {
+        println!("{} - {}: {} pieces from {} groups, {} notes", tier.id, tier.title, tier.pieces, tier.groups, tier.notes);
+        println!("  rules alone  general {:.1}%  recombined {:.1}%  4-gram {:.1}%", tier.rules.general, tier.rules.recombined, tier.rules.ngram);
+        if let (Some(model), Some(gain)) = (&tier.model, &tier.gain) {
+            println!("  with model   general {:.1}%  recombined {:.1}%  4-gram {:.1}%", model.general, model.recombined, model.ngram);
+            for (label, span) in [("general", gain.general), ("4-gram", gain.ngram), ("recombined", gain.recombined)] {
+                println!("    {label:<10} {:+.1} points ({:+.1} to {:+.1}){}", span.point, span.low, span.high,
+                         if span.real { ", real" } else { "" });
+            }
+        }
+        if let Some(human) = &tier.human {
+            println!("  pianists against one another: general {:.1}%  recombined {:.1}%  4-gram {:.1}%", human.general, human.recombined, human.ngram);
+        }
+        let c = &tier.comfort_rules;
+        println!("  comfort, rules: unplayable {:.2}%, hand moves {:.1}/100, travel {:.1} mm, stretched {:.1}%", c.unplayable, c.hand_moves, c.travel_mm, c.stretched);
+        if let Some(c) = &tier.comfort_model {
+            println!("  comfort, model: unplayable {:.2}%, hand moves {:.1}/100, travel {:.1} mm, stretched {:.1}%", c.unplayable, c.hand_moves, c.travel_mm, c.stretched);
+        }
+    }
+    if let Some(out) = &args.out {
+        std::fs::write(out, card.to_json()?).with_context(|| format!("writing {}", out.display()))?;
+        println!("Scorecard written to {}.", out.display());
+    }
+    Ok(())
+}
+
 /// Measure the fingering against a dataset, without learning anything from it.
 #[derive(Debug, Args)]
 pub struct BenchArgs {

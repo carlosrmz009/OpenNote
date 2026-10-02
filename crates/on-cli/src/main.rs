@@ -55,6 +55,8 @@ enum Command {
     Tune(learn::TuneArgs),
     /// Measure against a dataset without learning anything from it.
     Bench(learn::BenchArgs),
+    /// Measure a model on OpenNote's own benchmark, into a scorecard.
+    Benchmark(learn::BenchmarkArgs),
     /// Teach the search to finger like the pianists in the corpus: the rules propose,
     /// what is learned decides between them.
     Rerank(learn::RerankArgs),
@@ -265,6 +267,7 @@ fn main() -> Result<()> {
         Command::Eval(args) => learn::eval(args),
         Command::Tune(args) => learn::tune(args),
         Command::Bench(args) => learn::bench(args),
+        Command::Benchmark(args) => learn::benchmark(args),
         Command::Rerank(args) => learn::rerank(args),
     }
 }

@@ -378,11 +378,14 @@ impl Watched {
     }
 }
 
-/// A note the MIDI file says was played.
+/// A note the MIDI file says was played: when its key went down, and how long it was
+/// held — which the solver needs to know what a hand is still holding when the next note
+/// comes. The video only sees keys going down; the transcription hears them come up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Onset {
     pub midi: u8,
     pub time: f64,
+    pub duration: f64,
 }
 
 /// Turn a watched performance and its score into fingerings.
@@ -400,17 +403,24 @@ pub fn extract(
     // Notes grouped into the events they were struck as, since the fingers used for a
     // chord have to be chosen together.
     let mut events: Vec<(f64, Vec<u8>)> = Vec::new();
+    let mut held: Vec<Vec<f64>> = Vec::new();
     let mut sorted: Vec<Onset> = onsets.to_vec();
     sorted.sort_by(|a, b| a.time.total_cmp(&b.time).then(a.midi.cmp(&b.midi)));
     for onset in sorted {
         match events.last_mut() {
-            Some((time, keys)) if onset.time - *time < ONSET_WINDOW_SECONDS => keys.push(onset.midi),
-            _ => events.push((onset.time, vec![onset.midi])),
+            Some((time, keys)) if onset.time - *time < ONSET_WINDOW_SECONDS => {
+                keys.push(onset.midi);
+                held.last_mut().expect("one list of holds per event").push(onset.duration);
+            }
+            _ => {
+                events.push((onset.time, vec![onset.midi]));
+                held.push(vec![onset.duration]);
+            }
         }
     }
 
     let mut notes = Vec::new();
-    for (time, keys) in &events {
+    for ((time, keys), durations) in events.iter().zip(&held) {
         let mut frames = frames_around(watched, *time);
         if frames.is_empty() {
             // Nothing in the window — a dropped stretch of video, or a frame rate low
@@ -424,9 +434,11 @@ pub fn extract(
             notes.push(FingeredNote {
                 midi,
                 onset: *time,
-                // Watching a recording finds when a key goes down and not when it comes
-                // back up, so there is nothing better to say than the default.
-                duration: crate::corpus::ASSUMED_DURATION,
+                // How long the transcription heard it held.
+                duration: keys
+                    .iter()
+                    .position(|&k| k == midi)
+                    .map_or(crate::corpus::ASSUMED_DURATION, |i| durations[i]),
                 hand,
                 finger: Some(finger.number()),
                 confidence: Some(confidence),
@@ -737,14 +749,15 @@ pub fn coverage(piece: &Piece, onsets: &[Onset]) -> (usize, usize) {
 /// The onsets of a MIDI or MusicXML file, for matching against a video.
 pub fn onsets_of(path: &Path) -> Result<Vec<Onset>> {
     let document = on_score::Document::open(path)?;
-    let mut onsets: Vec<Onset> = document
-        .score()
+    let score = document.score();
+    let mut onsets: Vec<Onset> = score
         .notes
         .iter()
         .filter(|note| !note.tie.is_continuation())
         .map(|note| Onset {
             midi: note.midi,
             time: note.onset_seconds,
+            duration: (score.release_seconds(note.id) - note.onset_seconds).max(0.0),
         })
         .collect();
     onsets.sort_by(|a, b| a.time.total_cmp(&b.time).then(a.midi.cmp(&b.midi)));
@@ -892,11 +905,30 @@ mod tests {
             offset: 0.0,
             frames: vec![frame],
         };
-        let onsets = vec![Onset { midi: 64, time: 1.0 }];
+        let onsets = vec![Onset { midi: 64, time: 1.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
         assert_eq!(piece.notes[0].midi, 64);
         assert_eq!(piece.notes[0].finger, Some(3), "the middle finger was over E");
+    }
+
+    #[test]
+    fn a_note_keeps_how_long_it_was_held() {
+        // A chord whose bottom note is held for two seconds and whose top note is let
+        // go at once: what the hand is still holding afterwards depends on it.
+        let homography = overhead();
+        let watched = Watched {
+            source: "test".into(),
+            offset: 0.0,
+            frames: vec![Frame { time: 1.0, hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])] }],
+        };
+        let onsets = vec![
+            Onset { midi: 60, time: 1.0, duration: 2.0 },
+            Onset { midi: 67, time: 1.0, duration: 0.1 },
+        ];
+        let piece = extract(&watched, &onsets, &homography, "test", "1");
+        let held: Vec<(u8, f64)> = piece.notes.iter().map(|n| (n.midi, n.duration)).collect();
+        assert_eq!(held, vec![(60, 2.0), (67, 0.1)]);
     }
 
     /// The pixel that lands at a point on the keyboard, by search.
@@ -930,7 +962,7 @@ mod tests {
             offset: 0.0,
             frames: vec![Frame { time: 1.0, hands: vec![hand] }],
         };
-        let piece = extract(&watched, &[Onset { midi: 61, time: 1.0 }], &homography, "test", "1");
+        let piece = extract(&watched, &[Onset { midi: 61, time: 1.0, duration: 0.25 }], &homography, "test", "1");
         assert_eq!(piece.notes[0].finger, Some(2), "the thumb was credited from in front");
     }
 
@@ -951,7 +983,7 @@ mod tests {
             offset: 0.0,
             frames: vec![frame],
         };
-        let onsets = vec![Onset { midi: 52, time: 1.0 }, Onset { midi: 76, time: 1.0 }];
+        let onsets = vec![Onset { midi: 52, time: 1.0, duration: 0.25 }, Onset { midi: 76, time: 1.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         let bass = piece.notes.iter().find(|n| n.midi == 52).expect("the bass note was read");
         let treble = piece.notes.iter().find(|n| n.midi == 76).expect("the treble note was read");
@@ -972,9 +1004,9 @@ mod tests {
             frames: vec![frame],
         };
         let onsets = vec![
-            Onset { midi: 60, time: 0.0 },
-            Onset { midi: 64, time: 0.0 },
-            Onset { midi: 67, time: 0.0 },
+            Onset { midi: 60, time: 0.0, duration: 0.25 },
+            Onset { midi: 64, time: 0.0, duration: 0.25 },
+            Onset { midi: 67, time: 0.0, duration: 0.25 },
         ];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 3);
@@ -1004,7 +1036,7 @@ mod tests {
             offset: 0.0,
             frames: vec![frame],
         };
-        let onsets = vec![Onset { midi: 60, time: 0.0 }];
+        let onsets = vec![Onset { midi: 60, time: 0.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert!(piece.notes.is_empty(), "{:?}", piece.notes);
     }
@@ -1056,7 +1088,7 @@ mod tests {
                 Frame { time: 1.0 + 2.0 * step, hands: vec![good()] },
             ],
         };
-        let onsets = vec![Onset { midi: 64, time: 1.0 }];
+        let onsets = vec![Onset { midi: 64, time: 1.0, duration: 0.25 }];
 
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
@@ -1104,7 +1136,7 @@ mod tests {
             ],
         };
         // A note at t = 3 in the score is at t = 1 in the video.
-        let onsets = vec![Onset { midi: 65, time: 3.0 }];
+        let onsets = vec![Onset { midi: 65, time: 3.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
         assert_eq!(piece.notes[0].finger, Some(4), "the ring finger was over F");

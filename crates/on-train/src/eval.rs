@@ -41,6 +41,8 @@ pub struct MatchRates {
     pub soft: f32,
     /// Agreement with the cheapest recombination of the annotations.
     pub recombined: f32,
+    /// Runs of four consecutive notes of a hand fingered as one annotator did.
+    pub ngram: f32,
     /// How many notes were compared.
     pub notes: usize,
     /// How many pieces they came from.
@@ -51,12 +53,13 @@ impl std::fmt::Display for MatchRates {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "general {:.1}%   highest {:.1}%   soft {:.1}%   recombined {:.1}%   \
+            "general {:.1}%   highest {:.1}%   soft {:.1}%   recombined {:.1}%   4-gram {:.1}%   \
              ({} notes, {} pieces)",
             self.general * 100.0,
             self.highest * 100.0,
             self.soft * 100.0,
             self.recombined * 100.0,
+            self.ngram * 100.0,
             self.notes,
             self.pieces
         )
@@ -79,6 +82,11 @@ pub fn evaluate(
 /// [`combine`] folds them into exactly the figures [`evaluate`] returns.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PieceRates {
+    /// Which piece this is: two measurements are compared piece by piece by this name.
+    pub name: String,
+    /// What the piece belongs to — the pianist's channel, the score it was cut from — so
+    /// a resampling can draw whole groups: pieces of one group are not independent.
+    pub group: String,
     /// Agreement with each annotation of this piece, one entry per annotation.
     pub general: Vec<f32>,
     /// The best of those, which is this piece's contribution to the highest rate.
@@ -87,7 +95,18 @@ pub struct PieceRates {
     pub soft: (usize, usize),
     /// The recombined rate, where there was a shared subset to compute it on.
     pub recombined: Option<f32>,
+    /// Runs of [`NGRAM`] consecutive notes of one hand all fingered as one annotator
+    /// fingered them, out of runs that could be checked. See [`rate_against`].
+    pub ngram: (usize, usize),
 }
+
+/// How many consecutive notes of a hand the anchored n-gram rate checks together.
+///
+/// Srivatsan & Berg-Kirkpatrick (ISMIR 2022): the per-note rates level off near the
+/// agreement between two pianists, which a model can reach by being locally defensible
+/// note by note while following nobody; four notes in a row all as *one* pianist played
+/// them is coherence, and has room to grow long after the per-note rates have stopped.
+pub const NGRAM: usize = 4;
 
 /// Measure every piece, keeping them apart.
 pub fn per_piece(
@@ -95,105 +114,164 @@ pub fn per_piece(
     options: &FingeringOptions,
     prior: Option<&dyn FingeringPrior>,
 ) -> Vec<PieceRates> {
-    let grouped = by_piece(pieces);
     let mut out = Vec::new();
-
-    for annotations in grouped.values() {
-        let mut general_count = 0usize;
-        let mut soft_matched = 0usize;
-        let mut soft_notes = 0usize;
-        let mut this = PieceRates::default();
+    for (name, annotations) in by_piece(pieces) {
         // All annotations of one piece are of the same notes, so the first one is
         // enough to reconstruct the score to be fingered.
-        let Some(reference) = annotations.first() else {
-            continue;
-        };
-        let (score, keys) = rebuild(reference);
-        if keys.is_empty() {
-            continue;
+        let Some(ours) = solve(annotations[0], options, prior) else { continue };
+        if let Some(rates) = rate_against(name, &ours, &annotations) {
+            out.push(rates);
         }
-        let solution = on_fingering::finger_score_with_prior(&score, options, prior);
-        let chosen: HashMap<NoteId, u8> = solution
-            .fingerings
-            .iter()
-            .map(|f| (f.note, f.finger.number()))
-            .collect();
+    }
+    out
+}
 
-        let mut best = 0.0f32;
-        // Which fingers any annotator used for each note, for the soft rate.
-        let mut acceptable: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
-        // The same thing kept per annotator rather than pooled, which is what the
-        // recombination needs: it has to know whose choice each finger was.
-        let mut truths: Vec<Vec<Option<u8>>> = Vec::new();
+/// The solver's finger for each note of a corpus entry, in the entry's own note order.
+pub fn solve(piece: &Piece, options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Option<Vec<Option<u8>>> {
+    let (score, keys) = rebuild(piece);
+    if keys.is_empty() {
+        return None;
+    }
+    let solution = on_fingering::finger_score_with_prior(&score, options, prior);
+    let chosen: HashMap<NoteId, u8> = solution.fingerings.iter().map(|f| (f.note, f.finger.number())).collect();
+    Some(keys.iter().map(|id| chosen.get(id).copied()).collect())
+}
 
-        for annotation in annotations {
-            let mut agreed = 0usize;
-            let mut compared = 0usize;
-            let mut row = vec![None; annotation.notes.len()];
-            for (index, note) in annotation.notes.iter().enumerate() {
-                let Some(id) = keys.get(index) else { continue };
-                let Some(ours) = chosen.get(id) else { continue };
-                // Only where somebody wrote a finger down. The unannotated notes are
-                // in the piece so the engine fingers the real music, but there is
-                // nothing to agree or disagree with on them.
-                let Some(theirs) = note.finger else { continue };
-                compared += 1;
-                acceptable.entry(index).or_default().push(theirs);
-                row[index] = Some(theirs);
-                if *ours == theirs {
-                    agreed += 1;
-                }
-            }
-            if compared == 0 {
-                continue;
-            }
-            truths.push(row);
-            let rate = agreed as f32 / compared as f32;
-            general_count += 1;
-            best = best.max(rate);
-            this.general.push(rate);
+/// One fingering of a piece — the solver's, or a pianist's — measured against the
+/// annotations of it, every rate at once. The same code measures a model and a person,
+/// which is what makes the human reference comparable (see [`human_reference`]).
+///
+/// `ours` is aligned with the annotations' notes. Only notes somebody fingered are
+/// compared: the unannotated ones are in the piece so the engine fingers the real music,
+/// but there is nothing to agree or disagree with on them.
+pub fn rate_against(name: &str, ours: &[Option<u8>], annotations: &[&Piece]) -> Option<PieceRates> {
+    let mut this = PieceRates { name: name.to_string(), group: name.to_string(), ..Default::default() };
+    let mut best = 0.0f32;
+    // Which fingers any annotator used for each note, for the soft rate.
+    let mut acceptable: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
+    // The same thing kept per annotator rather than pooled, which is what the
+    // recombination and the n-gram rate need: whose choice each finger was.
+    let mut truths: Vec<Vec<Option<u8>>> = Vec::new();
+
+    for annotation in annotations {
+        let (mut agreed, mut compared) = (0usize, 0usize);
+        let mut row = vec![None; annotation.notes.len()];
+        for (index, note) in annotation.notes.iter().enumerate() {
+            let Some(Some(mine)) = ours.get(index) else { continue };
+            let Some(theirs) = note.finger else { continue };
+            compared += 1;
+            acceptable.entry(index).or_default().push(theirs);
+            row[index] = Some(theirs);
+            agreed += usize::from(*mine == theirs);
         }
-        if general_count == 0 {
+        if compared == 0 {
             continue;
         }
-        this.highest = best;
+        truths.push(row);
+        let rate = agreed as f32 / compared as f32;
+        best = best.max(rate);
+        this.general.push(rate);
+    }
+    if this.general.is_empty() {
+        return None;
+    }
+    this.highest = best;
 
-        // The recombination needs every annotator to have an opinion at every note it
-        // walks through: following one of them across a note they left blank is not
-        // defined. So it runs on the notes they all filled in, which for a fully
-        // annotated corpus is all of them, and for a partial one is the part where the
-        // question can be asked at all.
-        if let Some(first) = truths.first() {
-            let shared: Vec<usize> = (0..first.len())
-                .filter(|i| truths.iter().all(|row| row[*i].is_some()))
-                .filter(|i| keys.get(*i).and_then(|id| chosen.get(id)).is_some())
-                .collect();
-            if !shared.is_empty() {
-                let rows: Vec<Vec<u8>> = truths
-                    .iter()
-                    .map(|row| shared.iter().map(|i| row[*i].expect("filtered")).collect())
-                    .collect();
-                let mine: Vec<u8> = shared
-                    .iter()
-                    .map(|i| chosen[&keys[*i]])
-                    .collect();
-                this.recombined = Some(recombined(&rows, &mine));
-            }
-        }
-
-        for (index, fingers) in acceptable {
-            let Some(id) = keys.get(index) else { continue };
-            let Some(ours) = chosen.get(id) else { continue };
-            soft_notes += 1;
-            if fingers.contains(ours) {
-                soft_matched += 1;
-            }
-        }
-        this.soft = (soft_matched, soft_notes);
-        out.push(this);
+    // The recombination needs every annotator to have an opinion at every note it
+    // walks through: following one of them across a note they left blank is not
+    // defined. So it runs on the notes they all filled in, which for a fully
+    // annotated corpus is all of them, and for a partial one is the part where the
+    // question can be asked at all.
+    let shared: Vec<usize> = (0..truths[0].len())
+        .filter(|i| truths.iter().all(|row| row[*i].is_some()))
+        .filter(|i| matches!(ours.get(*i), Some(Some(_))))
+        .collect();
+    if !shared.is_empty() {
+        let rows: Vec<Vec<u8>> =
+            truths.iter().map(|row| shared.iter().map(|i| row[*i].expect("filtered")).collect()).collect();
+        let mine: Vec<u8> = shared.iter().map(|i| ours[*i].expect("filtered")).collect();
+        this.recombined = Some(recombined(&rows, &mine));
     }
 
+    for (index, fingers) in acceptable {
+        let Some(Some(mine)) = ours.get(index) else { continue };
+        this.soft.1 += 1;
+        this.soft.0 += usize::from(fingers.contains(mine));
+    }
+
+    // Anchored n-grams, hand by hand: a run of NGRAM consecutive notes of one hand is
+    // checked if some annotator fingered all of it, and counts if one annotator fingered
+    // all of it exactly as ours did.
+    let notes = &annotations[0].notes;
+    for hand in [HandLabel::Left, HandLabel::Right] {
+        let line: Vec<usize> = (0..notes.len()).filter(|&i| notes[i].hand == hand).collect();
+        for window in line.windows(NGRAM) {
+            if window.iter().any(|&i| !matches!(ours.get(i), Some(Some(_)))) {
+                continue;
+            }
+            let full: Vec<&Vec<Option<u8>>> = truths.iter().filter(|row| window.iter().all(|&i| row[i].is_some())).collect();
+            if full.is_empty() {
+                continue;
+            }
+            this.ngram.1 += 1;
+            this.ngram.0 += usize::from(full.iter().any(|row| window.iter().all(|&i| row[i] == ours[i])));
+        }
+    }
+    Some(this)
+}
+
+/// How a pianist's fingering agrees with the other pianists' — the human reference every
+/// rate should be read against, and the only honest ceiling: on music several people
+/// fingered, each is measured against the rest with exactly the code that measures the
+/// model. One entry per annotation, named `piece#k` for the k-th annotator left out.
+///
+/// Only pieces with at least two annotations take part.
+pub fn human_reference(pieces: &[Piece]) -> Vec<PieceRates> {
+    let mut out = Vec::new();
+    for (name, annotations) in by_piece(pieces) {
+        if annotations.len() < 2 {
+            continue;
+        }
+        for (k, left_out) in annotations.iter().enumerate() {
+            let rest: Vec<&Piece> = annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
+            let theirs: Vec<Option<u8>> = left_out.notes.iter().map(|n| n.finger).collect();
+            if let Some(rates) = rate_against(&format!("{name}#{k}"), &theirs, &rest) {
+                out.push(rates);
+            }
+        }
+    }
     out
+}
+
+/// The model measured the way [`human_reference`] measures each pianist: against the
+/// same other n-1 annotations, entry by entry, so the two are paired note for note and
+/// the model is not flattered by having one more reference to agree with.
+pub fn per_piece_loo(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Vec<PieceRates> {
+    let mut out = Vec::new();
+    for (name, annotations) in by_piece(pieces) {
+        if annotations.len() < 2 {
+            continue;
+        }
+        let Some(ours) = solve(annotations[0], options, prior) else { continue };
+        for k in 0..annotations.len() {
+            let rest: Vec<&Piece> = annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
+            if let Some(rates) = rate_against(&format!("{name}#{k}"), &ours, &rest) {
+                out.push(rates);
+            }
+        }
+    }
+    out
+}
+
+/// Put each measured piece in its group (a channel, a score), by the piece's name;
+/// a piece named `piece#k` belongs to the group of `piece`.
+pub fn assign_groups(rates: &mut [PieceRates], groups: &HashMap<String, String>) {
+    for r in rates {
+        let base = r.name.split('#').next().unwrap_or(&r.name);
+        if let Some(group) = groups.get(base) {
+            r.group = group.clone();
+        }
+    }
 }
 
 /// Fold per-piece measurements into the four rates.
@@ -208,12 +286,15 @@ pub fn combine(pieces: &[PieceRates]) -> MatchRates {
     let recombined: Vec<f32> = pieces.iter().filter_map(|p| p.recombined).collect();
     let matched: usize = pieces.iter().map(|p| p.soft.0).sum();
     let notes: usize = pieces.iter().map(|p| p.soft.1).sum();
+    let runs: usize = pieces.iter().map(|p| p.ngram.1).sum();
+    let runs_matched: usize = pieces.iter().map(|p| p.ngram.0).sum();
 
     MatchRates {
         general: ratio(general.iter().sum(), general.len()),
         highest: ratio(highest.iter().sum(), highest.len()),
         soft: ratio(matched as f32, notes),
         recombined: ratio(recombined.iter().sum(), recombined.len()),
+        ngram: ratio(runs_matched as f32, runs),
         notes,
         pieces: pieces.len(),
     }
@@ -285,28 +366,76 @@ impl std::fmt::Display for Confidence {
 /// whether the *difference* holds up when the pieces are resampled, and that interval is
 /// far narrower. It is what decides whether a model is better, rather than looks it.
 pub fn paired(ours: &[PieceRates], theirs: &[PieceRates], rounds: usize) -> Interval {
-    assert_eq!(ours.len(), theirs.len(), "the two were measured on different pieces");
-    let gap = |indices: &mut dyn Iterator<Item = usize>| {
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        for i in indices {
-            a.push(ours[i].clone());
-            b.push(theirs[i].clone());
-        }
-        combine(&a).general - combine(&b).general
+    paired_by(ours, theirs, rounds, false, |r| combine(r).general).expect("the two were measured on different pieces")
+}
+
+/// [`paired`], for any rate and with the pieces joined by name.
+///
+/// The two lists are matched piece by piece by [`PieceRates::name`] (in order, for a
+/// name that occurs more than once), and it is an error for either to have a piece the
+/// other has not: a piece one system skipped would otherwise shift every pair after it
+/// and the interval would be measuring nothing. `metric` folds a set of pieces into the
+/// rate compared. With `cluster`, whole groups are resampled together — the videos of one
+/// pianist, the excerpts of one score — since pieces in a group are not independent and
+/// resampling them one by one would report an interval narrower than the truth.
+pub fn paired_by(
+    ours: &[PieceRates],
+    theirs: &[PieceRates],
+    rounds: usize,
+    cluster: bool,
+    metric: impl Fn(&[PieceRates]) -> f32,
+) -> Result<Interval, String> {
+    let key = |list: &[PieceRates]| {
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        list.iter()
+            .map(|r| {
+                let n = seen.entry(r.name.as_str()).or_insert(0);
+                *n += 1;
+                (r.name.clone(), *n)
+            })
+            .collect::<Vec<_>>()
     };
-    let point = gap(&mut (0..ours.len()));
+    let theirs_at: HashMap<(String, usize), usize> = key(theirs).into_iter().enumerate().map(|(i, k)| (k, i)).collect();
+    let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(ours.len());
+    for (i, k) in key(ours).into_iter().enumerate() {
+        match theirs_at.get(&k) {
+            Some(&j) => pairs.push((i, j)),
+            None => return Err(format!("piece {} was measured for one system only", k.0)),
+        }
+    }
+    if pairs.len() != theirs.len() {
+        return Err(format!("{} pieces against {}: measured on different pieces", ours.len(), theirs.len()));
+    }
+    // What is drawn: single pairs, or every pair of a group at once.
+    let units: Vec<Vec<usize>> = if cluster {
+        let mut by: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (p, &(i, _)) in pairs.iter().enumerate() {
+            by.entry(ours[i].group.as_str()).or_default().push(p);
+        }
+        by.into_values().collect()
+    } else {
+        (0..pairs.len()).map(|p| vec![p]).collect()
+    };
+    let gap = |chosen: &[usize]| {
+        let a: Vec<PieceRates> = chosen.iter().map(|&p| ours[pairs[p].0].clone()).collect();
+        let b: Vec<PieceRates> = chosen.iter().map(|&p| theirs[pairs[p].1].clone()).collect();
+        metric(&a) - metric(&b)
+    };
+    let all: Vec<usize> = (0..pairs.len()).collect();
+    let point = gap(&all);
     let mut draws = Vec::with_capacity(rounds);
     let mut rng: u64 = 0x2545_f491_4f6c_dd1d;
     for _ in 0..rounds.max(1) {
-        let mut drawn = (0..ours.len()).map(|_| {
+        let mut chosen = Vec::with_capacity(pairs.len());
+        for _ in 0..units.len() {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (rng >> 33) as usize % ours.len().max(1)
-        });
-        draws.push(gap(&mut drawn));
+            chosen.extend_from_slice(&units[(rng >> 33) as usize % units.len().max(1)]);
+        }
+        draws.push(gap(&chosen));
     }
     draws.sort_by(f32::total_cmp);
     let at = |q: f64| draws[((draws.len() - 1) as f64 * q).round() as usize];
-    Interval { point, low: at(0.025), high: at(0.975) }
+    Ok(Interval { point, low: at(0.025), high: at(0.975) })
 }
 
 pub fn confidence(pieces: &[PieceRates], rounds: usize) -> Confidence {
@@ -427,7 +556,7 @@ fn ratio(total: f32, count: usize) -> f32 {
 /// note the same length is not the piece that was fingered, and measuring against it
 /// measures the wrong thing. Entries written before lengths were recorded fall back to
 /// an eighth note, which is what this used to assume for everything.
-pub(crate) fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
+pub fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
     // A corpus entry keeps its timings in seconds, and a score keeps them in ticks
     // against a tempo. `finalise` recomputes the seconds from the ticks, so the two have
     // to agree or the piece comes out at the wrong speed — and how much time there is
@@ -475,7 +604,7 @@ mod tests {
     use crate::corpus::FingeredNote;
 
     fn rates(general: f32) -> PieceRates {
-        PieceRates { general: vec![general], highest: general, soft: (0, 0), recombined: None }
+        PieceRates { general: vec![general], highest: general, ..Default::default() }
     }
 
     #[test]
@@ -540,6 +669,7 @@ mod tests {
             highest: rate,
             soft: ((rate * notes as f32) as usize, notes),
             recombined: Some(rate),
+            ..Default::default()
         }
     }
 
@@ -697,5 +827,84 @@ mod tests {
     fn an_empty_set_reports_zero() {
         let rates = evaluate(&[], &FingeringOptions::default(), None);
         assert_eq!(rates, MatchRates::default());
+    }
+
+    fn named(name: &str, group: &str, general: f32) -> PieceRates {
+        PieceRates { name: name.into(), group: group.into(), general: vec![general], highest: general, ..Default::default() }
+    }
+
+    #[test]
+    fn pieces_are_paired_by_name_not_by_order() {
+        let ours: Vec<PieceRates> = (0..30).map(|i| named(&format!("p{i}"), "g", 0.5 + i as f32 / 100.0)).collect();
+        let theirs: Vec<PieceRates> = (0..30).map(|i| named(&format!("p{i}"), "g", 0.48 + i as f32 / 100.0)).collect();
+        let mut shuffled = theirs.clone();
+        shuffled.reverse();
+        let general = |r: &[PieceRates]| combine(r).general;
+        let a = paired_by(&ours, &theirs, 500, false, general).unwrap();
+        let b = paired_by(&ours, &shuffled, 500, false, general).unwrap();
+        assert!((a.point - 0.02).abs() < 1e-5 && (b.point - 0.02).abs() < 1e-5, "{a:?} {b:?}");
+        assert!(b.low > 0.0, "the same pairs, whatever the order: {b:?}");
+    }
+
+    #[test]
+    fn a_piece_measured_for_one_system_only_is_an_error() {
+        let ours = vec![named("a", "g", 0.5), named("b", "g", 0.5)];
+        let theirs = vec![named("a", "g", 0.5), named("c", "g", 0.5)];
+        assert!(paired_by(&ours, &theirs, 10, false, |r| combine(r).general).is_err());
+        assert!(paired_by(&ours, &ours[..1], 10, false, |r| combine(r).general).is_err());
+    }
+
+    #[test]
+    fn resampling_whole_groups_does_not_understate_the_width() {
+        // Ten pianists, ten videos each: the gain depends on the pianist, so the videos
+        // of one are not ten independent pieces of evidence.
+        let mut ours = Vec::new();
+        let mut theirs = Vec::new();
+        for g in 0..10 {
+            let gain = if g % 2 == 0 { 0.04 } else { -0.02 };
+            for v in 0..10 {
+                let name = format!("g{g}v{v}");
+                theirs.push(named(&name, &format!("g{g}"), 0.6));
+                ours.push(named(&name, &format!("g{g}"), 0.6 + gain));
+            }
+        }
+        let general = |r: &[PieceRates]| combine(r).general;
+        let loose = paired_by(&ours, &theirs, 2000, false, general).unwrap();
+        let grouped = paired_by(&ours, &theirs, 2000, true, general).unwrap();
+        assert!(grouped.high - grouped.low > loose.high - loose.low, "{grouped:?} vs {loose:?}");
+    }
+
+    #[test]
+    fn four_notes_in_a_row_count_only_as_one_pianist_played_them() {
+        // Two pianists who agree on nothing in the middle of the run.
+        let a = piece("x", "1", &[(60, 1), (62, 2), (64, 3), (65, 4), (67, 5)]);
+        let b = piece("x", "2", &[(60, 1), (62, 3), (64, 2), (65, 4), (67, 5)]);
+        // Right at every note by one pianist or the other, but never four in a row by one.
+        let mixed = [Some(1), Some(2), Some(2), Some(4), Some(5)];
+        let rates = rate_against("x", &mixed, &[&a, &b]).unwrap();
+        assert_eq!(rates.soft, (5, 5), "every note matches somebody");
+        assert_eq!(rates.ngram, (0, 2), "no run of four is anybody's");
+        let following_a = [Some(1), Some(2), Some(3), Some(4), Some(5)];
+        assert_eq!(rate_against("x", &following_a, &[&a, &b]).unwrap().ngram, (2, 2));
+    }
+
+    #[test]
+    fn a_pianist_is_measured_against_the_others_exactly_as_the_model_is() {
+        let pieces = vec![
+            piece("x", "1", &[(60, 1), (62, 2), (64, 3), (65, 4)]),
+            piece("x", "2", &[(60, 1), (62, 2), (64, 3), (65, 4)]),
+            piece("x", "3", &[(60, 1), (62, 3), (64, 4), (65, 5)]),
+        ];
+        let human = human_reference(&pieces);
+        assert_eq!(human.len(), 3, "each pianist left out once");
+        // Pianist 1 against 2 and 3: identical to 2, so the highest rate is perfect.
+        assert_eq!(human[0].name, "x#0");
+        assert_eq!(human[0].highest, 1.0);
+        assert_eq!(human[0].general, vec![1.0, 0.25]);
+        // The model is measured against the same others, entry by entry.
+        let model = per_piece_loo(&pieces, &FingeringOptions::default(), None);
+        let names: Vec<&str> = model.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["x#0", "x#1", "x#2"]);
+        assert!(paired_by(&model, &human, 50, false, |r| combine(r).general).is_ok());
     }
 }
