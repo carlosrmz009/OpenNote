@@ -553,9 +553,11 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
         }
     }
     let mut components: Vec<(String, f32, f32)> = Vec::new();
-    let expert = find("T1");
-    let label = if expert.is_some() { "v2" } else { "v2-pre" }.to_string();
-    if let Some(t) = expert.or_else(|| find("T2")) {
+    // The several-reference slot: commissioned experts (T1) if a bench has them, otherwise
+    // the same songs as several pianists played them (T2). Without either, `v2-pre`.
+    let several = find("T1").or_else(|| find("T2"));
+    let label = if several.is_some() { "v2" } else { "v2-pre" }.to_string();
+    if let Some(t) = several {
         // Several references: the stitched (recombined) rate, and coherence over a run.
         let r = judged(t);
         let c = agreement(Rates { general: r.recombined, ..r });
@@ -626,7 +628,8 @@ mod tests {
         let mut tiers = vec![card("T3-dev", 70.0, 45.0), card("T4-dev", 57.0, 26.0)];
         let fine = headline(&tiers);
         assert!(fine.score.is_some() && fine.gated.is_none(), "{fine:?}");
-        assert_eq!(fine.label, "v2-pre", "no expert tier yet");
+        assert_eq!(fine.label, "v2-pre", "no tier with several references");
+        assert_eq!(headline(&[card("T2-dev", 60.0, 30.0)]).label, "v2", "several pianists stand in for experts");
         tiers[0].gate_failures = vec!["t0-major-C-right".into()];
         let gated = headline(&tiers);
         assert!(gated.score.is_none() && gated.gated.is_some());
