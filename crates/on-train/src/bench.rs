@@ -48,6 +48,19 @@ pub struct TierSpec {
     /// Resample whole groups rather than single pieces when pairing.
     #[serde(default)]
     pub cluster: bool,
+    /// Measure without the bonus the solver gives the fingerings it was taught (its scale
+    /// tables): on scales, with the bonus the engine is only being asked whether it
+    /// remembers its own answer, which is a regression check and not a measurement.
+    #[serde(default)]
+    pub without_taught: bool,
+    /// Pieces of this tier whose name starts with one of these must be fingered exactly
+    /// as written, or the benchmark gives no headline score at all.
+    #[serde(default)]
+    pub must_pass: Vec<String>,
+    /// Kept back for releases: measured only when asked (`--sealed`), so that it is not
+    /// slowly fitted by being looked at after every change.
+    #[serde(default)]
+    pub sealed: bool,
 }
 
 /// Everything measured, for a model and the rules it is built on.
@@ -56,7 +69,33 @@ pub struct Scorecard {
     pub bench: String,
     pub model: Option<String>,
     pub tiers: Vec<TierCard>,
+    pub headline: Headline,
 }
+
+/// The OpenNote Score: one number, never shown without what it is made of.
+///
+/// `100 * G * prod(max(c, 0.01)^w)`. G is 0, and the score withheld with the reason, if
+/// a must-pass convention is fingered wrongly or anything is unplayable. Each agreement
+/// component is the share of the way from random fingers to perfect agreement,
+/// `(m - b)/(1 - b)`, with b the agreement of random fingers (one in five a note, one in
+/// 625 for four notes in a row), so a better model can always score higher, past human
+/// level. Comfort is, for each kind of awkwardness, the people's own rate over the
+/// model's, capped at one, combined by a geometric mean: as comfortable as a pianist, or
+/// more, is full marks, and no one kind of awkwardness can be traded for another unseen.
+/// The weights are fixed with the benchmark's version and renormalised over the parts
+/// that exist; until the expert tier does, the several-pianists tier stands in for it
+/// and the score is labelled pre-release.
+#[derive(Debug, Clone, Serialize)]
+pub struct Headline {
+    pub score: Option<f32>,
+    pub gated: Option<String>,
+    pub label: String,
+    /// (component, value 0..1, weight used).
+    pub components: Vec<(String, f32, f32)>,
+}
+
+const RANDOM_NOTE: f32 = 0.2;
+const RANDOM_RUN: f32 = 0.0016;
 
 impl Scorecard {
     pub fn to_json(&self) -> Result<String> {
@@ -79,6 +118,13 @@ pub struct TierCard {
     pub human: Option<Rates>,
     pub comfort_rules: Comfort,
     pub comfort_model: Option<Comfort>,
+    /// The comfort of the people's own fingerings of the same pieces.
+    pub comfort_human: Comfort,
+    /// Must-pass pieces fingered otherwise than as written.
+    pub gate_failures: Vec<String>,
+    /// The pieces the system being judged (the model, or the rules alone without one)
+    /// agreed with least, worst first: where to look.
+    pub weakest: Vec<(String, f32)>,
 }
 
 /// Agreement, in percent.
@@ -137,6 +183,16 @@ pub struct Comfort {
     pub travel_mm: f32,
     /// Finger pairs held past a comfortable span, in percent.
     pub stretched: f32,
+    /// Thumb passes under, fingers passed over the thumb, and crossings without the
+    /// thumb, per 100 transitions.
+    pub thumb_unders: f32,
+    pub finger_overs: f32,
+    pub thumbless: f32,
+    /// Semitones per finger between successive notes, and within chords.
+    pub step_spread: f32,
+    pub chord_spread: f32,
+    /// Notes the fourth or fifth finger played on a black key, in percent.
+    pub weak_on_black: f32,
 }
 
 impl From<&Playability> for Comfort {
@@ -146,8 +202,45 @@ impl From<&Playability> for Comfort {
             hand_moves: p.change_rate() * 100.0,
             travel_mm: (p.travel_mm / p.transitions.max(1) as f64) as f32,
             stretched: p.stretched_rate() * 100.0,
+            thumb_unders: p.thumb_under_rate() * 100.0,
+            finger_overs: p.finger_over_rate() * 100.0,
+            thumbless: p.thumbless_rate() * 100.0,
+            step_spread: p.step_spread(),
+            chord_spread: p.chord_spread(),
+            weak_on_black: p.weak_on_black_rate() * 100.0,
         }
     }
+}
+
+/// How hard the people's own fingerings were on the hand, measured exactly as the
+/// engine's are: what "as comfortable as a pianist" has to be read against.
+fn human_comfort(pieces: &[Piece], options: &FingeringOptions) -> Playability {
+    use on_fingering::playability::{measure, Chord, CHORD_SECONDS};
+    let mut total = Playability::default();
+    for piece in pieces {
+        for (label, hand) in [(crate::corpus::HandLabel::Left, on_hand::Hand::Left), (crate::corpus::HandLabel::Right, on_hand::Hand::Right)] {
+            let mut notes: Vec<(f64, on_fingering::Placement)> = piece
+                .notes
+                .iter()
+                .filter(|n| n.hand == label)
+                .filter_map(|n| Some((n.onset, on_fingering::Placement::new(n.midi, on_hand::Finger::from_number(n.finger?)?))))
+                .collect();
+            notes.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.midi.cmp(&b.1.midi)));
+            let mut chords: Vec<Chord> = Vec::new();
+            let mut started = f64::NEG_INFINITY;
+            for (onset, placement) in notes {
+                match chords.last_mut() {
+                    Some(last) if onset - started <= CHORD_SECONDS => last.notes.push(placement),
+                    _ => {
+                        started = onset;
+                        chords.push(Chord::single(onset, placement));
+                    }
+                }
+            }
+            total.add(measure(hand, options.span_model.table(), &chords));
+        }
+    }
+    total
 }
 
 /// FNV-1a of a file's bytes, as hex: what the manifest pins.
@@ -249,14 +342,20 @@ pub fn run(
     model_name: Option<String>,
     rounds: usize,
     threads: usize,
+    include_sealed: bool,
     mut progress: impl FnMut(&str),
 ) -> Result<Scorecard> {
     manifest.verify()?;
     let groups = manifest.groups()?;
-    let mut rules_only = options.clone();
-    rules_only.prior_scale = 0.0;
     let mut tiers = Vec::new();
-    for spec in &manifest.tiers {
+    for spec in manifest.tiers.iter().filter(|t| include_sealed || !t.sealed) {
+        let mut options = options.clone();
+        if spec.without_taught {
+            options.pattern_scale = 0.0;
+        }
+        let options = &options;
+        let mut rules_only = options.clone();
+        rules_only.prior_scale = 0.0;
         let mut pieces = Vec::new();
         for dir in &spec.corpora {
             pieces.extend(Corpus::at(dir)?.load()?);
@@ -277,6 +376,7 @@ pub fn run(
             let reference = human_reference(&pieces);
             (!reference.is_empty()).then(|| Rates::from(combine(&reference)))
         };
+        let mut model_rates: Option<Vec<PieceRates>> = None;
         let (model, gain, comfort_model) = match prior {
             None => (None, None, None),
             Some(prior) => {
@@ -292,9 +392,25 @@ pub fn run(
                     ngram: pair(|r| combine(r).ngram)?,
                     recombined: pair(|r| combine(r).recombined)?,
                 };
-                (Some(Rates::from(combine(&with))), Some(gains), Some(Comfort::from(&comfort)))
+                let summary = Rates::from(combine(&with));
+                model_rates = Some(with);
+                (Some(summary), Some(gains), Some(Comfort::from(&comfort)))
             }
         };
+        let judged = |rates: &[PieceRates]| {
+            let mut w: Vec<(String, f32)> = rates.iter().map(|r| (r.name.clone(), combine(std::slice::from_ref(r)).general * 100.0)).collect();
+            w.sort_by(|a, b| a.1.total_cmp(&b.1));
+            w.truncate(10);
+            w
+        };
+        let judged_rates = model_rates.as_ref().unwrap_or(&rules);
+        let weakest = judged(judged_rates);
+        let gate_failures: Vec<String> = judged_rates
+            .iter()
+            .filter(|r| spec.must_pass.iter().any(|prefix| r.name.starts_with(prefix.as_str())))
+            .filter(|r| combine(std::slice::from_ref(r)).general < 1.0)
+            .map(|r| r.name.clone())
+            .collect();
         tiers.push(TierCard {
             id: spec.id.clone(),
             title: spec.title.clone(),
@@ -307,9 +423,69 @@ pub fn run(
             human,
             comfort_rules: Comfort::from(&comfort_rules),
             comfort_model,
+            comfort_human: Comfort::from(&human_comfort(&pieces, options)),
+            gate_failures,
+            weakest,
         });
     }
-    Ok(Scorecard { bench: manifest.name.clone(), model: model_name, tiers })
+    let headline = headline(&tiers);
+    Ok(Scorecard { bench: manifest.name.clone(), model: model_name, tiers, headline })
+}
+
+/// Fold a scorecard's tiers into the OpenNote Score. See [`Headline`].
+pub fn headline(tiers: &[TierCard]) -> Headline {
+    let judged = |t: &TierCard| t.model.unwrap_or(t.rules);
+    let comfort_of = |t: &TierCard| t.comfort_model.unwrap_or(t.comfort_rules);
+    let find = |prefix: &str| tiers.iter().find(|t| t.id.starts_with(prefix));
+    let agreement = |r: Rates| {
+        let general = ((r.general / 100.0 - RANDOM_NOTE) / (1.0 - RANDOM_NOTE)).clamp(0.0, 1.0);
+        let run = ((r.ngram / 100.0 - RANDOM_RUN) / (1.0 - RANDOM_RUN)).clamp(0.0, 1.0);
+        (general + run) / 2.0
+    };
+    let mut gated = None;
+    for t in tiers {
+        if !t.gate_failures.is_empty() {
+            gated = Some(format!("{}: {} must-pass pieces wrong (first: {})", t.id, t.gate_failures.len(), t.gate_failures[0]));
+            break;
+        }
+        if comfort_of(t).unplayable > 0.0 {
+            gated = Some(format!("{}: unplayable transitions", t.id));
+            break;
+        }
+    }
+    let mut components: Vec<(String, f32, f32)> = Vec::new();
+    let expert = find("T1");
+    let label = if expert.is_some() { "v2" } else { "v2-pre" }.to_string();
+    if let Some(t) = expert.or_else(|| find("T2")) {
+        // Several references: the stitched (recombined) rate, and coherence over a run.
+        let r = judged(t);
+        let c = agreement(Rates { general: r.recombined, ..r });
+        components.push((format!("{} agreement", t.id), c, 0.35));
+    }
+    if let Some(t) = find("T3") {
+        components.push((format!("{} agreement", t.id), agreement(judged(t)), 0.20));
+        let (h, m) = (t.comfort_human, comfort_of(t));
+        let ratio = |human: f32, model: f32| ((human + 0.01) / (model + 0.01)).min(1.0);
+        let parts = [
+            ratio(h.hand_moves, m.hand_moves),
+            ratio(h.stretched, m.stretched),
+            ratio(h.thumbless, m.thumbless),
+            ratio(h.weak_on_black, m.weak_on_black),
+            ratio(h.step_spread, m.step_spread),
+        ];
+        let geometric = parts.iter().map(|p| p.max(1e-3).ln()).sum::<f32>() / parts.len() as f32;
+        components.push(("comfort against the pianists".to_string(), geometric.exp(), 0.25));
+    }
+    if let Some(t) = find("T4") {
+        components.push((format!("{} agreement", t.id), agreement(judged(t)), 0.10));
+    }
+    let total: f32 = components.iter().map(|c| c.2).sum();
+    for c in &mut components {
+        c.2 /= total.max(1e-9);
+    }
+    let score = (gated.is_none() && !components.is_empty())
+        .then(|| 100.0 * components.iter().map(|(_, c, w)| c.max(0.01).powf(*w)).product::<f32>());
+    Headline { score, gated, label, components }
 }
 
 #[cfg(test)]
@@ -327,6 +503,47 @@ mod tests {
         assert!(manifest.verify().is_ok());
         std::fs::write(&file, "two").unwrap();
         assert!(manifest.verify().is_err(), "an edited benchmark must not run");
+    }
+
+    fn card(id: &str, general: f32, ngram: f32) -> TierCard {
+        let rates = Rates { general, highest: general, soft: general, recombined: general, ngram };
+        let comfort = Comfort {
+            unplayable: 0.0, hand_moves: 25.0, travel_mm: 25.0, stretched: 4.0, thumb_unders: 3.0, finger_overs: 3.0,
+            thumbless: 0.1, step_spread: 2.0, chord_spread: 2.0, weak_on_black: 1.0,
+        };
+        TierCard {
+            id: id.into(), title: id.into(), pieces: 1, groups: 1, notes: 1, rules: rates, model: None, gain: None,
+            human: None, comfort_rules: comfort, comfort_model: None, comfort_human: comfort, gate_failures: vec![],
+            weakest: vec![],
+        }
+    }
+
+    #[test]
+    fn the_headline_is_withheld_rather_than_shown_wrong() {
+        let mut tiers = vec![card("T3-dev", 70.0, 45.0), card("T4-dev", 57.0, 26.0)];
+        let fine = headline(&tiers);
+        assert!(fine.score.is_some() && fine.gated.is_none(), "{fine:?}");
+        assert_eq!(fine.label, "v2-pre", "no expert tier yet");
+        tiers[0].gate_failures = vec!["t0-major-C-right".into()];
+        let gated = headline(&tiers);
+        assert!(gated.score.is_none() && gated.gated.is_some());
+        tiers[0].gate_failures.clear();
+        tiers[1].comfort_rules.unplayable = 0.5;
+        assert!(headline(&tiers).score.is_none(), "anything unplayable gates the score");
+    }
+
+    #[test]
+    fn better_agreement_scores_higher_and_comfort_is_capped_at_human() {
+        let base = headline(&[card("T3-dev", 70.0, 45.0)]).score.unwrap();
+        let better = headline(&[card("T3-dev", 75.0, 50.0)]).score.unwrap();
+        assert!(better > base, "{better} vs {base}");
+        // More comfortable than the pianists earns nothing extra; less costs.
+        let mut easier = card("T3-dev", 70.0, 45.0);
+        easier.comfort_rules.hand_moves = 10.0;
+        assert!((headline(&[easier]).score.unwrap() - base).abs() < 1e-3);
+        let mut harder = card("T3-dev", 70.0, 45.0);
+        harder.comfort_rules.hand_moves = 50.0;
+        assert!(headline(&[harder]).score.unwrap() < base);
     }
 
     #[test]

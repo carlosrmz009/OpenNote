@@ -151,6 +151,25 @@ pub struct Playability {
     pub spans_measured: usize,
     /// Pairs held wider or narrower than the hand finds comfortable.
     pub stretched: usize,
+    /// The thumb passed under to a note beyond the hand (up the keys in the right hand,
+    /// down them in the left).
+    pub thumb_unders: usize,
+    /// A finger passed over the thumb the other way.
+    pub finger_overs: usize,
+    /// Two fingers neither of which is the thumb crossed: rare in anybody's playing, and
+    /// so a mark of a fingering nobody would choose (Srivatsan & Berg-Kirkpatrick 2022).
+    pub thumbless_crossings: usize,
+    /// Semitones per finger between successive notes played by different fingers, summed,
+    /// over [`Playability::steps_measured`]: how far apart the hand is spread as it moves.
+    pub step_spread_total: f64,
+    pub steps_measured: usize,
+    /// The same between neighbouring notes of a chord.
+    pub chord_spread_total: f64,
+    pub chord_pairs: usize,
+    /// Notes the fourth or fifth finger played on a black key.
+    pub weak_on_black: usize,
+    /// Notes looked at, which is what that last rate is over.
+    pub notes: usize,
 }
 
 impl Playability {
@@ -207,8 +226,47 @@ impl Playability {
         rate(self.stretched, self.spans_measured)
     }
 
+    /// Thumb passes under, per transition.
+    pub fn thumb_under_rate(&self) -> f32 {
+        rate(self.thumb_unders, self.transitions)
+    }
+
+    /// Fingers passed over the thumb, per transition.
+    pub fn finger_over_rate(&self) -> f32 {
+        rate(self.finger_overs, self.transitions)
+    }
+
+    /// Crossings without the thumb, per transition.
+    pub fn thumbless_rate(&self) -> f32 {
+        rate(self.thumbless_crossings, self.transitions)
+    }
+
+    /// Mean semitones per finger between successive notes.
+    pub fn step_spread(&self) -> f32 {
+        if self.steps_measured == 0 { 0.0 } else { (self.step_spread_total / self.steps_measured as f64) as f32 }
+    }
+
+    /// Mean semitones per finger between neighbouring notes of a chord.
+    pub fn chord_spread(&self) -> f32 {
+        if self.chord_pairs == 0 { 0.0 } else { (self.chord_spread_total / self.chord_pairs as f64) as f32 }
+    }
+
+    /// The fraction of notes played by the fourth or fifth finger on a black key.
+    pub fn weak_on_black_rate(&self) -> f32 {
+        rate(self.weak_on_black, self.notes)
+    }
+
     /// Add another hand's, or another piece's, tally to this one.
     pub fn add(&mut self, other: Playability) {
+        self.thumb_unders += other.thumb_unders;
+        self.finger_overs += other.finger_overs;
+        self.thumbless_crossings += other.thumbless_crossings;
+        self.step_spread_total += other.step_spread_total;
+        self.steps_measured += other.steps_measured;
+        self.chord_spread_total += other.chord_spread_total;
+        self.chord_pairs += other.chord_pairs;
+        self.weak_on_black += other.weak_on_black;
+        self.notes += other.notes;
         self.impossible += other.impossible;
         self.unplayable += other.unplayable;
         self.flaws.extend(other.flaws);
@@ -436,6 +494,19 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
     // How stretched the hand is holding each chord. Every pair of fingers in it, since
     // a chord is uncomfortable if any two of its fingers are.
     for chord in events {
+        out.notes += chord.notes.len();
+        out.weak_on_black += chord
+            .notes
+            .iter()
+            .filter(|n| n.finger.number() >= 4 && on_hand::keyboard::is_black(n.midi))
+            .count();
+        for pair in chord.notes.windows(2) {
+            let fingers = (i32::from(pair[1].finger.number()) - i32::from(pair[0].finger.number())).abs();
+            if fingers > 0 {
+                out.chord_spread_total += f64::from(i32::from(pair[1].midi) - i32::from(pair[0].midi)).abs() / f64::from(fingers);
+                out.chord_pairs += 1;
+            }
+        }
         for (i, low) in chord.notes.iter().enumerate() {
             for high in &chord.notes[i + 1..] {
                 let semitones = i32::from(high.midi) - i32::from(low.midi);
@@ -469,6 +540,7 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
         let edges = if low == high { vec![low] } else { vec![low, high] };
         for (from, to) in edges {
             out.transitions += 1;
+            tally_crossing(&mut out, hand, from, to);
             if impossible(hand, from, to) {
                 out.impossible += 1;
                 let flaw = Flaw {
@@ -492,6 +564,37 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
         }
     }
     out
+}
+
+/// Which way a move between two notes crosses the hand, if it does, and how far apart it
+/// spreads the fingers. Up the keys the right hand's fingers rise and the left hand's fall;
+/// a move against that order is a crossing, by the thumb or without it.
+fn tally_crossing(out: &mut Playability, hand: Hand, from: Placement, to: Placement) {
+    let up = i32::from(to.midi) - i32::from(from.midi);
+    let (a, b) = (from.finger.number(), to.finger.number());
+    if up == 0 || a == b {
+        return;
+    }
+    out.step_spread_total += f64::from(up.abs()) / f64::from((i32::from(b) - i32::from(a)).abs());
+    out.steps_measured += 1;
+    // Fingers rising in the direction of travel is the hand's natural order.
+    let rising = (b > a) == (up > 0);
+    let natural = match hand {
+        Hand::Right => rising,
+        Hand::Left => !rising,
+    };
+    // An octave or more is a leap the hand repositions for, not a crossing (the same
+    // line `impossible` draws).
+    if natural || up.abs() >= 12 {
+        return;
+    }
+    if b == 1 {
+        out.thumb_unders += 1;
+    } else if a == 1 {
+        out.finger_overs += 1;
+    } else {
+        out.thumbless_crossings += 1;
+    }
 }
 
 /// Measure a whole fingered score, both hands together.
@@ -721,6 +824,40 @@ mod tests {
         assert_eq!(out.impossible, 0, "{out}");
         // One thumb crossing, at the fourth note, and nothing else moves the hand.
         assert_eq!(out.crossings, 1, "{out}");
+    }
+
+    #[test]
+    fn the_thumb_passes_under_going_one_way_and_a_finger_over_coming_back() {
+        let up = events(&[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2)]);
+        let right = measure(Hand::Right, &PARNCUTT, &up);
+        assert_eq!((right.thumb_unders, right.finger_overs, right.thumbless_crossings), (1, 0, 0));
+        let down = events(&[(67, 2), (65, 1), (64, 3), (62, 2), (60, 1)]);
+        let right = measure(Hand::Right, &PARNCUTT, &down);
+        assert_eq!((right.thumb_unders, right.finger_overs), (0, 1));
+        // The left hand the other way round: going up, a finger passes over the thumb.
+        let left_up = events(&[(48, 5), (50, 4), (52, 3), (53, 2), (55, 1), (57, 3), (59, 2)]);
+        let left = measure(Hand::Left, &PARNCUTT, &left_up);
+        assert_eq!((left.thumb_unders, left.finger_overs), (0, 1));
+        let left_down = events(&[(59, 2), (57, 3), (55, 1), (53, 2)]);
+        assert_eq!(measure(Hand::Left, &PARNCUTT, &left_down).thumb_unders, 1);
+    }
+
+    #[test]
+    fn a_crossing_without_the_thumb_is_counted_and_a_leap_is_not() {
+        let crossed = events(&[(64, 2), (62, 3)]);
+        assert_eq!(measure(Hand::Right, &PARNCUTT, &crossed).thumbless_crossings, 1);
+        let leap = events(&[(76, 2), (62, 3)]);
+        assert_eq!(measure(Hand::Right, &PARNCUTT, &leap).thumbless_crossings, 0, "fourteen semitones is a jump");
+    }
+
+    #[test]
+    fn spread_and_weak_fingers_on_black_keys() {
+        let line = events(&[(60, 1), (67, 2), (61, 4)]);
+        let out = measure(Hand::Right, &PARNCUTT, &line);
+        // A fifth between the thumb and the index finger: seven semitones a finger.
+        assert!((out.step_spread_total - (7.0 + 6.0 / 2.0)).abs() < 1e-9, "{}", out.step_spread_total);
+        assert_eq!(out.weak_on_black, 1, "the fourth finger on C sharp");
+        assert_eq!(out.notes, 3);
     }
 
     /// The case Zhao et al. draw out of their Table 1: with the pitch falling, the

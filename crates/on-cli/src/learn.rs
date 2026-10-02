@@ -398,6 +398,10 @@ pub struct BenchmarkArgs {
     #[arg(long)]
     pub threads: Option<usize>,
 
+    /// Also measure the sealed tiers, which are kept back for releases.
+    #[arg(long)]
+    pub sealed: bool,
+
     #[command(flatten)]
     pub weights: ModelArgs,
 }
@@ -417,6 +421,7 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
         name,
         args.rounds,
         threads,
+        args.sealed,
         |line| eprintln!("{line}"),
     )?;
     for tier in &card.tiers {
@@ -432,11 +437,29 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
         if let Some(human) = &tier.human {
             println!("  pianists against one another: general {:.1}%  recombined {:.1}%  4-gram {:.1}%", human.general, human.recombined, human.ngram);
         }
-        let c = &tier.comfort_rules;
-        println!("  comfort, rules: unplayable {:.2}%, hand moves {:.1}/100, travel {:.1} mm, stretched {:.1}%", c.unplayable, c.hand_moves, c.travel_mm, c.stretched);
+        let weakest: Vec<String> = tier.weakest.iter().take(5).map(|(n, r)| format!("{n} {r:.0}%")).collect();
+        println!("  weakest: {}", weakest.join(", "));
+        let line = |label: &str, c: &on_train::bench::Comfort| {
+            println!(
+                "  comfort, {label:<6} unplayable {:.2}%  moves {:.1}  travel {:.1} mm  stretched {:.1}%  under {:.1}  over {:.1}  thumbless {:.2}  spread {:.2}/{:.2}  4-5 on black {:.1}%",
+                c.unplayable, c.hand_moves, c.travel_mm, c.stretched, c.thumb_unders, c.finger_overs, c.thumbless,
+                c.step_spread, c.chord_spread, c.weak_on_black
+            );
+        };
+        line("people", &tier.comfort_human);
+        line("rules", &tier.comfort_rules);
         if let Some(c) = &tier.comfort_model {
-            println!("  comfort, model: unplayable {:.2}%, hand moves {:.1}/100, travel {:.1} mm, stretched {:.1}%", c.unplayable, c.hand_moves, c.travel_mm, c.stretched);
+            line("model", c);
         }
+    }
+    let h = &card.headline;
+    match (h.score, &h.gated) {
+        (Some(score), _) => println!("\nOpenNote Score ({}): {score:.1}", h.label),
+        (None, Some(why)) => println!("\nOpenNote Score ({}): GATED - {why}", h.label),
+        (None, None) => println!("\nOpenNote Score ({}): nothing to score", h.label),
+    }
+    for (name, value, weight) in &h.components {
+        println!("  {name:<32} {:.3}  (weight {:.2})", value, weight);
     }
     if let Some(out) = &args.out {
         std::fs::write(out, card.to_json()?).with_context(|| format!("writing {}", out.display()))?;
