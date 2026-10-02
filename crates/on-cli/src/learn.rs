@@ -441,11 +441,16 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
         println!("  weakest: {}", weakest.join(", "));
         let line = |label: &str, c: &on_train::bench::Comfort| {
             println!(
-                "  comfort, {label:<6} unplayable {:.2}%  moves {:.1}  travel {:.1} mm  stretched {:.1}%  under {:.1}  over {:.1}  thumbless {:.2}  spread {:.2}/{:.2}  4-5 on black {:.1}%",
-                c.unplayable, c.hand_moves, c.travel_mm, c.stretched, c.thumb_unders, c.finger_overs, c.thumbless,
+                "  comfort, {label:<6} unplayable {} ({:.3}%)  moves {:.1}  travel {:.1} mm  stretched {:.1}%  under {:.1}  over {:.1}  thumbless {:.2}  spread {:.2}/{:.2}  4-5 on black {:.1}%",
+                c.unplayable_count, c.unplayable, c.hand_moves, c.travel_mm, c.stretched, c.thumb_unders, c.finger_overs, c.thumbless,
                 c.step_spread, c.chord_spread, c.weak_on_black
             );
         };
+        if let Some(p) = &tier.probes {
+            println!("  consistency: {:.1}% unchanged an octave away, {:.1}% under 10 ms of timing wobble ({} pieces)",
+                     p.transposed * 100.0, p.jittered * 100.0, p.pieces);
+        }
+        println!("  speed: {:.0} ms per 1000 notes on one core", tier.ms_per_1000_notes);
         line("people", &tier.comfort_human);
         line("rules", &tier.comfort_rules);
         if let Some(c) = &tier.comfort_model {

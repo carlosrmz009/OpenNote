@@ -61,6 +61,9 @@ pub struct TierSpec {
     /// slowly fitted by being looked at after every change.
     #[serde(default)]
     pub sealed: bool,
+    /// Run the consistency probes on this tier (see [`probe`]).
+    #[serde(default)]
+    pub probes: bool,
 }
 
 /// Everything measured, for a model and the rules it is built on.
@@ -122,6 +125,10 @@ pub struct TierCard {
     pub comfort_human: Comfort,
     /// Must-pass pieces fingered otherwise than as written.
     pub gate_failures: Vec<String>,
+    /// The consistency probes, where the tier runs them.
+    pub probes: Option<Probes>,
+    /// How long the judged system took, in milliseconds per thousand notes.
+    pub ms_per_1000_notes: f32,
     /// The pieces the system being judged (the model, or the rules alone without one)
     /// agreed with least, worst first: where to look.
     pub weakest: Vec<(String, f32)>,
@@ -177,6 +184,8 @@ pub struct Gains {
 pub struct Comfort {
     /// Transitions no hand could make in time, in percent.
     pub unplayable: f32,
+    /// How many there were.
+    pub unplayable_count: usize,
     /// Hand position changes per 100 transitions.
     pub hand_moves: f32,
     /// Millimetres travelled per transition.
@@ -199,6 +208,7 @@ impl From<&Playability> for Comfort {
     fn from(p: &Playability) -> Self {
         Comfort {
             unplayable: p.unplayable_rate() * 100.0,
+            unplayable_count: p.unplayable,
             hand_moves: p.change_rate() * 100.0,
             travel_mm: (p.travel_mm / p.transitions.max(1) as f64) as f32,
             stretched: p.stretched_rate() * 100.0,
@@ -241,6 +251,80 @@ fn human_comfort(pieces: &[Piece], options: &FingeringOptions) -> Playability {
         }
     }
     total
+}
+
+/// Whether a fingering stays the same when nothing that should change it does. Shares of
+/// notes fingered identically, 0..1.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Probes {
+    /// The piece an octave higher or lower (kept in the middle of the keyboard).
+    pub transposed: f32,
+    /// Every onset moved by up to 10 ms, far inside a chord's 30 ms.
+    pub jittered: f32,
+    /// Pieces probed.
+    pub pieces: usize,
+}
+
+impl Probes {
+    pub fn score(&self) -> f32 {
+        (self.transposed + self.jittered) / 2.0
+    }
+}
+
+/// How many pieces of a tier the probes take, the first by name: a fixed sample.
+const PROBE_PIECES: usize = 100;
+
+/// The consistency probes. An octave changes nothing a hand feels — the same keys, the
+/// same black and white — so the fingering should not move; neither should a timing
+/// wobble too small to matter. A fingering that does is responding to noise.
+pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Probes {
+    let mut firsts: Vec<&Piece> = by_piece(pieces).into_values().map(|a| a[0]).collect();
+    firsts.truncate(PROBE_PIECES);
+    let (mut same_t, mut all_t, mut same_j, mut all_j) = (0usize, 0usize, 0usize, 0usize);
+    let mut rng: u64 = 0x9e37_79b9_7f4a_7c15;
+    for piece in &firsts {
+        let Some(plain) = crate::eval::solve(piece, options, prior) else { continue };
+        let low = piece.notes.iter().map(|n| n.midi).min().unwrap_or(60);
+        let high = piece.notes.iter().map(|n| n.midi).max().unwrap_or(60);
+        let shift: i16 = if high <= 84 { 12 } else if low >= 36 { -12 } else { 0 };
+        if shift != 0 {
+            let mut moved = (*piece).clone();
+            for n in &mut moved.notes {
+                n.midi = (i16::from(n.midi) + shift) as u8;
+            }
+            if let Some(t) = crate::eval::solve(&moved, options, prior) {
+                for (a, b) in plain.iter().zip(&t) {
+                    if a.is_some() {
+                        all_t += 1;
+                        same_t += usize::from(a == b);
+                    }
+                }
+            }
+        }
+        let mut wobbled = (*piece).clone();
+        // Whole chords move together, so a chord stays a chord; only the time between
+        // them changes, by up to 10 ms.
+        let mut last_onset = f64::NEG_INFINITY;
+        let mut offset = 0.0;
+        for n in &mut wobbled.notes {
+            if (n.onset - last_onset).abs() > on_fingering::playability::CHORD_SECONDS {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                offset = ((rng >> 33) as f64 / f64::from(u32::MAX) - 0.5) * 0.020;
+                last_onset = n.onset;
+            }
+            n.onset = (n.onset + offset).max(0.0);
+        }
+        if let Some(j) = crate::eval::solve(&wobbled, options, prior) {
+            for (a, b) in plain.iter().zip(&j) {
+                if a.is_some() {
+                    all_j += 1;
+                    same_j += usize::from(a == b);
+                }
+            }
+        }
+    }
+    let share = |same: usize, all: usize| if all == 0 { 1.0 } else { same as f32 / all as f32 };
+    Probes { transposed: share(same_t, all_t), jittered: share(same_j, all_j), pieces: firsts.len() }
 }
 
 /// FNV-1a of a file's bytes, as hex: what the manifest pins.
@@ -368,9 +452,11 @@ pub fn run(
         }
         progress(&format!("{}: {} ({} annotations)", spec.id, spec.title, pieces.len()));
 
+        let started = std::time::Instant::now();
         let (mut rules, comfort_rules) = measure(&pieces, &rules_only, None, threads);
+        let mut elapsed = started.elapsed();
         crate::eval::assign_groups(&mut rules, &groups);
-        let notes = rules.iter().map(|r| r.soft.1).sum();
+        let notes: usize = rules.iter().map(|r| r.soft.1).sum();
         let group_count = rules.iter().map(|r| r.group.as_str()).collect::<std::collections::BTreeSet<_>>().len();
         let human = {
             let reference = human_reference(&pieces);
@@ -380,7 +466,9 @@ pub fn run(
         let (model, gain, comfort_model) = match prior {
             None => (None, None, None),
             Some(prior) => {
+                let started = std::time::Instant::now();
                 let (mut with, comfort) = measure(&pieces, options, Some(prior), threads);
+                elapsed = started.elapsed();
                 crate::eval::assign_groups(&mut with, &groups);
                 let pair = |metric: fn(&[PieceRates]) -> f32| -> Result<Span> {
                     paired_by(&with, &rules, rounds, spec.cluster, metric)
@@ -411,6 +499,11 @@ pub fn run(
             .filter(|r| combine(std::slice::from_ref(r)).general < 1.0)
             .map(|r| r.name.clone())
             .collect();
+        let probes = spec.probes.then(|| match prior {
+            Some(prior) => probe(&pieces, options, Some(prior)),
+            None => probe(&pieces, &rules_only, None),
+        });
+        let ms_per_1000_notes = (elapsed.as_secs_f64() * 1000.0 * threads as f64 / (notes.max(1) as f64 / 1000.0)) as f32;
         tiers.push(TierCard {
             id: spec.id.clone(),
             title: spec.title.clone(),
@@ -425,6 +518,8 @@ pub fn run(
             comfort_model,
             comfort_human: Comfort::from(&human_comfort(&pieces, options)),
             gate_failures,
+            probes,
+            ms_per_1000_notes,
             weakest,
         });
     }
@@ -448,8 +543,12 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
             gated = Some(format!("{}: {} must-pass pieces wrong (first: {})", t.id, t.gate_failures.len(), t.gate_failures[0]));
             break;
         }
-        if comfort_of(t).unplayable > 0.0 {
-            gated = Some(format!("{}: unplayable transitions", t.id));
+        // Unplayable is the model's fault only where it adds to what the rules alone do on
+        // the same music: a part written for one hand that no hand can play is the
+        // music's, and is reported, not held against the model.
+        let added = comfort_of(t).unplayable_count.saturating_sub(t.comfort_rules.unplayable_count);
+        if added > 0 {
+            gated = Some(format!("{}: {added} unplayable transitions the rules alone do not have", t.id));
             break;
         }
     }
@@ -478,6 +577,10 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
     }
     if let Some(t) = find("T4") {
         components.push((format!("{} agreement", t.id), agreement(judged(t)), 0.10));
+    }
+    let probed: Vec<f32> = tiers.iter().filter_map(|t| t.probes.map(|p| p.score())).collect();
+    if !probed.is_empty() {
+        components.push(("consistency".to_string(), probed.iter().sum::<f32>() / probed.len() as f32, 0.10));
     }
     let total: f32 = components.iter().map(|c| c.2).sum();
     for c in &mut components {
@@ -508,13 +611,13 @@ mod tests {
     fn card(id: &str, general: f32, ngram: f32) -> TierCard {
         let rates = Rates { general, highest: general, soft: general, recombined: general, ngram };
         let comfort = Comfort {
-            unplayable: 0.0, hand_moves: 25.0, travel_mm: 25.0, stretched: 4.0, thumb_unders: 3.0, finger_overs: 3.0,
+            unplayable: 0.0, unplayable_count: 0, hand_moves: 25.0, travel_mm: 25.0, stretched: 4.0, thumb_unders: 3.0, finger_overs: 3.0,
             thumbless: 0.1, step_spread: 2.0, chord_spread: 2.0, weak_on_black: 1.0,
         };
         TierCard {
             id: id.into(), title: id.into(), pieces: 1, groups: 1, notes: 1, rules: rates, model: None, gain: None,
             human: None, comfort_rules: comfort, comfort_model: None, comfort_human: comfort, gate_failures: vec![],
-            weakest: vec![],
+            probes: None, ms_per_1000_notes: 0.0, weakest: vec![],
         }
     }
 
@@ -528,8 +631,10 @@ mod tests {
         let gated = headline(&tiers);
         assert!(gated.score.is_none() && gated.gated.is_some());
         tiers[0].gate_failures.clear();
-        tiers[1].comfort_rules.unplayable = 0.5;
-        assert!(headline(&tiers).score.is_none(), "anything unplayable gates the score");
+        tiers[1].comfort_rules.unplayable_count = 2;
+        assert!(headline(&tiers).score.is_some(), "the music's own impossibilities are not the model's");
+        tiers[1].comfort_model = Some(Comfort { unplayable_count: 3, ..tiers[1].comfort_rules });
+        assert!(headline(&tiers).score.is_none(), "an unplayable move the model adds gates the score");
     }
 
     #[test]
