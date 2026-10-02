@@ -577,8 +577,15 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
         let geometric = parts.iter().map(|p| p.max(1e-3).ln()).sum::<f32>() / parts.len() as f32;
         components.push(("comfort against the pianists".to_string(), geometric.exp(), 0.25));
     }
-    if let Some(t) = find("T4") {
-        components.push((format!("{} agreement", t.id), agreement(judged(t)), 0.10));
+    // Written music: one editor per score (T4), and the same piece in several editions
+    // (T5, judged like T2 on the stitched rate), sharing one weight.
+    let stitched = |t: &TierCard| {
+        let r = judged(t);
+        agreement(Rates { general: r.recombined, ..r })
+    };
+    let written: Vec<f32> = [find("T4").map(|t| agreement(judged(t))), find("T5").map(stitched)].into_iter().flatten().collect();
+    if !written.is_empty() {
+        components.push(("written agreement".to_string(), written.iter().sum::<f32>() / written.len() as f32, 0.10));
     }
     let probed: Vec<f32> = tiers.iter().filter_map(|t| t.probes.map(|p| p.score())).collect();
     if !probed.is_empty() {
@@ -630,6 +637,9 @@ mod tests {
         assert!(fine.score.is_some() && fine.gated.is_none(), "{fine:?}");
         assert_eq!(fine.label, "v2-pre", "no tier with several references");
         assert_eq!(headline(&[card("T2-dev", 60.0, 30.0)]).label, "v2", "several pianists stand in for experts");
+        let written = headline(&[card("T4-dev", 50.0, 20.0), card("T5-dev", 70.0, 40.0)]);
+        assert_eq!(written.components.len(), 1, "one editor and several editions share the written weight");
+        assert!(written.components[0].1 > headline(&[card("T4-dev", 50.0, 20.0)]).components[0].1);
         tiers[0].gate_failures = vec!["t0-major-C-right".into()];
         let gated = headline(&tiers);
         assert!(gated.score.is_none() && gated.gated.is_some());
