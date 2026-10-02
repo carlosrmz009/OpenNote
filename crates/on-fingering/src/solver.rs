@@ -618,6 +618,24 @@ const FINGERS: usize = 5;
 /// one chosen where the note was struck — goes back to crossing over its neighbours.
 const SUBSTITUTION_COST: f32 = 800.0;
 
+/// How far past the next onset a note may run and still count as released by it.
+///
+/// Written music is full of notes that end exactly where the next one starts: every
+/// legato line, every bar of quavers. Whether such a note is still held decides a great
+/// deal — a held note takes a finger, keeps the next note off that finger, forbids a
+/// crossing over it, and turns a line into two-note chords that the scale fingerings no
+/// longer recognise — and with a bare `>` it was decided by rounding. A note one tick
+/// long, or a chord ten milliseconds early, flipped it: moving every chord of an edited
+/// piece by at most 10 ms changed the finger on nearly a fifth of its notes, most of
+/// them carrying the 800-point [`SUBSTITUTION_COST`] for a note that was never down.
+///
+/// So an overlap shorter than a chord is not a hold. It is the same window inside which
+/// onsets are one chord ([`crate::playability::CHORD_SECONDS`]), and so the same
+/// judgement read from the other end: what happens within it happens at one moment.
+/// Played legato, a finger lets go as the next one lands; an overlap that short is that,
+/// not a note held on. A note held longer than that is still held.
+const RELEASE_SECONDS: f64 = crate::playability::CHORD_SECONDS;
+
 /// Fold what is still sounding into each event.
 ///
 /// Without this the search sees a chord at a time and nothing else, and a note the hand
@@ -633,12 +651,15 @@ const SUBSTITUTION_COST: f32 = 800.0;
 /// Notes the hand could not still be holding are left out rather than forced in: beyond
 /// its reach, or beyond its five fingers, the oldest are dropped. Those are the ones a
 /// pianist has already given to the pedal.
+///
+/// A note that lets go within [`RELEASE_SECONDS`] of the next onset has let go *at* it.
+/// See there for why.
 fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
     // When each note stops sounding, by the event it was struck at.
     let mut sounding: Vec<Sounding> = Vec::new();
     for index in 0..events.len() {
         let now = events[index].onset_seconds;
-        sounding.retain(|s| s.until > now + 1e-6);
+        sounding.retain(|s| s.until > now + RELEASE_SECONDS);
         // A key struck again is not still held: pressing it means it came up first, so
         // whatever was sounding on it has ended, however long its written duration. Kept,
         // it put the same key in the chord twice — once held, once struck — and the search
@@ -1448,6 +1469,55 @@ mod tests {
             let mut keys = event.notes.clone();
             keys.dedup();
             assert_eq!(keys, event.notes, "the same key twice in one chord: {:?}", event.notes);
+        }
+    }
+
+    /// How many ticks of a score make this many seconds.
+    fn ticks_for(score: &Score, seconds: f64) -> i64 {
+        let note = &score.notes[1];
+        (seconds * note.onset as f64 / note.onset_seconds).round() as i64
+    }
+
+    #[test]
+    fn a_note_let_go_as_the_next_lands_is_not_held() {
+        // A legato line, each note running a little past the next onset: as a played
+        // line does, and as a written one does once its timings have been rounded. Only
+        // a note really held on is still under a finger when the next is struck.
+        let line = melody(&[60, 62, 64, 65, 67], Hand::Right, 0.5);
+        for (overlap, held) in [(0.0, false), (0.002, false), (0.020, false), (0.100, true)] {
+            let mut score = line.clone();
+            let extra = ticks_for(&score, overlap);
+            for note in &mut score.notes {
+                note.duration += extra;
+            }
+            score.finalise();
+            let mut events = build_events(&score, Hand::Right);
+            hold_sustained(&mut events, &score, 14);
+            let widest = events.iter().map(Event::len).max().unwrap_or(0);
+            assert_eq!(widest > 1, held, "a note running {overlap} s past the next onset");
+        }
+    }
+
+    #[test]
+    fn a_few_milliseconds_of_timing_change_no_finger() {
+        // Every chord moved by up to 10 ms, its notes keeping their written lengths: what
+        // the benchmark's consistency probe does. Notes written to end where the next
+        // begins now overlap it, or stop short of it, by that much, and none of it is a
+        // reason to finger the passage differently.
+        let wobble = [0.009, -0.008, 0.004, -0.010, 0.007, -0.003, 0.010, -0.006];
+        for score in passages() {
+            let plain = fingers_of(&score, &finger_score(&score, &FingeringOptions::default()));
+            let mut moved = score.clone();
+            let mut onsets: Vec<i64> = moved.notes.iter().map(|n| n.onset).collect();
+            onsets.sort_unstable();
+            onsets.dedup();
+            for note in &mut moved.notes {
+                let chord = onsets.binary_search(&note.onset).unwrap();
+                note.onset += ticks_for(&score, wobble[chord % wobble.len()]);
+            }
+            moved.finalise();
+            let wobbled = fingers_of(&moved, &finger_score(&moved, &FingeringOptions::default()));
+            assert_eq!(plain, wobbled, "{:?}", score.notes.iter().map(|n| n.midi).collect::<Vec<_>>());
         }
     }
 
