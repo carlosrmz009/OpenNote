@@ -482,3 +482,39 @@ fn a_minor_scale_is_not_fingered_as_its_relative_major() {
     );
     assert_eq!(chosen[0], 1, "and the bottom takes the thumb: {chosen:?}");
 }
+
+#[test]
+fn two_octaves_of_e_harmonic_minor_are_fingered_like_e_major_both_ways() {
+    // The augmented second from C to D# used to break the scale into fragments, and
+    // the first of them, E-F#-G-A-B-C, was taught as G major: the right hand agreed
+    // with the books on no note at all. E minor is fingered like E major in every
+    // method book, going up and coming back down.
+    const HARMONIC_MINOR: [u8; 7] = [0, 2, 3, 5, 7, 8, 11];
+    let up_and_down = |tonic: u8| {
+        let mut up: Vec<u8> = (0..2)
+            .flat_map(|octave| HARMONIC_MINOR.map(|step| tonic + step + 12 * octave))
+            .collect();
+        up.push(tonic + 24);
+        let mut both = up.clone();
+        both.extend(up.iter().rev().skip(1));
+        both
+    };
+    let both_ways = |up: [u8; 15]| {
+        let mut both = up.to_vec();
+        both.extend(up.iter().rev().skip(1));
+        both
+    };
+    let options = FingeringOptions::default();
+
+    let right = melody(&up_and_down(64), Hand::Right, 0.25);
+    assert_eq!(
+        fingering(&right, &options),
+        both_ways([1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5])
+    );
+
+    let left = melody(&up_and_down(52), Hand::Left, 0.25);
+    assert_eq!(
+        fingering(&left, &options),
+        both_ways([5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1])
+    );
+}

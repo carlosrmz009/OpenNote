@@ -194,6 +194,78 @@ const MAJOR_SCALES: [ScaleFingering; 12] = [
     ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 3, 2, 1, 4, 3, 2] },
 ];
 
+/// Semitone offsets of the seven degrees of a harmonic minor scale.
+///
+/// The natural minor with a raised seventh, which leaves an augmented second — three
+/// semitones — between the sixth and seventh degrees. That step is the scale's
+/// signature: no major scale has one, so a run that contains it cannot be read as one.
+const HARMONIC_MINOR_DEGREES: [u8; 7] = [0, 2, 3, 5, 7, 8, 11];
+
+/// Standard harmonic minor fingerings by tonic pitch class, C first, where the chart
+/// gives one this module trusts.
+///
+/// Every minor scale on a white key is fingered like its tonic major, degree for
+/// degree: the raised seventh lands under the same finger the major's leading note
+/// does, and the lowered third and sixth are never where a thumb goes. F minor keeps
+/// F major's four-note first group in the right hand, for the same reason. The test
+/// that the thumb stays off the black keys holds for all of them.
+///
+/// The black-key tonics are left out. Their minor fingerings are not their majors' —
+/// the thumb has to find different white notes — and a confidently wrong pattern costs
+/// more than none: a run in one of those keys is still recognised, so it is not
+/// mistaken for a fragment of some major scale, and then left to the rest of the cost
+/// function.
+const HARMONIC_MINOR_SCALES: [Option<ScaleFingering>; 12] = [
+    // C
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // C sharp
+    None,
+    // D
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // E flat
+    None,
+    // E
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // F
+    Some(ScaleFingering { right: [1, 2, 3, 4, 1, 2, 3], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // F sharp
+    None,
+    // G
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // G sharp
+    None,
+    // A
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 4, 3, 2, 1, 3, 2] }),
+    // B flat
+    None,
+    // B
+    Some(ScaleFingering { right: [1, 2, 3, 1, 2, 3, 4], left: [1, 3, 2, 1, 4, 3, 2] }),
+];
+
+/// Which kind of scale a run is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Major,
+    HarmonicMinor,
+}
+
+impl Mode {
+    fn degrees(self) -> &'static [u8; 7] {
+        match self {
+            Mode::Major => &MAJOR_DEGREES,
+            Mode::HarmonicMinor => &HARMONIC_MINOR_DEGREES,
+        }
+    }
+
+    /// The published fingering for this kind of scale on a tonic, if there is one.
+    fn fingering(self, tonic: u8) -> Option<&'static ScaleFingering> {
+        match self {
+            Mode::Major => Some(&MAJOR_SCALES[tonic as usize % 12]),
+            Mode::HarmonicMinor => HARMONIC_MINOR_SCALES[tonic as usize % 12].as_ref(),
+        }
+    }
+}
+
 /// Whether a pitch is a black key.
 fn is_black(pitch: u8) -> bool {
     matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
@@ -272,6 +344,8 @@ pub struct ScaleRun {
     pub length: usize,
     /// Tonic pitch class of the key it fits.
     pub tonic: u8,
+    /// Whether that key is major or harmonic minor.
+    pub mode: Mode,
 }
 
 impl ScaleRun {
@@ -287,9 +361,9 @@ fn in_major(pitch: u8, tonic: u8) -> bool {
 }
 
 /// Which degree of the scale a pitch is, if it is in it.
-fn degree_of(pitch: u8, tonic: u8) -> Option<usize> {
+fn degree_of(pitch: u8, tonic: u8, mode: Mode) -> Option<usize> {
     let offset = (pitch + 12 - tonic % 12) % 12;
-    MAJOR_DEGREES.iter().position(|d| *d == offset)
+    mode.degrees().iter().position(|d| *d == offset)
 }
 
 /// How far round the circle of fifths a key sits from C, counting flats and sharps
@@ -319,12 +393,53 @@ pub fn key_of(pitches: &[u8]) -> Option<u8> {
     best.map(|(tonic, _)| tonic)
 }
 
-/// Find the scale runs in a sequence of notes.
+/// The step between the sixth and seventh degrees of a harmonic minor scale, in
+/// semitones.
+const AUGMENTED_SECOND: i32 = 3;
+
+/// Find the harmonic minor key a run with an augmented second in it belongs to.
 ///
-/// A run moves in one direction by steps of a semitone or a tone and fits one major
-/// scale. Chromatic stretches and arpeggios are deliberately not scales: they have
-/// their own conventions, and guessing at them would be worse than leaving them to
-/// the ergonomic model.
+/// The augmented second can only be the step from the lowered sixth to the raised
+/// seventh, so it names the tonic outright: the lower note of it sits eight semitones
+/// above. Every such step in the run has to name the same tonic, and every note has to
+/// be in that scale. A run without one is not read as harmonic minor at all, because
+/// without it the notes are a fragment of some major scale and nothing here can tell
+/// which reading is meant.
+fn harmonic_minor_of(pitches: &[u8]) -> Option<u8> {
+    let mut tonic = None;
+    for pair in pitches.windows(2) {
+        let step = pair[1] as i32 - pair[0] as i32;
+        if step.abs() != AUGMENTED_SECOND {
+            continue;
+        }
+        let named = (pair[0].min(pair[1]) + 4) % 12;
+        if tonic.is_some_and(|t| t != named) {
+            return None;
+        }
+        tonic = Some(named);
+    }
+    let tonic = tonic?;
+    pitches
+        .iter()
+        .all(|p| HARMONIC_MINOR_DEGREES.contains(&((p + 12 - tonic) % 12)))
+        .then_some(tonic)
+}
+
+/// Find the key a run fits, and whether it is major or harmonic minor.
+///
+/// An augmented second rules out every major key, so a run with one is harmonic minor
+/// or nothing. A run without one is read as major exactly as [`key_of`] reads it.
+fn read_key(notes: &[u8]) -> Option<(u8, Mode)> {
+    let leaps = notes
+        .windows(2)
+        .any(|pair| (pair[1] as i32 - pair[0] as i32).abs() == AUGMENTED_SECOND);
+    if leaps {
+        harmonic_minor_of(notes).map(|tonic| (tonic, Mode::HarmonicMinor))
+    } else {
+        key_of(notes).map(|tonic| (tonic, Mode::Major))
+    }
+}
+
 /// Whether a run announces a tonic of its own, and it is not the one its notes imply.
 ///
 /// [`key_of`] can only read pitch content, and pitch content cannot tell a minor scale
@@ -336,7 +451,7 @@ pub fn key_of(pitches: &[u8]) -> Option<u8> {
 /// notes happen to spell, and the C major pattern read off by chromatic degree gives it
 /// finger 3 on the top A where every method book gives 5 — a fingering nobody plays.
 ///
-/// The minor and modal patterns are not in [`MAJOR_SCALES`], so there is nothing right
+/// The natural minor and modal patterns are not tabulated, so there is nothing right
 /// to substitute. Declining to answer leaves the passage to the rules and the hand
 /// model, which is an honest fingering rather than a confidently wrong one.
 ///
@@ -350,17 +465,18 @@ fn anchored_elsewhere(notes: &[u8], tonic: u8) -> bool {
     }
 }
 
-pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> {
-    let mut runs = Vec::new();
+/// Every stretch of notes moving one way by semitones and tones, as `(start, end,
+/// direction)`, with a direction of zero for a note standing on its own.
+fn stepwise_stretches(pitches: &[Option<u8>]) -> Vec<(usize, usize, i32)> {
+    let mut out = Vec::new();
     let mut index = 0;
     while index < pitches.len() {
-        if pitches[index].is_none() {
+        let Some(mut previous) = pitches[index] else {
             index += 1;
             continue;
-        }
+        };
         let mut end = index + 1;
         let mut direction = 0i32;
-        let mut previous = pitches[index].unwrap();
         while end < pitches.len() {
             let Some(pitch) = pitches[end] else { break };
             let step = pitch as i32 - previous as i32;
@@ -375,26 +491,88 @@ pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> 
             previous = pitch;
             end += 1;
         }
+        out.push((index, end, direction));
+        index = if end - index > 1 { end } else { index + 1 };
+    }
+    out
+}
 
+/// Rejoin stepwise stretches that a harmonic minor scale's augmented second split.
+///
+/// Read by semitones and tones alone, a harmonic minor scale breaks at the step from
+/// its sixth degree to its seventh, which is three semitones. Two octaves of E minor
+/// come apart as E-F#-G-A-B-C, then D#-E-F#-G-A-B-C, then D#-E, and the first of those
+/// fits G major perfectly. It was read that way, and every interior note took the G
+/// major pattern — finger 4 on F#, the thumb on G — against the E major pattern every
+/// method book gives E minor. The right hand agreed with the books on no note at all.
+///
+/// So stretches that meet at a three-semitone step, going the same way on both sides
+/// of it, are joined when the whole fits one harmonic minor scale with that step as its
+/// augmented second. A minor third anywhere else still ends a run, as it always has.
+fn join_augmented_seconds(
+    pitches: &[Option<u8>],
+    stretches: &[(usize, usize, i32)],
+) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < stretches.len() {
+        let (start, mut end, mut direction) = stretches[i];
+        let mut j = i + 1;
+        while let Some(&(next_start, next_end, next_direction)) = stretches.get(j) {
+            let (Some(last), Some(first)) = (pitches[end - 1], pitches[next_start]) else {
+                break;
+            };
+            let step = first as i32 - last as i32;
+            let joins = next_start == end
+                && step.abs() == AUGMENTED_SECOND
+                && (direction == 0 || step.signum() == direction)
+                && (next_direction == 0 || step.signum() == next_direction);
+            if !joins {
+                break;
+            }
+            let notes: Vec<u8> = pitches[start..next_end].iter().flatten().copied().collect();
+            if harmonic_minor_of(&notes).is_none() {
+                break;
+            }
+            end = next_end;
+            direction = step.signum();
+            j += 1;
+        }
+        out.push((start, end));
+        i = j;
+    }
+    out
+}
+
+/// Find the scale runs in a sequence of notes.
+///
+/// A run moves in one direction by steps of a semitone or a tone and fits one major
+/// scale, or by those and the augmented second of the harmonic minor scale it fits.
+/// Chromatic stretches and arpeggios are deliberately not scales: they have their own
+/// conventions, and guessing at them would be worse than leaving them to the ergonomic
+/// model.
+pub fn find_scale_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<ScaleRun> {
+    let mut runs = Vec::new();
+    let stretches = stepwise_stretches(pitches);
+    for (start, end) in join_augmented_seconds(pitches, &stretches) {
         // Pitch found the candidate; the clock says where it actually breaks. A scale
         // is stepwise in time as well as in pitch, and without this a motif and its
         // answer eight bars later are one run.
-        for (from, to) in split_on_gaps(index, end, onsets) {
+        for (from, to) in split_on_gaps(start, end, onsets) {
             let length = to - from;
             if length < MIN_SCALE_RUN {
                 continue;
             }
             let notes: Vec<u8> = pitches[from..to].iter().flatten().copied().collect();
-            if let Some(tonic) = key_of(&notes) {
+            if let Some((tonic, mode)) = read_key(&notes) {
                 if anchored_elsewhere(&notes, tonic) {
                     // A scale in some other key than the one its notes suggest. Say
                     // nothing rather than say the wrong thing.
                 } else {
-                    runs.push(ScaleRun { start: from, length, tonic });
+                    runs.push(ScaleRun { start: from, length, tonic, mode });
                 }
             }
         }
-        index = if end - index > 1 { end } else { index + 1 };
     }
     runs
 }
@@ -417,14 +595,18 @@ pub fn scale_fingerings(
 ) -> HashMap<usize, Taught> {
     let mut out = HashMap::new();
     for run in find_scale_runs(pitches, onsets) {
-        let table = &MAJOR_SCALES[run.tonic as usize];
+        // A harmonic minor scale on a black key is recognised, so it is not taken for
+        // a fragment of some major scale, but it has no pattern here to teach.
+        let Some(table) = run.mode.fingering(run.tonic) else {
+            continue;
+        };
         let pattern = match hand {
             Hand::Right => &table.right,
             Hand::Left => &table.left,
         };
         for index in (run.start + 1)..(run.end() - 1) {
             let Some(pitch) = pitches[index] else { continue };
-            let Some(degree) = degree_of(pitch, run.tonic) else {
+            let Some(degree) = degree_of(pitch, run.tonic, run.mode) else {
                 continue;
             };
             if let Some(finger) = Finger::from_number(pattern[degree]) {
@@ -432,8 +614,8 @@ pub fn scale_fingerings(
             }
         }
     }
-    // After the major scales, since a chromatic reading is the more specific one: it
-    // takes every step as a semitone, which no run of a major scale does.
+    // After the diatonic scales, since a chromatic reading is the more specific one: it
+    // takes every step as a semitone, which no run of a major or minor scale does.
     for (start, end) in find_chromatic_runs(pitches, onsets) {
         for index in (start + 1)..(end - 1) {
             let Some(pitch) = pitches[index] else { continue };
@@ -534,21 +716,29 @@ mod tests {
         assert_eq!(fingers, vec![4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2]);
     }
 
+    /// Every tabulated scale: its mode, its tonic and its fingering.
+    fn every_table() -> Vec<(Mode, u8, &'static ScaleFingering)> {
+        [Mode::Major, Mode::HarmonicMinor]
+            .into_iter()
+            .flat_map(|mode| (0..12u8).map(move |tonic| (mode, tonic)))
+            .filter_map(|(mode, tonic)| Some((mode, tonic, mode.fingering(tonic)?)))
+            .collect()
+    }
+
     #[test]
-    fn the_thumb_never_lands_on_a_black_key_in_any_major_scale() {
+    fn the_thumb_never_lands_on_a_black_key_in_any_tabulated_scale() {
         // This is the constraint the whole chart exists to satisfy, so it is worth
         // asserting against every key rather than trusting the transcription.
-        for tonic in 0..12u8 {
-            let table = &MAJOR_SCALES[tonic as usize];
+        for (mode, tonic, table) in every_table() {
             for (pattern, hand) in [(&table.right, Hand::Right), (&table.left, Hand::Left)] {
                 for (degree, finger) in pattern.iter().enumerate() {
                     if *finger != 1 {
                         continue;
                     }
-                    let pitch = (tonic + MAJOR_DEGREES[degree]) % 12;
+                    let pitch = (tonic + mode.degrees()[degree]) % 12;
                     assert!(
                         !on_hand::keyboard::is_black(60 + pitch),
-                        "{hand:?} puts the thumb on a black key in the scale on {tonic}"
+                        "{hand:?} puts the thumb on a black key in the {mode:?} scale on {tonic}"
                     );
                 }
             }
@@ -557,8 +747,7 @@ mod tests {
 
     #[test]
     fn every_pattern_passes_the_thumb_twice_an_octave_and_saves_finger_five() {
-        for tonic in 0..12u8 {
-            let table = &MAJOR_SCALES[tonic as usize];
+        for (_, tonic, table) in every_table() {
             for pattern in [&table.right, &table.left] {
                 assert!(pattern.iter().all(|f| (1..=5).contains(f)));
                 assert!(
@@ -578,6 +767,78 @@ mod tests {
     fn f_major_crosses_after_the_fourth_finger_in_the_right_hand() {
         // The one well-known exception among the scales whose tonic is a white key.
         assert_eq!(MAJOR_SCALES[5].right, [1, 2, 3, 4, 1, 2, 3]);
+    }
+
+    /// A harmonic minor scale from a tonic over whole octaves, up and then back down.
+    fn harmonic_minor_up_and_down(tonic: u8, octaves: usize) -> Vec<Option<u8>> {
+        let mut up = Vec::new();
+        for octave in 0..octaves {
+            for degree in HARMONIC_MINOR_DEGREES {
+                up.push(tonic + degree + 12 * octave as u8);
+            }
+        }
+        up.push(tonic + 12 * octaves as u8);
+        let mut both = up.clone();
+        both.extend(up.iter().rev().skip(1));
+        seq(&both)
+    }
+
+    #[test]
+    fn a_harmonic_minor_scale_is_one_run_in_its_own_key() {
+        // The augmented second between D# and C used to split two octaves of E minor
+        // into fragments, and the first of them, E-F#-G-A-B-C, was read as G major.
+        let notes = harmonic_minor_up_and_down(64, 2);
+        let runs = find_scale_runs(&notes, &even(notes.len()));
+        assert_eq!(runs.len(), 2, "one run up and one down: {runs:?}");
+        assert_eq!((runs[0].start, runs[0].length), (0, 15), "{runs:?}");
+        assert_eq!(runs[1].end(), notes.len(), "{runs:?}");
+        for run in &runs {
+            assert_eq!((run.tonic, run.mode), (4, Mode::HarmonicMinor), "{runs:?}");
+        }
+    }
+
+    #[test]
+    fn e_harmonic_minor_takes_the_e_major_pattern_both_ways() {
+        let notes = harmonic_minor_up_and_down(64, 2);
+        let onsets = even(notes.len());
+        for (hand, up) in [
+            (Hand::Right, [1u8, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5]),
+            (Hand::Left, [5u8, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1]),
+        ] {
+            let mut wanted = up.to_vec();
+            wanted.extend(up.iter().rev().skip(1));
+            let map = scale_fingerings(hand, &notes, &onsets);
+            assert!(!map.is_empty(), "{hand:?} was taught nothing");
+            for (index, taught) in &map {
+                assert_eq!(
+                    taught.finger.number(),
+                    wanted[*index],
+                    "{hand:?} at {index}, pitch {:?}",
+                    notes[*index]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_black_key_harmonic_minor_is_not_taught_a_major_fragment() {
+        // C# minor is recognised, so its lower half is no longer taken for E major,
+        // but its own fingering is not the tonic major's and is not tabulated.
+        let notes = harmonic_minor_up_and_down(61, 2);
+        let runs = find_scale_runs(&notes, &even(notes.len()));
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert!(runs.iter().all(|r| r.tonic == 1 && r.mode == Mode::HarmonicMinor), "{runs:?}");
+        assert!(scale_fingerings(Hand::Right, &notes, &even(notes.len())).is_empty());
+    }
+
+    #[test]
+    fn a_minor_third_that_is_not_an_augmented_second_still_ends_a_run() {
+        // C-D-E then G-A-B-C-D-E: E to G is three semitones, but no harmonic minor
+        // scale has it as the step from its sixth degree to its seventh.
+        let notes = seq(&[60, 62, 64, 67, 69, 71, 72, 74, 76]);
+        let runs = find_scale_runs(&notes, &even(notes.len()));
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!((runs[0].start, runs[0].mode), (3, Mode::Major), "{runs:?}");
     }
 
     #[test]
