@@ -31,6 +31,27 @@ pub const LIMIT: f32 = 20.0;
 /// can swamp the rules on its own.
 pub const WEIGHT_LIMIT: f32 = LIMIT / 4.0;
 
+/// The most a fact about one finger on one key colour may weigh: it knows nothing of
+/// where the hand is or where it goes next, so it may tip a near tie and never decide
+/// against the rules. Uncapped, a corpus that repeats one editor's habits taught a
+/// checkpoint "left thumb on a white key: +2.4" and "left fifth: -3.3" on every note,
+/// and it ended a plain Hanon exercise on the fifth finger.
+pub const FINGER_LIMIT: f32 = 1.0;
+
+/// Bits of a finger-on-colour fact's fields (hand 1, finger 3, colour 1, chord size 3):
+/// see [`chord_features`].
+const FINGER_FACT_BITS: u32 = 8;
+
+/// How heavy a fact's weight may become: [`FINGER_LIMIT`] for a finger on a key colour,
+/// [`WEIGHT_LIMIT`] for everything else.
+pub fn weight_limit(fact: u64) -> f32 {
+    if (fact & ((1 << 56) - 1)) >> FINGER_FACT_BITS == 1 {
+        FINGER_LIMIT
+    } else {
+        WEIGHT_LIMIT
+    }
+}
+
 /// Whose fingering a model imitates.
 ///
 /// One model carries both. Every fact has a shared weight, learned from every piece, and
@@ -118,10 +139,14 @@ impl Learned {
             .iter()
             .map(|fact| {
                 let shared = self.weights.get(fact).copied().unwrap_or(0.0);
-                if self.style == Style::Unified {
-                    return shared;
-                }
-                shared + self.weights.get(&self.style.tag(*fact)).copied().unwrap_or(0.0)
+                let weight = if self.style == Style::Unified {
+                    shared
+                } else {
+                    shared + self.weights.get(&self.style.tag(*fact)).copied().unwrap_or(0.0)
+                };
+                // Models trained before a limit was lowered keep weights past it.
+                let limit = weight_limit(*fact);
+                weight.clamp(-limit, limit)
             })
             .sum::<f32>()
             .clamp(-LIMIT, LIMIT)
@@ -374,6 +399,22 @@ fn describe_fact(fact: u64) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_finger_on_a_colour_is_capped_and_a_move_is_not() {
+        use super::*;
+        let f = |n| Finger::from_number(n).unwrap();
+        let mut facts = Vec::new();
+        chord_features(Hand::Left, &[50], &[f(5)], &mut facts);
+        assert_eq!(weight_limit(facts[0]), FINGER_LIMIT, "{}", describe(facts[0]));
+        assert_eq!(weight_limit(Style::Performance.tag(facts[0])), FINGER_LIMIT, "a style's copy too");
+        let mut learned = Learned { style: Style::Unified, ..Default::default() };
+        learned.weights.insert(facts[0], -3.3);
+        assert_eq!(learned.chord(Hand::Left, &[50], &[f(5)]), -FINGER_LIMIT);
+        let mut moves = Vec::new();
+        step_features(Hand::Left, (&[52], &[f(3)]), (&[50], &[f(4)]), 0.1, &mut moves);
+        assert!(!moves.is_empty() && moves.iter().all(|m| weight_limit(*m) == WEIGHT_LIMIT));
+    }
+
+    #[test]
     fn a_thumb_passing_under_is_a_fact_of_its_own() {
         let mut facts = Vec::new();
         trigram_features(
@@ -427,7 +468,10 @@ mod tests {
         let mut facts = Vec::new();
         chord_features(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle], &mut facts);
         let model = Learned { weights: facts.iter().map(|f| (*f, -1000.0)).collect(), ..Default::default() };
-        assert_eq!(model.chord(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle]), -LIMIT);
+        // Each fact stops at its own limit, and all of them together at LIMIT.
+        let moved = model.chord(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle]);
+        assert_eq!(moved, -(2.0 * FINGER_LIMIT + WEIGHT_LIMIT));
+        assert!(moved >= -LIMIT);
     }
 
     #[test]

@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use on_fingering::learned::{chord_features, step_features, trigram_features, Learned, Style, WEIGHT_LIMIT};
+use on_fingering::learned::{chord_features, step_features, trigram_features, weight_limit, Learned, Style};
 use on_fingering::{finger_score_with_prior, FingeringOptions, NgramPrior, Playability, Step};
 use on_hand::Finger;
 use on_score::{NoteId, Score};
@@ -475,7 +475,8 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
                         continue;
                     }
                     let weight = weights.entry(fact).or_insert(0.0);
-                    let moved = (*weight + config.rate * n).clamp(-WEIGHT_LIMIT, WEIGHT_LIMIT);
+                    let limit = weight_limit(fact);
+                    let moved = (*weight + config.rate * n).clamp(-limit, limit);
                     let step = moved - *weight;
                     *weight = moved;
                     *total.entry(fact).or_insert(0.0) += batches * step;
@@ -585,8 +586,10 @@ mod tests {
 
     #[test]
     fn a_habit_that_is_hard_on_the_hand_is_learned_less_when_comfort_counts() {
-        // Every note of a scale played with the index finger: learnable, and exactly the
-        // kind of fingering that makes a hand shift on every note.
+        // Thumb and middle finger in turn on every step, up and down: learnable from the
+        // moves alone, and exactly the kind of fingering that crosses the hand on every
+        // note. (One finger on every note is no longer learnable at all: a fact about a
+        // finger alone is capped at learned::FINGER_LIMIT.)
         let hard = |name: String| {
             let line = [60u8, 62, 64, 65, 67, 65, 64, 62];
             let notes = (0..8)
@@ -596,7 +599,7 @@ mod tests {
                         onset: f64::from(bar * 8 + i as i32) * 0.4,
                         duration: 0.3,
                         hand: HandLabel::Right,
-                        finger: Some(2),
+                        finger: Some(if i % 2 == 0 { 1 } else { 3 }),
                         confidence: Some(0.9),
                     })
                 })
