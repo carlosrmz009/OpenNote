@@ -18,6 +18,8 @@ const MAX_LEAN_MM: f32 = 320.0;
 
 const EASY_REACH: f32 = 0.86;
 
+const ELBOW_OUT: f32 = 0.6;
+
 const PLAYING_Y_MM: f32 = -80.0;
 const PLAYING_Z_MM: f32 = 60.0;
 
@@ -44,6 +46,27 @@ impl Torso {
 
     pub fn reach_mm(&self) -> f32 {
         self.reach
+    }
+
+    pub fn arm_mm(&self) -> (f32, f32) {
+        let share = UPPER_ARM / (UPPER_ARM + FOREARM);
+        (self.reach * share, self.reach * (1.0 - share))
+    }
+
+    pub fn elbow(&self, hand: Hand, shoulder: Vec3, wrist: Vec3) -> Vec3 {
+        let (upper, fore) = self.arm_mm();
+        let to_wrist = wrist - shoulder;
+        let distance = to_wrist.length().clamp((upper - fore).abs() + 1.0, upper + fore - 1.0);
+        let along = to_wrist.normalize_or_zero();
+        let a = (upper * upper - fore * fore + distance * distance) / (2.0 * distance);
+        let h = (upper * upper - a * a).max(0.0).sqrt();
+        let outward = match hand {
+            Hand::Left => -1.0,
+            Hand::Right => 1.0,
+        };
+        let pole = Vec3::new(outward * ELBOW_OUT, 0.0, -1.0);
+        let side = (pole - along * pole.dot(along)).normalize_or_zero();
+        shoulder + along * a + side * h
     }
 
     pub fn shoulder(&self, hand: Hand, lean: f32) -> Vec3 {
@@ -92,6 +115,23 @@ impl Torso {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_elbow_joins_an_upper_arm_and_a_forearm_of_the_right_length() {
+        let torso = player();
+        for (hand, x) in [(Hand::Left, 450.0), (Hand::Right, 800.0), (Hand::Right, 300.0)] {
+            let wrist = Vec3::new(x, -60.0, 50.0);
+            let shoulder = torso.shoulder(hand, torso.lean_for(hand, wrist));
+            let elbow = torso.elbow(hand, shoulder, wrist);
+            let (upper, fore) = torso.arm_mm();
+            assert!(((elbow - shoulder).length() - upper).abs() < 1.0);
+            assert!(((wrist - elbow).length() - fore).abs() < 1.0);
+            assert!(elbow.z < shoulder.z, "the elbow hangs below the shoulder");
+            let outward = if hand == Hand::Left { -1.0 } else { 1.0 };
+            let line = shoulder + (wrist - shoulder) * ((elbow - shoulder).dot(wrist - shoulder) / (wrist - shoulder).length_squared());
+            assert!((elbow.x - line.x) * outward > 0.0, "the elbow points away from the body");
+        }
+    }
 
     fn player() -> Torso {
         Torso::new(&HandProfile::default(), 611.0)

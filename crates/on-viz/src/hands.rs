@@ -62,7 +62,20 @@ struct Forearm {
     wrist_rest: Quat,
 }
 
-const SHOULDER_BELOW_MM: f32 = 1_150.0;
+const LEAN_SIGMA_SECONDS: f64 = 0.6;
+
+const LEAN_SAMPLES: i32 = 6;
+
+fn settled_wrist(animator: &crate::HandAnimator, time: f64) -> Vec3 {
+    let step = LEAN_SIGMA_SECONDS / 3.0;
+    let (mut sum, mut total) = (Vec3::ZERO, 0.0f32);
+    for k in -LEAN_SAMPLES..=LEAN_SAMPLES {
+        let weight = (-0.5 * (f64::from(k) * step / LEAN_SIGMA_SECONDS).powi(2)).exp() as f32;
+        sum += animator.pose_at(time + f64::from(k) * step).wrist_position() * weight;
+        total += weight;
+    }
+    sum / total
+}
 
 #[derive(Component)]
 struct NeedsRigging {
@@ -124,13 +137,7 @@ struct Node {
     world: Vec3,
 }
 
-fn find_forearm(survey: &Survey, root: Entity, wrist: Entity) -> Option<Forearm> {
-    let (first, node) = survey
-        .nodes
-        .iter()
-        .filter(|(_, node)| node.parent == Some(root))
-        .find(|(entity, _)| survey.arms.contains(entity))?;
-
+fn find_forearm(survey: &Survey, _root: Entity, wrist: Entity) -> Option<Forearm> {
     let mut chain = Vec::new();
     let mut at = survey.nodes.get(&wrist)?.parent;
     while let Some(entity) = at {
@@ -142,9 +149,7 @@ fn find_forearm(survey: &Survey, root: Entity, wrist: Entity) -> Option<Forearm>
         at = node.parent;
     }
     chain.reverse();
-    if chain.is_empty() {
-        chain.push((*first, node.local.rotation));
-    }
+    let node = survey.nodes.get(&chain.first()?.0)?;
 
     Some(Forearm {
         bones: chain,
@@ -440,14 +445,12 @@ pub fn pose_hands(
         let mut wrist_in_model = rig.wrist_offset;
         if let Some(arm) = rig.forearm.as_ref() {
             let torso = &performance.torso;
-            let lean = torso.lean_for(rig.hand, wrist_world);
-            let shoulder = Vec3::new(
-                torso.shoulder(rig.hand, lean).x,
-                -SHOULDER_BELOW_MM,
-                wrist_world.z,
-            );
-
-            let wanted = (wrist_world - shoulder).normalize_or_zero();
+            let settled = settled_wrist(animator, transport.position);
+            let lean = torso.lean_for(rig.hand, settled);
+            let shoulder = torso.shoulder(rig.hand, lean);
+            let elbow = torso.elbow(rig.hand, shoulder, posture.wrist);
+            let along = posture.wrist - elbow;
+            let wanted = Vec3::new(along.x, along.y, 0.0).normalize_or_zero();
             let rest_direction = (rig.wrist_offset - arm.head).normalize_or_zero();
             if wanted != Vec3::ZERO && rest_direction != Vec3::ZERO {
                 let turn = rig::align(rest_direction, root_rotation.inverse() * wanted);
