@@ -4,7 +4,7 @@ use on_hand::keyboard::{is_black, Keyboard, BLACK_KEY_DIP, BLACK_KEY_HEIGHT, KEY
 use on_hand::skeleton::dof;
 use on_hand::{Hand, HandPose};
 use on_score::hands::HandAssignment;
-use on_viz::timeline::{pose_both, HandAnimator, Timeline};
+use on_viz::timeline::{pose_both_decided, Decisions, HandAnimator, Timeline};
 
 const FPS: f64 = 60.0;
 
@@ -24,11 +24,13 @@ fn raw() -> bool {
     std::env::var("ON_RAW").is_ok()
 }
 
+static DECISIONS: std::sync::OnceLock<Decisions> = std::sync::OnceLock::new();
+
 fn poses(animators: &[HandAnimator], at: f64) -> [HandPose; 2] {
     if raw() {
         [animators[0].pose_at(at), animators[1].pose_at(at)]
     } else {
-        pose_both(animators, at)
+        pose_both_decided(animators, DECISIONS.get().expect("decided"), at)
     }
 }
 
@@ -96,6 +98,7 @@ fn main() -> anyhow::Result<()> {
     );
     let timeline = Timeline::build_for(score, &solution.fingerings, &options.profile);
     let animators = timeline.animators(&options.profile, on_fingering::biomech::BiomechWeights::default());
+    let _ = DECISIONS.set(Decisions::new(&animators, timeline.duration + 2.0));
     let load_seconds = loading.elapsed().as_secs_f64();
 
     let step = 1.0 / FPS;

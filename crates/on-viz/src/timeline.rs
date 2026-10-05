@@ -178,7 +178,11 @@ impl Timeline {
             .iter()
             .map(|hand| {
                 let model = BiomechModel::new(profile.clone(), *hand, weights);
-                HandAnimator::new(*hand, model, self.hand_grips(*hand).to_vec())
+                if smooth_motion() {
+                    HandAnimator::moving(*hand, model, self.hand_grips(*hand).to_vec(), &self.notes)
+                } else {
+                    HandAnimator::new(*hand, model, self.hand_grips(*hand).to_vec())
+                }
             })
             .collect();
 
@@ -490,6 +494,16 @@ pub struct HandAnimator {
     events: Vec<GripEvent>,
     poses: Vec<HandPose>,
     resting: HandPose,
+    motion: Option<Motion>,
+}
+
+struct Motion {
+    track: crate::motion::Track,
+    strikes: crate::motion::Strikes,
+}
+
+pub fn smooth_motion() -> bool {
+    std::env::var("ON_MOTION").is_ok_and(|v| v == "v2")
 }
 
 impl HandAnimator {
@@ -519,7 +533,21 @@ impl HandAnimator {
         });
 
         let skeleton = model.skeleton().clone();
-        Self { hand, skeleton, events, poses, resting }
+        Self { hand, skeleton, events, poses, resting, motion: None }
+    }
+
+    pub fn moving(hand: Hand, model: BiomechModel, events: Vec<GripEvent>, notes: &[TimelineNote]) -> Self {
+        let twin = BiomechModel::new(model.skeleton().profile().clone(), hand, *model.weights());
+        let mut animator = Self::new(hand, twin, events);
+        animator.poses = crate::motion::smooth_wrists(&animator.events, &animator.poses, &model);
+        if let Some(first) = animator.poses.first() {
+            animator.resting = *first;
+        }
+        let mine: Vec<TimelineNote> = notes.iter().filter(|n| n.hand == hand).cloned().collect();
+        let track = crate::motion::Track::new(&animator.events, &animator.poses);
+        let strikes = crate::motion::Strikes::new(&mine, &animator.events, &track.stays);
+        animator.motion = Some(Motion { track, strikes });
+        animator
     }
 
     pub fn hand(&self) -> Hand {
@@ -551,6 +579,9 @@ impl HandAnimator {
     }
 
     pub fn pose_at(&self, time: f64) -> HandPose {
+        if let Some(motion) = &self.motion {
+            return self.flowing(motion, time);
+        }
         let Some(index) = self.current_index(time) else {
             return self.resting;
         };
@@ -559,6 +590,34 @@ impl HandAnimator {
         self.sink_into_note(&mut pose, index, time);
         self.raise_fingers_about_to_strike(&mut pose, index, time);
         self.skeleton.clamp(&mut pose);
+        pose
+    }
+
+    fn flowing(&self, motion: &Motion, time: f64) -> HandPose {
+        if self.events.is_empty() {
+            return self.resting;
+        }
+        let mut pose = motion.track.at(time);
+        let stays = &motion.track.stays;
+        let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
+        if let (Some(current), Some(next)) = (self.events.get(index), stays.get(index + 1)) {
+            let gap = next.arrive - current.release;
+            if gap > 1e-3 && time > current.release && time < next.arrive {
+                let hardest = self.events[index + 1].struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
+                let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
+                let height = (gap as f32 * LIFT_RATE_MM * force).min(LIFT_MAX_MM) * crate::motion::hop_room(gap);
+                pose.q[dof::WRIST_Z] += height * crate::motion::bump((time - current.release) / gap);
+            }
+            pose.q[dof::WRIST_Z] += self.breath(index, time);
+        }
+        let (weight, hardness) = crate::motion::sink(&self.events, time);
+        if weight > 0.0 {
+            let (depth, angle) = crate::motion::sink_depth(hardness);
+            pose.q[dof::WRIST_Z] -= depth * weight;
+            pose.q[dof::WRIST_FLEXION] -= angle * weight;
+        }
+        self.skeleton.clamp(&mut pose);
+        motion.strikes.press(&self.skeleton, &mut pose, time);
         pose
     }
 
@@ -624,6 +683,7 @@ impl HandAnimator {
         }
         let until = self.events.get(index + 1).map_or(f64::INFINITY, |next| next.time - time);
         let free = ((time - current.release).min(until) / BREATH_EASE_SECONDS).clamp(0.0, 1.0) as f32;
+        let free = free * free * (3.0 - 2.0 * free);
         let offset = match self.hand {
             Hand::Right => 0.0,
             Hand::Left => 2.1,
@@ -693,6 +753,16 @@ impl HandAnimator {
     }
 
     pub fn grips_around(&self, time: f64) -> Option<(&Grip, Option<&Grip>, f32)> {
+        if let Some(motion) = &self.motion {
+            return match motion.track.travelling(time) {
+                Some((a, b, blend)) if a != b => Some((&self.events[a].grip, Some(&self.events[b].grip), blend)),
+                Some((a, _, _)) => Some((&self.events[a].grip, None, 0.0)),
+                None => {
+                    let last = if time <= motion.track.stays.first().map_or(0.0, |s| s.arrive) { 0 } else { self.events.len() - 1 };
+                    self.events.get(last).map(|e| (&e.grip, None, 0.0))
+                }
+            };
+        }
         let Some(index) = self.current_index(time) else {
             return self.events.first().map(|first| (&first.grip, None, 0.0));
         };
@@ -722,7 +792,8 @@ impl HandAnimator {
                 continue;
             }
             let inside = (time - event.time).min(event.release - time);
-            held = held.max(((inside + ramp) / ramp).clamp(0.0, 1.0) as f32);
+            let u = ((inside + ramp) / ramp).clamp(0.0, 1.0) as f32;
+            held = held.max(u * u * (3.0 - 2.0 * u));
         }
         held
     }
@@ -769,25 +840,29 @@ impl Decisions {
         let steps = (until.max(0.0) / DECIDE_EVERY_SECONDS).ceil() as usize + 1;
         Self((0..steps).map(|step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS)).collect())
     }
+
+    fn at(&self, animators: &[HandAnimator], time: f64) -> Apart {
+        apart_around(time, |step| match self.0.get(step as usize) {
+            Some(decided) => *decided,
+            None => apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS),
+        })
+    }
 }
 
 pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
-    posed_apart(animators, time, |step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS))
+    let apart = apart_around(time, |step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS));
+    posed_apart(animators, time, apart)
 }
 
 pub fn pose_both_decided(animators: &[HandAnimator], decisions: &Decisions, time: f64) -> [HandPose; 2] {
-    posed_apart(animators, time, |step| match decisions.0.get(step as usize) {
-        Some(decided) => *decided,
-        None => apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS),
-    })
+    posed_apart(animators, time, decisions.at(animators, time))
 }
 
-fn posed_apart(animators: &[HandAnimator], time: f64, decide: impl Fn(i64) -> Apart) -> [HandPose; 2] {
+fn posed_apart(animators: &[HandAnimator], time: f64, apart: Apart) -> [HandPose; 2] {
     let mut poses = [
         animators[Hand::Left as usize].pose_at(time),
         animators[Hand::Right as usize].pose_at(time),
     ];
-    let apart = apart_around(time, decide);
     for (side, animator) in animators.iter().enumerate().take(2) {
         let (swing, lift) = (apart.swing[side], apart.lift[side]);
         if swing == 0.0 && lift == 0.0 {
@@ -1403,6 +1478,46 @@ mod tests {
                     finger.number()
                 );
             }
+        }
+    }
+
+    fn flowing(score: &Score, fingers: &[(u32, Finger)]) -> (Timeline, HandAnimator) {
+        let timeline = Timeline::build(score, &pinned(fingers));
+        let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
+        let animator = HandAnimator::moving(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec(), &timeline.notes);
+        (timeline, animator)
+    }
+
+    #[test]
+    fn flowing_hands_move_and_never_step() {
+        let q = TICKS_PER_QUARTER as i64;
+        let pitches = [60u8, 62, 64, 65, 67, 72, 71, 69, 67, 65, 64, 62, 60];
+        let fingers = [1, 2, 3, 1, 2, 5, 4, 3, 2, 1, 3, 2, 1];
+        let entries: Vec<_> = pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
+        let fingered: Vec<_> = fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
+        let (timeline, animator) = flowing(&score_of(&entries), &fingered);
+        let mut before = animator.joints(&animator.pose_at(0.0));
+        let mut at = 0.0005;
+        while at < timeline.duration + 0.5 {
+            let now = animator.joints(&animator.pose_at(at));
+            let moved = before.iter().zip(&now).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+            assert!(moved < 3.0, "a joint jumped {moved:.1} mm at {at:.4}s");
+            before = now;
+            at += 0.0005;
+        }
+    }
+
+    #[test]
+    fn a_pressed_key_has_a_fingertip_on_it() {
+        let q = TICKS_PER_QUARTER as i64;
+        let entries = [(60u8, 0, q, Hand::Right), (64, q, q, Hand::Right), (67, 2 * q, q, Hand::Right)];
+        let (timeline, animator) = flowing(&score_of(&entries), &[(0, Finger::Thumb), (1, Finger::Middle), (2, Finger::Little)]);
+        for note in &timeline.notes {
+            let finger = note.finger.unwrap();
+            let at = note.key_bottoms() + 0.01;
+            let tip = animator.joints(&animator.pose_at(at))[1 + 4 * finger.index() + 3];
+            let want = -KEY_DIP * note.key_depth(at) as f32;
+            assert!((tip.z - want).abs() < 2.0, "{:?} on {} is at {:.1} mm, the key at {want:.1}", finger, note.midi, tip.z);
         }
     }
 

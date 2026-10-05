@@ -1,4 +1,5 @@
 pub mod layout;
+pub mod motion;
 #[cfg(feature = "render")]
 pub mod export;
 #[cfg(feature = "render")]
