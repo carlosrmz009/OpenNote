@@ -112,6 +112,12 @@ const BREATH_DEG: f32 = 8.0;
 
 const BREATH_NEAR_SECONDS: f64 = 0.08;
 
+const REST_LIFT_MM: f32 = 40.0;
+
+const REST_CLEAR_MM: f32 = 140.0;
+
+const REST_MARGIN_SECONDS: f64 = 0.5;
+
 impl Timeline {
     pub fn audio_notes(&self) -> Vec<on_audio::Note> {
         const RELEASE_GAP: f64 = 0.012;
@@ -573,17 +579,35 @@ impl HandAnimator {
             return animator;
         }
         animator.poses = crate::motion::smooth_wrists(&animator.events, &animator.poses, &model);
+        crate::motion::relax_thumbs(&animator.events, &mut animator.poses, &model);
         if let Some(first) = animator.poses.first() {
             animator.resting = *first;
         }
         let mine: Vec<TimelineNote> = notes.iter().filter(|n| n.hand == hand).cloned().collect();
-        let track = crate::motion::Track::new(&animator.events, &animator.poses);
-        let mut strikes = crate::motion::Strikes::new(&mine, &animator.events, &track.stays);
-        strikes.lift = style.lift;
-        let (from, until) = match (track.stays.first(), animator.events.last()) {
-            (Some(first), Some(last)) => (first.arrive - 1.0, last.release + 2.0),
-            _ => (0.0, 0.0),
+        let keyboard = model.keyboard().clone();
+        let rest = |from: f64, until: f64, pose: &HandPose| {
+            let mut rest = *pose;
+            rest.q[dof::WRIST_Z] += REST_LIFT_MM;
+            let other = notes
+                .iter()
+                .filter(|n| n.hand != hand && n.end > from - REST_MARGIN_SECONDS && n.start < until + REST_MARGIN_SECONDS)
+                .map(|n| keyboard.centre_x(n.midi));
+            let (lo, hi) = other.fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+            if lo <= hi {
+                let x = &mut rest.q[dof::WRIST_X];
+                *x = match hand {
+                    Hand::Right => x.max(hi + REST_CLEAR_MM).min(keyboard.width()),
+                    Hand::Left => x.min(lo - REST_CLEAR_MM).max(0.0),
+                };
+            }
+            rest
         };
+        let track = crate::motion::Track::new(&animator.events, &animator.poses, &rest);
+        let mut strikes =
+            crate::motion::Strikes::new(&mine, &animator.events, &track.stays, &animator.poses, &animator.skeleton);
+        strikes.lift = style.lift;
+        let (from, until) = track.span();
+        let (from, until) = (from - 1.0, until + 2.0);
         let lag = crate::motion::Lag::new(&track, from, until);
         animator.motion = Some(Motion { track, strikes, lag, style: style.clone() });
         animator
@@ -647,7 +671,7 @@ impl HandAnimator {
         let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
         if let (Some(current), Some(next)) = (self.events.get(index), stays.get(index + 1)) {
             let gap = next.arrive - current.release;
-            if gap > 1e-3 && time > current.release && time < next.arrive {
+            if gap > 1e-3 && gap < crate::motion::REST_GAP_SECONDS && time > current.release && time < next.arrive {
                 let hardest = self.events[index + 1].struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
                 let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
                 let room = crate::motion::hop_room(gap);
@@ -842,10 +866,11 @@ impl HandAnimator {
     pub fn holding(&self, time: f64, ramp: f64) -> f32 {
         if let Some(motion) = &self.motion {
             let stays = &motion.track.stays;
-            let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
             let ramp = ramp.max(HOLD_RAMP_SECONDS);
+            let first = stays.partition_point(|s| s.arrive <= time - ramp).saturating_sub(1);
+            let last = stays.partition_point(|s| s.arrive < time + ramp);
             let mut held = 0.0f32;
-            for k in index.saturating_sub(1)..(index + 2).min(stays.len()) {
+            for k in first..last {
                 if self.events[k].grip.keys.is_empty() {
                     continue;
                 }
@@ -1108,17 +1133,18 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
         let held = middle(&trial);
         trial.q[dof::WRIST_Z] += height;
         const PROBE: f32 = 0.01;
+        const RAISE_LEAST_SLOPE: f32 = 40.0;
+        const RAISE_STEP: f32 = 0.12;
         for _ in 0..3 {
             let now = middle(&trial);
             let high = now.z - held.z;
             let mut probe = trial;
             probe.q[dof::WRIST_FLEXION] += PROBE;
             let slope = (middle(&probe).z - now.z) / PROBE;
-            if slope.abs() < 1e-3 {
-                break;
-            }
+            let usable = slope.signum() * slope.abs().max(RAISE_LEAST_SLOPE);
             let flexion = &mut trial.q[dof::WRIST_FLEXION];
-            *flexion = on_hand::skeleton::LIMITS[dof::WRIST_FLEXION].clamp(*flexion - high / slope);
+            let step = (-high / usable).clamp(-RAISE_STEP, RAISE_STEP);
+            *flexion = on_hand::skeleton::LIMITS[dof::WRIST_FLEXION].clamp(*flexion + step);
         }
         let now = middle(&trial);
         trial.q[dof::WRIST_X] += held.x - now.x;
@@ -1578,6 +1604,23 @@ mod tests {
     }
 
     #[test]
+    fn every_note_sounds_with_its_finger_on_the_key_even_between_leaps() {
+        let q = TICKS_PER_QUARTER as i64;
+        let pitches = [48u8, 72, 50, 74, 52, 76, 53, 77];
+        let fingers = [1, 5, 1, 5, 1, 5, 1, 5];
+        let entries: Vec<_> = pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
+        let fingered: Vec<_> = fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
+        let (timeline, animator) = flowing(&score_of(&entries), &fingered);
+        let keyboard = on_hand::keyboard::Keyboard::new();
+        for note in &timeline.notes {
+            let finger = note.finger.unwrap();
+            let tip = animator.joints(&animator.pose_at(note.start))[1 + 4 * finger.index() + 3];
+            let off = (tip.x - keyboard.centre_x(note.midi)).abs();
+            assert!(off < 8.0, "{finger:?} sounds {} from {off:.0} mm away", note.midi);
+        }
+    }
+
+    #[test]
     fn a_pressed_key_has_a_fingertip_on_it() {
         let q = TICKS_PER_QUARTER as i64;
         let entries = [(60u8, 0, q, Hand::Right), (64, q, q, Hand::Right), (67, 2 * q, q, Hand::Right)];
@@ -1640,7 +1683,7 @@ mod tests {
         let mut fingers = Vec::new();
         for beat in 0..12 {
             let (left, right, finger) =
-                if beat % 2 == 0 { (48, 60, Finger::Thumb) } else { (52, 64, Finger::Index) };
+                if beat % 2 == 0 { (55, 57, Finger::Thumb) } else { (53, 59, Finger::Index) };
             let at = beat * q / 2;
             fingers.push((entries.len() as u32, finger));
             entries.push((left, at, q / 6, Hand::Left));

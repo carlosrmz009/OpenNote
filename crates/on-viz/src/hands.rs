@@ -56,11 +56,25 @@ pub struct HandRig {
 
 #[derive(Clone)]
 struct Forearm {
-    bones: Vec<(Entity, Quat)>,
+    top: Entity,
+    top_rest: Quat,
+    top_parent: Quat,
     head: Vec3,
     wrist: Entity,
     wrist_rest: Quat,
 }
+
+impl Forearm {
+    fn turned(&self, turn: Quat, wrist_in_model: Quat) -> (Quat, Quat) {
+        let wrist_parent = wrist_in_model * self.wrist_rest.inverse();
+        (
+            self.top_parent.inverse() * turn * self.top_parent * self.top_rest,
+            wrist_parent.inverse() * turn.inverse() * wrist_parent * self.wrist_rest,
+        )
+    }
+}
+
+const FOREARM_TURN_MAX_DEG: f32 = 30.0;
 
 const LEAN_SIGMA_SECONDS: f64 = 0.6;
 
@@ -137,23 +151,31 @@ struct Node {
     world: Vec3,
 }
 
-fn find_forearm(survey: &Survey, _root: Entity, wrist: Entity) -> Option<Forearm> {
-    let mut chain = Vec::new();
-    let mut at = survey.nodes.get(&wrist)?.parent;
-    while let Some(entity) = at {
-        if !survey.arms.contains(&entity) {
-            break;
-        }
-        let node = survey.nodes.get(&entity)?;
-        chain.push((entity, node.local.rotation));
-        at = node.parent;
+fn rest_in_model(survey: &Survey, entity: Option<Entity>) -> (Vec3, Quat) {
+    let (mut position, mut rotation) = (Vec3::ZERO, Quat::IDENTITY);
+    let mut walker = entity;
+    while let Some(node) = walker.and_then(|e| survey.nodes.get(&e)) {
+        position = node.local.transform_point(position);
+        rotation = node.local.rotation * rotation;
+        walker = node.parent;
     }
-    chain.reverse();
-    let node = survey.nodes.get(&chain.first()?.0)?;
+    (position, rotation)
+}
 
+fn find_forearm(survey: &Survey, wrist: Entity) -> Option<Forearm> {
+    let mut top = None;
+    let mut at = survey.nodes.get(&wrist)?.parent;
+    while let Some(entity) = at.filter(|e| survey.arms.contains(e)) {
+        top = Some(entity);
+        at = survey.nodes.get(&entity)?.parent;
+    }
+    let top = top?;
+    let node = survey.nodes.get(&top)?;
     Some(Forearm {
-        bones: chain,
-        head: node.world,
+        top,
+        top_rest: node.local.rotation,
+        top_parent: rest_in_model(survey, node.parent).1,
+        head: rest_in_model(survey, Some(top)).0,
         wrist,
         wrist_rest: survey.nodes.get(&wrist)?.local.rotation,
     })
@@ -216,7 +238,7 @@ fn rig_loaded_hands(
             rig.wrist_rotation = fit.wrist_rotation;
             rig.scale = fit.scale;
             rig.digits = digits;
-            rig.forearm = find_forearm(&survey, root, wrist);
+            rig.forearm = find_forearm(&survey, wrist);
         }
         commands.entity(root).remove::<NeedsRigging>();
     }
@@ -454,18 +476,16 @@ pub fn pose_hands(
             let rest_direction = (rig.wrist_offset - arm.head).normalize_or_zero();
             if wanted != Vec3::ZERO && rest_direction != Vec3::ZERO {
                 let turn = rig::align(rest_direction, root_rotation.inverse() * wanted);
+                let most = FOREARM_TURN_MAX_DEG.to_radians();
+                let angle = turn.to_axis_angle().1;
+                let turn = if angle > most { Quat::IDENTITY.slerp(turn, most / angle) } else { turn };
                 wrist_in_model = arm.head + turn * (rig.wrist_offset - arm.head);
-
-                let share = 1.0 / arm.bones.len() as f32;
-                let each = Quat::IDENTITY.slerp(turn, share);
-                for (bone, rest) in &arm.bones {
-                    if let Ok(mut transform) = transforms.get_mut(*bone) {
-                        transform.rotation = each * *rest;
-                    }
+                let (top, wrist) = arm.turned(turn, rig.wrist_rotation);
+                if let Ok(mut transform) = transforms.get_mut(arm.top) {
+                    transform.rotation = top;
                 }
-
                 if let Ok(mut transform) = transforms.get_mut(arm.wrist) {
-                    transform.rotation = turn.inverse() * arm.wrist_rest;
+                    transform.rotation = wrist;
                 }
             }
         }
@@ -542,5 +562,33 @@ fn pose_digit(
 
         parent_rotation *= transform.rotation;
         parent_position = head;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turning_the_forearm_leaves_the_hand_as_it_was() {
+        let top_parent = Quat::from_euler(EulerRot::XYZ, 0.3, -1.1, 2.0);
+        let top_rest = Quat::from_euler(EulerRot::XYZ, 0.9, 0.4, -2.6);
+        let between = Quat::from_euler(EulerRot::XYZ, 0.02, 0.01, 0.03);
+        let wrist_rest = Quat::from_euler(EulerRot::XYZ, 0.18, 0.01, -0.12);
+        let wrist_in_model = top_parent * top_rest * between * wrist_rest;
+        let arm = Forearm {
+            top: Entity::PLACEHOLDER,
+            top_rest,
+            top_parent,
+            head: Vec3::ZERO,
+            wrist: Entity::PLACEHOLDER,
+            wrist_rest,
+        };
+        let turn = Quat::from_rotation_z(0.4) * Quat::from_rotation_x(-0.2);
+        let (top, wrist) = arm.turned(turn, wrist_in_model);
+        let forearm = top_parent * top;
+        assert!(forearm.angle_between(turn * top_parent * top_rest) < 2e-3, "the forearm turns by exactly the turn");
+        let hand = top_parent * top * between * wrist;
+        assert!(hand.angle_between(wrist_in_model) < 2e-3, "the hand keeps the orientation it was given");
     }
 }

@@ -1,12 +1,17 @@
-use on_fingering::biomech::BiomechModel;
+use glam::{Vec2, Vec3};
+use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::playability::HAND_SPEED_MM_PER_SECOND;
-use on_hand::keyboard::{is_black, BLACK_KEY_DIP, BLACK_KEY_HEIGHT, KEY_DIP};
+use on_hand::keyboard::{is_black, BLACK_KEY_DIP, BLACK_KEY_FRONT_Y, BLACK_KEY_HEIGHT, KEY_DIP};
 use on_hand::skeleton::{dof, HandPose, Posture, Skeleton, DOF};
-use on_hand::Finger;
+use on_hand::{Finger, Hand};
 
 use crate::timeline::{key_seconds, GripEvent, TimelineNote};
 
 const KEY_LEAD: f64 = 0.85;
+
+const KEY_TRAIL: f64 = 0.15;
+
+const HOLD_LEAST: f64 = 0.04;
 
 const MIN_KNOT_GAP: f64 = 0.01;
 
@@ -37,11 +42,19 @@ const FADE_SECONDS: f64 = 0.08;
 
 const TAKE_HOLD: f64 = 0.4;
 
-const BEND_DAMPING: f32 = 400.0;
+const LEAST_STRIKE: f64 = 0.02;
 
-const BEND_STEP: f32 = 0.35;
+const REACH_DAMPING: f32 = 400.0;
 
-const BEND_LEAST_RATE: f32 = -10.0;
+const REACH_STEP: f32 = 0.35;
+
+const REACH_PASSES: usize = 4;
+
+const REACH_GIVE_MM: (f32, f32) = (6.0, 14.0);
+
+const AIM_PULL_MM: f32 = 12.0;
+
+const REACH_AXES: Vec3 = Vec3::new(1.0, 0.25, 1.0);
 
 const TOGETHER: f64 = on_fingering::playability::CHORD_SECONDS;
 
@@ -105,30 +118,75 @@ pub fn arrival(event: &GripEvent) -> f64 {
     softest.map_or(event.time, |v| event.time - KEY_LEAD * key_seconds(v))
 }
 
+fn settled(event: &GripEvent) -> f64 {
+    let softest = event.struck.iter().map(|(_, v)| *v).min();
+    softest.map_or(event.time, |v| event.time + KEY_TRAIL * key_seconds(v))
+}
+
+pub const REST_GAP_SECONDS: f64 = 1.5;
+
 impl Track {
-    pub fn new(events: &[GripEvent], poses: &[HandPose]) -> Self {
-        let mut stays: Vec<Stay> = Vec::with_capacity(events.len());
-        let mut last = f64::MIN;
+    pub fn new(events: &[GripEvent], poses: &[HandPose], rest: &dyn Fn(f64, f64, &HandPose) -> HandPose) -> Self {
+        let mut points: Vec<f64> = Vec::with_capacity(events.len());
         for event in events {
-            let arrive = arrival(event).max(last + MIN_KNOT_GAP);
-            stays.push(Stay { arrive, leave: arrive });
-            last = arrive;
+            let last = points.last().map_or(f64::MIN, |t| t + MIN_KNOT_GAP);
+            points.push(event.time.max(last));
+        }
+        let mut stays: Vec<Stay> = points.iter().map(|t| Stay { arrive: *t, leave: *t }).collect();
+        if let (Some(stay), Some(event)) = (stays.first_mut(), events.first()) {
+            stay.arrive = arrival(event).min(stay.arrive);
         }
         for i in 0..stays.len().saturating_sub(1) {
-            let free = stays[i + 1].arrive - move_seconds(&poses[i], &poses[i + 1]);
-            stays[i].leave = free.min(stays[i + 1].arrive - MIN_KNOT_GAP).max(stays[i].arrive);
+            let ready = arrival(&events[i + 1]).max(points[i] + MIN_KNOT_GAP);
+            let need = move_seconds(&poses[i], &poses[i + 1]);
+            if ready - settled(&events[i]).max(points[i]) >= need {
+                stays[i].leave = ready - need;
+                stays[i + 1].arrive = ready.min(points[i + 1]);
+            }
         }
         if let (Some(stay), Some(event)) = (stays.last_mut(), events.last()) {
             stay.leave = stay.arrive.max(event.release);
         }
+        let last = stays.len().saturating_sub(1);
+        for (i, stay) in stays.iter_mut().enumerate() {
+            if i != 0 && i != last && stay.leave - stay.arrive < HOLD_LEAST {
+                *stay = Stay { arrive: points[i], leave: points[i] };
+            }
+        }
+        let mut resting = vec![false; stays.len()];
+        for i in 0..stays.len().saturating_sub(1) {
+            let done = events[i].release.max(stays[i].arrive);
+            if stays[i + 1].arrive - done >= REST_GAP_SECONDS {
+                stays[i].leave = stays[i].leave.min(done);
+                resting[i] = true;
+            }
+        }
 
-        let mut knots = Vec::with_capacity(2 * events.len());
+        let mut knots = Vec::with_capacity(2 * events.len() + 2);
+        if let (Some(stay), Some(pose)) = (stays.first(), poses.first()) {
+            let rest = rest(f64::NEG_INFINITY, stay.arrive, pose);
+            knots.push(Knot { time: stay.arrive - move_seconds(&rest, pose), pose: rest, still: true, event: 0 });
+        }
         for (i, stay) in stays.iter().enumerate() {
             let held = stay.leave > stay.arrive + 1e-3 || i == 0 || i + 1 == stays.len();
             knots.push(Knot { time: stay.arrive, pose: poses[i], still: held, event: i });
             if stay.leave > stay.arrive + 1e-3 {
                 knots.push(Knot { time: stay.leave, pose: poses[i], still: true, event: i });
             }
+            if let Some(next) = stays.get(i + 1).filter(|_| resting[i]) {
+                let resting = rest(stay.leave, next.arrive, &poses[i + 1]);
+                let away = stay.leave + move_seconds(&poses[i], &resting);
+                let back = next.arrive - move_seconds(&resting, &poses[i + 1]);
+                if back > away + MIN_KNOT_GAP {
+                    knots.push(Knot { time: away, pose: resting, still: true, event: i });
+                    knots.push(Knot { time: back, pose: resting, still: true, event: i + 1 });
+                }
+            }
+        }
+        if let (Some(stay), Some(pose)) = (stays.last(), poses.last()) {
+            let rest = rest(stay.leave, f64::INFINITY, pose);
+            let event = stays.len() - 1;
+            knots.push(Knot { time: stay.leave + move_seconds(pose, &rest), pose: rest, still: true, event });
         }
 
         let slopes = (0..knots.len())
@@ -151,6 +209,13 @@ impl Track {
             })
             .collect();
         Self { knots, slopes, stays }
+    }
+
+    pub fn span(&self) -> (f64, f64) {
+        match (self.knots.first(), self.knots.last()) {
+            (Some(first), Some(last)) => (first.time, last.time),
+            _ => (0.0, 0.0),
+        }
     }
 
     fn segment(&self, time: f64) -> Option<(usize, f64)> {
@@ -293,6 +358,61 @@ pub fn smooth_wrists(events: &[GripEvent], poses: &[HandPose], model: &BiomechMo
     out
 }
 
+const IDLE_THUMB_LIFT: Vec3 = Vec3::new(0.0, -6.0, 12.0);
+
+const IDLE_THUMB_CLEAR_MM: f32 = 8.0;
+
+fn five_fingers(hand: Hand) -> Grip {
+    Grip::new(match hand {
+        Hand::Right => vec![(60, Finger::Thumb), (62, Finger::Index), (64, Finger::Middle), (65, Finger::Ring), (67, Finger::Little)],
+        Hand::Left => vec![(48, Finger::Little), (50, Finger::Ring), (52, Finger::Middle), (53, Finger::Index), (55, Finger::Thumb)],
+    })
+}
+
+pub fn relax_thumbs(events: &[GripEvent], poses: &mut [HandPose], model: &BiomechModel) {
+    let skeleton = model.skeleton();
+    let mut relaxed = model.grip_pose(&five_fingers(skeleton.hand()));
+    let target = skeleton.forward(&relaxed).tip(Finger::Thumb) + IDLE_THUMB_LIFT;
+    for _ in 0..12 {
+        let posture = skeleton.forward(&relaxed);
+        reach_step(skeleton, &posture, &mut relaxed, Finger::Thumb, target);
+        skeleton.clamp(&mut relaxed);
+    }
+    let thumb = digit_dofs(Finger::Thumb);
+    let clear = |pose: &HandPose| {
+        let tip = skeleton.forward(pose).tip(Finger::Thumb);
+        let surface = if tip.y > BLACK_KEY_FRONT_Y { BLACK_KEY_HEIGHT } else { 0.0 };
+        tip.z >= surface + IDLE_THUMB_CLEAR_MM
+    };
+    for (event, pose) in events.iter().zip(poses.iter_mut()) {
+        if event.grip.keys.iter().any(|(_, f)| *f == Finger::Thumb) {
+            continue;
+        }
+        let original = *pose;
+        let blended = |share: f32| {
+            let mut out = original;
+            for j in thumb {
+                out.q[*j] += share * (relaxed.q[*j] - original.q[*j]);
+            }
+            out
+        };
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        if clear(&blended(1.0)) {
+            lo = 1.0;
+        } else {
+            for _ in 0..8 {
+                let mid = 0.5 * (lo + hi);
+                if clear(&blended(mid)) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+        }
+        *pose = blended(lo);
+    }
+}
+
 pub fn sink(events: &[GripEvent], time: f64) -> (f32, f32) {
     let index = events.partition_point(|e| e.time <= time);
     if index == 0 {
@@ -348,61 +468,84 @@ fn surface(midi: u8) -> (f32, f32) {
     }
 }
 
+struct Strike {
+    note: TimelineNote,
+    aim: Vec2,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Want {
+    z: f32,
+    weight: f32,
+    floor: f32,
+    aim: (Vec2, f32),
+}
+
 pub struct Strikes {
-    by_finger: [Vec<TimelineNote>; 5],
+    by_finger: [Vec<Strike>; 5],
     pub lift: f32,
 }
 
 impl Strikes {
-    pub fn new(notes: &[TimelineNote], events: &[GripEvent], stays: &[Stay]) -> Self {
-        let mut by_finger: [Vec<TimelineNote>; 5] = Default::default();
+    pub fn new(
+        notes: &[TimelineNote],
+        events: &[GripEvent],
+        stays: &[Stay],
+        poses: &[HandPose],
+        skeleton: &Skeleton,
+    ) -> Self {
+        let mut by_finger: [Vec<Strike>; 5] = Default::default();
         for note in notes {
             let Some(finger) = note.finger else { continue };
             let mut note = note.clone();
             let first = events.partition_point(|e| e.time < note.start - TOGETHER);
-            let held = events[first..]
-                .iter()
-                .enumerate()
-                .take_while(|(_, e)| e.grip.keys.contains(&(note.midi, finger)))
-                .last()
-                .map(|(k, _)| first + k);
-            if let Some(stay) = held.and_then(|j| stays.get(j)) {
-                note.key_rises = note.key_rises.min(stay.leave).max(note.key_moves);
-            }
-            by_finger[finger.index()].push(note);
+            let holding = |e: &GripEvent| e.grip.keys.contains(&(note.midi, finger));
+            let mut near = events[first..].iter().take_while(|e| e.time <= note.start + TOGETHER);
+            let Some(struck) = near.position(holding).map(|k| first + k) else { continue };
+            let held = struck + events[struck..].iter().take_while(|e| holding(e)).count() - 1;
+            let stay = stays[held];
+            let release_by = if stay.leave > stay.arrive {
+                stay.leave - 0.5 * LET_GO_SECONDS
+            } else {
+                stays.get(held + 1).map_or(f64::INFINITY, |s| s.arrive)
+            };
+            note.key_rises = note.key_rises.min(release_by).max(note.key_bottoms());
+            let aim = skeleton.forward(&poses[struck]).tip(finger).truncate();
+            by_finger[finger.index()].push(Strike { note, aim });
         }
         for list in &mut by_finger {
-            list.sort_by(|a, b| a.key_moves.total_cmp(&b.key_moves));
+            list.sort_by(|a, b| a.note.key_moves.total_cmp(&b.note.key_moves));
             for i in 1..list.len() {
-                let next = list[i].key_moves;
-                let note = &mut list[i - 1];
+                let next = list[i].note.key_moves;
+                let note = &mut list[i - 1].note;
                 note.key_rises = note.key_rises.min(next - LET_GO_SECONDS - 0.02).max(note.key_moves);
             }
         }
         Self { by_finger, lift: 1.0 }
     }
 
-    fn height(&self, finger: Finger, time: f64) -> Option<(f32, f32, f32)> {
+    fn plan(&self, finger: Finger, time: f64) -> Option<Plan> {
         let list = &self.by_finger[finger.index()];
-        let after = list.partition_point(|n| n.key_moves <= time);
-        let mut letting_go = None;
+        let after = list.partition_point(|s| s.note.key_moves <= time);
+        let mut going = None;
         if after > 0 {
-            let note = &list[after - 1];
+            let Strike { note, aim } = &list[after - 1];
             let (top, dip) = surface(note.midi);
             let up = note.key_rises + LET_GO_SECONDS;
             if time <= up {
-                return Some((top - note.key_depth(time) as f32 * dip, 1.0, 0.0));
-            }
-            if time < up + FADE_SECONDS {
-                let u = (time - up) / FADE_SECONDS;
-                letting_go = Some((top, 1.0 - minimum_jerk(u) as f32, minimum_jerk(u) as f32));
+                let z = top - note.key_depth(time) as f32 * dip;
+                going = Some(Want { z, weight: 1.0, floor: 0.0, aim: (*aim, 1.0) });
+            } else if time < up + FADE_SECONDS {
+                let u = minimum_jerk((time - up) / FADE_SECONDS) as f32;
+                going = Some(Want { z: top, weight: 1.0 - u, floor: u, aim: (*aim, 1.0 - u) });
             }
         }
-        let Some(next) = list.get(after) else { return letting_go };
-        let free_from = if after > 0 { list[after - 1].key_rises + LET_GO_SECONDS } else { f64::MIN };
-        let from = (next.key_moves - STRIKE_WINDOW).max(free_from).min(next.key_moves - 0.005);
+        let alone = going.map(|w| Plan { going: Some(w), striking: None, taking: 0.0 });
+        let Some(Strike { note: next, aim }) = list.get(after) else { return alone };
+        let free_from = if after > 0 { list[after - 1].note.key_rises + LET_GO_SECONDS } else { f64::MIN };
+        let from = (next.key_moves - STRIKE_WINDOW).max(free_from).min(next.key_moves - LEAST_STRIKE);
         if time < from {
-            return letting_go;
+            return alone;
         }
         let window = (next.key_moves - from) as f32;
         let loud = f32::from(next.velocity) / 127.0;
@@ -420,54 +563,123 @@ impl Strikes {
             f64::from(height) * (2.0 * s3 - 3.0 * s2 + 1.0) - contact * span * (s3 - s2)
         };
         let floor = if time < peak { 1.0 } else { 1.0 - minimum_jerk((time - peak) / (next.key_moves - peak)) as f32 };
-        let striking = (top + raised as f32, taking, floor);
-        Some(match letting_go {
-            Some((z, w, f)) => (z + taking * (striking.0 - z), w.max(taking), f + taking * (floor - f)),
-            _ => striking,
-        })
+        let striking = Want { z: top + raised as f32, weight: 1.0, floor, aim: (*aim, 1.0 - floor) };
+        Some(Plan { going, striking: Some(striking), taking })
     }
 
     pub fn engaged(&self, finger: Finger, time: f64) -> f32 {
-        self.height(finger, time).map_or(0.0, |(_, w, _)| w)
+        self.plan(finger, time).map_or(0.0, |p| p.weight())
     }
 
     pub fn press(&self, skeleton: &Skeleton, pose: &mut HandPose, time: f64) {
-        let wanted: Vec<(Finger, (f32, f32, f32))> =
-            Finger::ALL.iter().filter_map(|f| Some((*f, self.height(*f, time)?))).collect();
-        if wanted.is_empty() {
+        let plans: Vec<(Finger, Plan)> =
+            Finger::ALL.iter().filter_map(|f| Some((*f, self.plan(*f, time)?))).collect();
+        if plans.is_empty() {
             return;
         }
         let natural = skeleton.forward(pose);
-        let wanted: Vec<(Finger, f32)> = wanted
-            .into_iter()
-            .map(|(f, (z, w, floor))| {
-                let free = natural.tip(f).z;
-                let z = z + floor * (free - z).max(0.0);
-                (f, free + w * (z - free))
-            })
-            .collect();
-        for _ in 0..3 {
+        let targets: Vec<(Finger, Vec3)> = plans.iter().map(|(f, plan)| (*f, plan.target(natural.tip(*f)))).collect();
+        let before = *pose;
+        for _ in 0..REACH_PASSES {
             let posture = skeleton.forward(pose);
-            for (finger, z) in &wanted {
-                bend_to(skeleton, &posture, pose, *finger, *z);
+            for (finger, target) in &targets {
+                reach_step(skeleton, &posture, pose, *finger, *target);
             }
             skeleton.clamp(pose);
+        }
+        let reached = skeleton.forward(pose);
+        for (finger, target) in &targets {
+            let miss = ((reached.tip(*finger) - *target) * REACH_AXES).length();
+            let give = minimum_jerk(f64::from((miss - REACH_GIVE_MM.0) / REACH_GIVE_MM.1)) as f32;
+            if give > 0.0 {
+                for j in digit_dofs(*finger) {
+                    pose.q[*j] += give * (before.q[*j] - pose.q[*j]);
+                }
+            }
         }
     }
 }
 
-fn bend_to(skeleton: &Skeleton, posture: &Posture, pose: &mut HandPose, finger: Finger, z: f32) {
-    let (main, follow) = match finger {
-        Finger::Thumb => (dof::THUMB_MCP_FLEX, dof::THUMB_CMC_FLEX),
-        other => {
-            let base = dof::finger(other.index() - 1);
-            (base + dof::MCP_FLEX, base + dof::PIP_FLEX)
+#[derive(Debug, Clone, Copy)]
+struct Plan {
+    going: Option<Want>,
+    striking: Option<Want>,
+    taking: f32,
+}
+
+impl Plan {
+    fn weight(&self) -> f32 {
+        let going = self.going.map_or(0.0, |w| w.weight);
+        if self.striking.is_some() { going.max(self.taking) } else { going }
+    }
+
+    fn target(&self, free: Vec3) -> Vec3 {
+        let from = self.going.map_or(free, |w| w.target(free));
+        match self.striking {
+            Some(striking) => from.lerp(striking.target(free), self.taking),
+            None => from,
         }
+    }
+}
+
+impl Want {
+    fn target(&self, free: Vec3) -> Vec3 {
+        let z = self.z + self.floor * (free.z - self.z).max(0.0);
+        let z = free.z + self.weight * (z - free.z);
+        let (aim, weight) = self.aim;
+        let xy = free.truncate() + weight * (aim - free.truncate()).clamp_length_max(AIM_PULL_MM);
+        xy.extend(z)
+    }
+}
+
+fn digit_dofs(finger: Finger) -> &'static [usize] {
+    const THUMB: [usize; 4] = [dof::THUMB_CMC_FLEX, dof::THUMB_CMC_ABD, dof::THUMB_MCP_FLEX, dof::THUMB_IP_FLEX];
+    const FINGERS: [[usize; 3]; 4] = {
+        let mut out = [[0; 3]; 4];
+        let mut slot = 0;
+        while slot < 4 {
+            let base = dof::finger(slot);
+            out[slot] = [base + dof::MCP_FLEX, base + dof::MCP_SPREAD, base + dof::PIP_FLEX];
+            slot += 1;
+        }
+        out
     };
-    let rate = skeleton.tip_jacobian(posture, finger, main).z + 0.5 * skeleton.tip_jacobian(posture, finger, follow).z;
-    let rate = if finger == Finger::Thumb { rate } else { rate.min(BEND_LEAST_RATE) };
-    let error = z - posture.tip(finger).z;
-    let change = (error * rate / (rate * rate + BEND_DAMPING)).clamp(-BEND_STEP, BEND_STEP);
-    pose.q[main] += change;
-    pose.q[follow] += 0.5 * change;
+    match finger {
+        Finger::Thumb => &THUMB,
+        other => &FINGERS[other.index() - 1],
+    }
+}
+
+fn reach_step(skeleton: &Skeleton, posture: &Posture, pose: &mut HandPose, finger: Finger, target: Vec3) {
+    let error = (target - posture.tip(finger)) * REACH_AXES;
+    if error.length() < 0.1 {
+        return;
+    }
+    let joints = digit_dofs(finger);
+    let n = joints.len();
+    let columns: Vec<Vec3> = joints.iter().map(|j| skeleton.tip_jacobian(posture, finger, *j)).collect();
+    let mut a = [[0.0f32; 5]; 4];
+    for r in 0..n {
+        for c in 0..n {
+            a[r][c] = (columns[r] * REACH_AXES).dot(columns[c]) + if r == c { REACH_DAMPING } else { 0.0 };
+        }
+        a[r][n] = columns[r].dot(error);
+    }
+    for k in 0..n {
+        let pivot = a[k][k];
+        for r in k + 1..n {
+            let f = a[r][k] / pivot;
+            for c in k..=n {
+                a[r][c] -= f * a[k][c];
+            }
+        }
+    }
+    let mut step = [0.0f32; 4];
+    for k in (0..n).rev() {
+        let known: f32 = (k + 1..n).map(|c| a[k][c] * step[c]).sum();
+        step[k] = (a[k][n] - known) / a[k][k];
+    }
+    for (k, j) in joints.iter().enumerate() {
+        pose.q[*j] += step[k].clamp(-REACH_STEP, REACH_STEP);
+    }
 }

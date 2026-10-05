@@ -102,6 +102,36 @@ fn main() -> anyhow::Result<()> {
     let _ = DECISIONS.set(Decisions::new(&animators, timeline.duration + 2.0));
     let load_seconds = loading.elapsed().as_secs_f64();
 
+    if let Ok(span) = std::env::var("ON_TRACK") {
+        let (from, to) = span.split_once(',').expect("ON_TRACK=from,to");
+        let (from, to): (f64, f64) = (from.parse()?, to.parse()?);
+        let mut at = from;
+        while at <= to {
+            let decided = poses(&animators, at);
+            let line: Vec<String> = (0..2)
+                .map(|side| {
+                    let raw = animators[side].pose_at(at).wrist_position();
+                    let shown = decided[side].wrist_position();
+                    format!("{:7.1} {:6.1} {:5.1} | {:+5.1} {:+5.1} {:+5.1}", shown.x, shown.y, shown.z, shown.x - raw.x, shown.y - raw.y, shown.z - raw.z)
+                })
+                .collect();
+            println!("{at:8.3}  L {}   R {}", line[0], line[1]);
+            at += 1.0 / 60.0;
+        }
+        return Ok(());
+    }
+    if let Ok(probe) = std::env::var("ON_PROBE") {
+        let at: f64 = probe.parse()?;
+        for side in 0..2 {
+            let (a, b) = (poses(&animators, at - 0.0005)[side], poses(&animators, at + 0.0005)[side]);
+            let moved: Vec<String> = (0..on_hand::skeleton::DOF)
+                .filter(|i| (a.q[*i] - b.q[*i]).abs() > 0.01)
+                .map(|i| format!("{i}:{:.3}->{:.3}", a.q[i], b.q[i]))
+                .collect();
+            println!("{:?}: {}", Hand::ALL[side], moved.join("  "));
+        }
+        return Ok(());
+    }
     let step = 1.0 / FPS;
     let budget = (HAND_SPEED_MM_PER_SECOND * step) as f32;
 
@@ -264,6 +294,55 @@ fn main() -> anyhow::Result<()> {
         );
     }
     println!("  fingertip to its pressed key (mm): {}", percentiles(contact).replace("p", " p"));
+    for side in 0..2 {
+        let (mut hooked, mut flat, mut thumb_out) = (0usize, 0usize, 0usize);
+        for q in &angles[side] {
+            let fingers = (0..4).map(|slot| (q[dof::finger(slot) + dof::MCP_FLEX], q[dof::finger(slot) + dof::PIP_FLEX]));
+            let fingers: Vec<(f32, f32)> = fingers.collect();
+            if fingers.iter().any(|(mcp, pip)| *mcp < -0.2 && *pip > 1.0) {
+                hooked += 1;
+            }
+            if fingers.iter().filter(|(mcp, pip)| *mcp < 0.1 && *pip < 0.2).count() >= 3 {
+                flat += 1;
+            }
+            if q[dof::THUMB_CMC_ABD] > 0.25 && q[dof::THUMB_CMC_FLEX] > 0.1 {
+                thumb_out += 1;
+            }
+        }
+        let n = angles[side].len().max(1) as f32 / 100.0;
+        println!(
+            "  side {side} posture: hooked finger {:.1}%  flat hand {:.1}%  thumb out {:.1}%",
+            hooked as f32 / n, flat as f32 / n, thumb_out as f32 / n
+        );
+    }
+
+    let mut strikes: Vec<(f32, f64, Hand, on_hand::Finger, u8)> = Vec::new();
+    for note in &timeline.notes {
+        let Some(finger) = note.finger else { continue };
+        let t = note.start;
+        let posed = poses(&animators, t);
+        let joints = animators[note.hand as usize].joints(&posed[note.hand as usize]);
+        let tip = joints[1 + 4 * finger.index() + 3];
+        let (x0, x1, y0, y1) = keyboard.footprint(note.midi);
+        let depth = timeline.key_depression(t).depth_of(note.midi);
+        let (surface, dip) = if is_black(note.midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
+        let across = (x0 - tip.x).max(tip.x - x1).max(0.0);
+        let along = (y0 - tip.y).max(tip.y - y1).max(0.0);
+        let down = (tip.z - (surface - depth * dip)).abs();
+        strikes.push(((across * across + along * along + down * down).sqrt(), t, note.hand, finger, note.midi));
+    }
+    let misses = |limit: f32| strikes.iter().filter(|s| s.0 > limit).count();
+    println!(
+        "  fingertip to its key as it sounds (mm): {}   over 5 mm: {}  over 20 mm: {} of {}",
+        percentiles(strikes.iter().map(|s| s.0).collect()).replace("p", " p"),
+        misses(5.0),
+        misses(20.0),
+        strikes.len()
+    );
+    strikes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (miss, t, hand, finger, midi) in strikes.iter().take(10) {
+        println!("    {t:8.3}s {hand:?} {finger:?} {midi} missed by {miss:.0} mm");
+    }
 
     let mut shown = 0;
     let mut last = f64::MIN;
