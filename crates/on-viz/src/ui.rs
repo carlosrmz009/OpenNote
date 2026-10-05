@@ -204,6 +204,26 @@ fn draw_menus(
                     }
                 });
 
+                ui.menu_button("Expression", |ui| {
+                    ui.label("Mood");
+                    for mood in on_score::expression::Mood::ALL {
+                        let picked = session.settings.mood.name == mood.name;
+                        if ui.radio(picked, mood.name).clicked() && !picked {
+                            session.settings.mood = mood;
+                            reload.resolve();
+                        }
+                    }
+                    ui.separator();
+                    ui.label("How much");
+                    for (amount, label) in EXPRESSION_STEPS {
+                        let picked = (session.settings.expression - amount).abs() < 1e-3;
+                        if ui.radio(picked, label).clicked() && !picked {
+                            session.settings.expression = amount;
+                            reload.resolve();
+                        }
+                    }
+                });
+
                 ui.menu_button("View", |ui| {
                     let full = session.settings.extent == Extent::FullKeyboard;
                     if ui.radio(full, "All eighty-eight keys").clicked() && !full {
@@ -305,6 +325,14 @@ fn draw_menus(
     Ok(())
 }
 
+const EXPRESSION_STEPS: [(f32, &str); 5] = [
+    (0.0, "None: exactly as written"),
+    (0.5, "A little"),
+    (1.0, "Natural"),
+    (1.5, "A lot"),
+    (2.0, "As much as possible"),
+];
+
 fn clock(seconds: f64) -> String {
     let whole = seconds.max(0.0) as u64;
     format!("{}:{:02}", whole / 60, whole % 60)
@@ -368,6 +396,8 @@ fn export_video(session: &mut Session) {
     let (finished, report) = (Arc::clone(&done), Arc::clone(&outcome));
     let suggestion = input.with_extension("mp4");
     let extent = session.settings.extent;
+    let mood = session.settings.mood.name;
+    let amount = session.settings.expression.to_string();
 
     std::thread::spawn(move || {
         let chosen = rfd::FileDialog::new()
@@ -382,7 +412,7 @@ fn export_video(session: &mut Session) {
             .save_file();
         if let Some(output) = chosen {
             *report.lock().unwrap() = run_self(
-                &["render"],
+                &["render", "--mood", mood, "--expression", &amount],
                 &input,
                 &output,
                 extent,

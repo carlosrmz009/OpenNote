@@ -40,6 +40,35 @@ pub struct SceneArgs {
     /// What colour the right hand's notes are. Same forms as `--left-colour`.
     #[arg(long, value_name = "COLOUR")]
     pub right_colour: Option<String>,
+
+    /// How the piece is played: calm, warm, passionate or playful.
+    #[arg(long, value_enum, default_value_t = MoodArg::Warm)]
+    pub mood: MoodArg,
+
+    /// How much expression to add, from 0 (exactly as written) to 2. Shapes dynamics,
+    /// timing and articulation, and the hands with them.
+    #[arg(long, default_value_t = 1.0)]
+    pub expression: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum MoodArg {
+    Calm,
+    Warm,
+    Passionate,
+    Playful,
+}
+
+impl From<MoodArg> for on_score::expression::Mood {
+    fn from(mood: MoodArg) -> Self {
+        use on_score::expression::Mood;
+        match mood {
+            MoodArg::Calm => Mood::CALM,
+            MoodArg::Warm => Mood::WARM,
+            MoodArg::Passionate => Mood::PASSIONATE,
+            MoodArg::Playful => Mood::PLAYFUL,
+        }
+    }
 }
 
 const NAMED_COLOURS: [(&str, [f32; 3]); 13] = [
@@ -98,6 +127,8 @@ impl SceneArgs {
             soundfont: self.soundfont.clone(),
             note_colours,
             prior: model.prior()?,
+            mood: self.mood.into(),
+            expression: self.expression.clamp(0.0, 2.0),
         })
     }
 }

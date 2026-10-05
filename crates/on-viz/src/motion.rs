@@ -350,7 +350,7 @@ fn surface(midi: u8) -> (f32, f32) {
 
 pub struct Strikes {
     by_finger: [Vec<TimelineNote>; 5],
-    lift: f32,
+    pub lift: f32,
 }
 
 impl Strikes {

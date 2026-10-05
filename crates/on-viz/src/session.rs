@@ -18,6 +18,8 @@ pub struct SessionSettings {
     pub soundfont: Option<PathBuf>,
     pub note_colours: [bevy::color::Color; 2],
     pub prior: Option<Arc<NgramPrior>>,
+    pub mood: on_score::expression::Mood,
+    pub expression: f32,
 }
 
 impl SessionSettings {
@@ -30,6 +32,8 @@ impl SessionSettings {
             soundfont: None,
             note_colours: crate::render::NoteColours::default().0,
             prior: None,
+            mood: on_score::expression::Mood::default(),
+            expression: 1.0,
         }
     }
 }
@@ -47,8 +51,18 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
     let score = document.score();
     let prior = settings.prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior);
     let solution = on_fingering::finger_score_with_prior(score, &settings.fingering, prior);
+    let performed = on_score::expression::perform(score, &settings.mood, settings.expression);
     let mut timeline =
-        Timeline::build_for(score, &solution.fingerings, &settings.fingering.profile);
+        Timeline::build_for(&performed, &solution.fingerings, &settings.fingering.profile);
+    let scale = |of: f32| 1.0 + (of - 1.0) * settings.expression.min(2.0);
+    timeline.style = crate::timeline::MotionStyle {
+        lift: scale(settings.mood.lift),
+        weight: scale(settings.mood.weight),
+        phrase_ends: on_score::expression::phrases(&performed)
+            .iter()
+            .map(|(_, end)| performed.tempo.seconds_at(*end))
+            .collect(),
+    };
     if timeline.title.is_none() {
         timeline.title = path
             .file_stem()

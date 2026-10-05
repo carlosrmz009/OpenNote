@@ -90,7 +90,27 @@ pub struct Timeline {
     pub grips: [Vec<GripEvent>; 2],
     pub duration: f64,
     pub title: Option<String>,
+    pub style: MotionStyle,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotionStyle {
+    pub lift: f32,
+    pub weight: f32,
+    pub phrase_ends: Vec<f64>,
+}
+
+impl Default for MotionStyle {
+    fn default() -> Self {
+        Self { lift: 1.0, weight: 1.0, phrase_ends: Vec::new() }
+    }
+}
+
+const BREATH_LIFT_MM: (f32, f32) = (10.0, 15.0);
+
+const BREATH_DEG: f32 = 8.0;
+
+const BREATH_NEAR_SECONDS: f64 = 0.08;
 
 impl Timeline {
     pub fn audio_notes(&self) -> Vec<on_audio::Note> {
@@ -166,7 +186,7 @@ impl Timeline {
 
         let duration = notes.iter().map(|n| n.end).fold(0.0, f64::max);
 
-        Self { notes, grips, duration, title: score.title.clone() }
+        Self { notes, grips, duration, title: score.title.clone(), style: MotionStyle::default() }
     }
 
     pub fn animators(
@@ -179,7 +199,7 @@ impl Timeline {
             .map(|hand| {
                 let model = BiomechModel::new(profile.clone(), *hand, weights);
                 if smooth_motion() {
-                    HandAnimator::moving(*hand, model, self.hand_grips(*hand).to_vec(), &self.notes)
+                    HandAnimator::moving(*hand, model, self.hand_grips(*hand).to_vec(), &self.notes, &self.style)
                 } else {
                     HandAnimator::new(*hand, model, self.hand_grips(*hand).to_vec())
                 }
@@ -503,6 +523,7 @@ struct Motion {
     track: crate::motion::Track,
     strikes: crate::motion::Strikes,
     lag: crate::motion::Lag,
+    style: MotionStyle,
 }
 
 pub fn smooth_motion() -> bool {
@@ -539,7 +560,13 @@ impl HandAnimator {
         Self { hand, skeleton, events, poses, resting, motion: None }
     }
 
-    pub fn moving(hand: Hand, model: BiomechModel, events: Vec<GripEvent>, notes: &[TimelineNote]) -> Self {
+    pub fn moving(
+        hand: Hand,
+        model: BiomechModel,
+        events: Vec<GripEvent>,
+        notes: &[TimelineNote],
+        style: &MotionStyle,
+    ) -> Self {
         let twin = BiomechModel::new(model.skeleton().profile().clone(), hand, *model.weights());
         let mut animator = Self::new(hand, twin, events);
         if animator.events.is_empty() {
@@ -551,13 +578,14 @@ impl HandAnimator {
         }
         let mine: Vec<TimelineNote> = notes.iter().filter(|n| n.hand == hand).cloned().collect();
         let track = crate::motion::Track::new(&animator.events, &animator.poses);
-        let strikes = crate::motion::Strikes::new(&mine, &animator.events, &track.stays);
+        let mut strikes = crate::motion::Strikes::new(&mine, &animator.events, &track.stays);
+        strikes.lift = style.lift;
         let (from, until) = match (track.stays.first(), animator.events.last()) {
             (Some(first), Some(last)) => (first.arrive - 1.0, last.release + 2.0),
             _ => (0.0, 0.0),
         };
         let lag = crate::motion::Lag::new(&track, from, until);
-        animator.motion = Some(Motion { track, strikes, lag });
+        animator.motion = Some(Motion { track, strikes, lag, style: style.clone() });
         animator
     }
 
@@ -622,14 +650,24 @@ impl HandAnimator {
             if gap > 1e-3 && time > current.release && time < next.arrive {
                 let hardest = self.events[index + 1].struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
                 let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
-                let height = (gap as f32 * LIFT_RATE_MM * force).min(LIFT_MAX_MM) * crate::motion::hop_room(gap);
-                pose.q[dof::WRIST_Z] += height * crate::motion::bump((time - current.release) / gap);
+                let room = crate::motion::hop_room(gap);
+                let mut height = (gap as f32 * LIFT_RATE_MM * force).min(LIFT_MAX_MM) * room;
+                let shape = crate::motion::bump((time - current.release) / gap);
+                let ends = &motion.style.phrase_ends;
+                let at = ends.partition_point(|e| *e < current.release - BREATH_NEAR_SECONDS);
+                if ends.get(at).is_some_and(|e| *e <= current.release + BREATH_NEAR_SECONDS) {
+                    let breath = (BREATH_LIFT_MM.0 + BREATH_LIFT_MM.1 * (motion.style.lift - 1.0).max(0.0)) * room;
+                    height = height.max(breath * motion.style.lift.min(1.5));
+                    pose.q[dof::WRIST_FLEXION] += BREATH_DEG.to_radians() * motion.style.lift * room * shape;
+                }
+                pose.q[dof::WRIST_Z] += height * shape;
             }
             pose.q[dof::WRIST_Z] += self.breath(index, time);
         }
         let (weight, hardness) = crate::motion::sink(&self.events, time);
         if weight > 0.0 {
             let (depth, angle) = crate::motion::sink_depth(hardness);
+            let weight = weight * motion.style.weight;
             pose.q[dof::WRIST_Z] -= depth * weight;
             pose.q[dof::WRIST_FLEXION] -= angle * weight;
         }
@@ -1516,7 +1554,7 @@ mod tests {
     fn flowing(score: &Score, fingers: &[(u32, Finger)]) -> (Timeline, HandAnimator) {
         let timeline = Timeline::build(score, &pinned(fingers));
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
-        let animator = HandAnimator::moving(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec(), &timeline.notes);
+        let animator = HandAnimator::moving(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec(), &timeline.notes, &MotionStyle::default());
         (timeline, animator)
     }
 

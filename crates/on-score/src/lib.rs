@@ -1,3 +1,4 @@
+pub mod expression;
 pub mod hands;
 pub mod midi_io;
 pub mod musicxml_io;
