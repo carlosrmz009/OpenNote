@@ -1,6 +1,6 @@
 use glam::Vec3;
 use on_fingering::FingeringOptions;
-use on_hand::keyboard::{is_black, Keyboard, BLACK_KEY_HEIGHT, KEY_DIP};
+use on_hand::keyboard::{is_black, Keyboard, BLACK_KEY_DIP, BLACK_KEY_HEIGHT, KEY_DIP};
 use on_hand::skeleton::dof;
 use on_hand::{Hand, HandPose};
 use on_score::hands::HandAssignment;
@@ -19,8 +19,6 @@ const BREAK_MM: f32 = 1.0;
 const TWITCH_SECONDS: f64 = 0.08;
 
 const TWITCH_MM: f32 = 1.0;
-
-const BLACK_KEY_DIP: f32 = BLACK_KEY_HEIGHT - 3.0;
 
 fn raw() -> bool {
     std::env::var("ON_RAW").is_ok()

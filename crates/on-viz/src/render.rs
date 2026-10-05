@@ -70,7 +70,7 @@ const MAX_NOTE_LIGHTS: usize = 10;
 
 const KEY_GLOW: f32 = 5.2;
 
-const BLACK_KEY_DIP: f32 = BLACK_KEY_HEIGHT - 3.0;
+use on_hand::keyboard::BLACK_KEY_DIP;
 
 const BLACK_KEY_GLOW: f32 = 1.45;
 

@@ -33,6 +33,7 @@ pub const BLACK_KEY_LENGTH: f32 = 95.0;
 pub const BLACK_KEY_FRONT_Y: f32 = WHITE_KEY_LENGTH - BLACK_KEY_LENGTH;
 pub const BLACK_KEY_HEIGHT: f32 = 10.0;
 pub const KEY_DIP: f32 = 10.0;
+pub const BLACK_KEY_DIP: f32 = BLACK_KEY_HEIGHT - 3.0;
 
 const IS_BLACK_PC: [bool; 12] = [
     false, true, false, true, false, false, true, false, true, false, true, false,

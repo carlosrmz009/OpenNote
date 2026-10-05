@@ -11,7 +11,18 @@ pub const APPROACH_SECONDS: f64 = 0.28;
 const LIFT_RATE_MM: f32 = 120.0;
 const LIFT_MAX_MM: f32 = 28.0;
 
-const KEY_ATTACK_SECONDS: f64 = 0.035;
+const KEY_SECONDS: (f64, f64) = (0.110, 0.022);
+
+const KEY_BEFORE_SOUND: f64 = 0.85;
+
+const KEY_AFTER_SOUND: f64 = 0.15;
+
+const KEY_CONTACT_SPEED: f64 = 1.5;
+
+pub fn key_seconds(velocity: u8) -> f64 {
+    let loud = ((f64::from(velocity) - 20.0) / 107.0).clamp(0.0, 1.0);
+    KEY_SECONDS.0 * (KEY_SECONDS.1 / KEY_SECONDS.0).powf(loud)
+}
 
 const KEY_RELEASE_SECONDS: f64 = 0.06;
 
@@ -26,6 +37,8 @@ pub struct TimelineNote {
     pub finger: Option<Finger>,
     pub velocity: u8,
     pub restruck: Option<f64>,
+    pub key_moves: f64,
+    pub key_rises: f64,
 }
 
 impl TimelineNote {
@@ -35,6 +48,31 @@ impl TimelineNote {
 
     pub fn is_black(&self) -> bool {
         is_black(self.midi)
+    }
+
+    pub fn key_bottoms(&self) -> f64 {
+        self.start + KEY_AFTER_SOUND * key_seconds(self.velocity)
+    }
+
+    pub fn key_depth(&self, time: f64) -> f64 {
+        let going_down = |at: f64| {
+            let (from, bottom) = (self.key_moves, self.key_bottoms());
+            if at <= from {
+                return 0.0;
+            }
+            if at >= bottom {
+                return 1.0;
+            }
+            let span = bottom - from;
+            let s = (at - from) / span;
+            let push = KEY_CONTACT_SPEED * span / key_seconds(self.velocity);
+            push * (s * s * s - 2.0 * s * s + s) + (3.0 * s * s - 2.0 * s * s * s)
+        };
+        if time < self.key_rises {
+            return going_down(time);
+        }
+        let u = ((time - self.key_rises) / KEY_RELEASE_SECONDS).min(1.0);
+        going_down(self.key_rises) * (1.0 - u * u * (3.0 - 2.0 * u))
     }
 }
 
@@ -94,21 +132,38 @@ impl Timeline {
                     finger: by_note.get(&n.id).copied(),
                     velocity: n.velocity,
                     restruck: None,
+                    key_moves: n.onset_seconds,
+                    key_rises: score.release_seconds(n.id),
                 })
             })
             .collect();
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.midi.cmp(&b.midi)));
-
-        let mut next_on_key: BTreeMap<u8, f64> = BTreeMap::new();
-        for note in notes.iter_mut().rev() {
-            note.restruck = next_on_key.insert(note.midi, note.start);
-        }
 
         let spans = on_fingering::SpanModel::for_hand_size(profile.size()).table();
         let grips = Hand::ALL.map(|hand| {
             let model = BiomechModel::new(profile.clone(), hand, Default::default());
             Self::grips_for(&notes, hand, spans, &model)
         });
+        roll_in_time(&mut notes, &grips);
+        notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.midi.cmp(&b.midi)));
+        let mut next_on_key: BTreeMap<u8, f64> = BTreeMap::new();
+        for note in notes.iter_mut().rev() {
+            note.restruck = next_on_key.insert(note.midi, note.start);
+        }
+        let mut last_on_key: BTreeMap<u8, usize> = BTreeMap::new();
+        for i in 0..notes.len() {
+            let key = key_seconds(notes[i].velocity);
+            let earliest = notes[i].start - KEY_BEFORE_SOUND * key;
+            let mut after_last = f64::MIN;
+            if let Some(&j) = last_on_key.get(&notes[i].midi) {
+                let up = (earliest - 0.6 * KEY_RELEASE_SECONDS).min(notes[j].key_rises);
+                notes[j].key_rises = up.max(notes[j].key_bottoms());
+                after_last = notes[j].key_rises + 0.6 * KEY_RELEASE_SECONDS;
+            }
+            notes[i].key_moves = earliest.max(after_last).min(notes[i].start - KEY_AFTER_SOUND * key);
+            last_on_key.insert(notes[i].midi, i);
+        }
+
         let duration = notes.iter().map(|n| n.end).fold(0.0, f64::max);
 
         Self { notes, grips, duration, title: score.title.clone() }
@@ -255,21 +310,10 @@ impl Timeline {
     pub fn key_depression(&self, time: f64) -> KeyStates {
         let mut states = KeyStates::default();
         for note in &self.notes {
-            if time < note.start - 0.001 || time > note.end + KEY_RELEASE_SECONDS {
+            if time < note.key_moves || time > note.key_rises + KEY_RELEASE_SECONDS {
                 continue;
             }
-            let depth = if time < note.start {
-                0.0
-            } else if time < note.start + KEY_ATTACK_SECONDS {
-                let t = (time - note.start) / KEY_ATTACK_SECONDS;
-                let sharpness = 0.5 + note.velocity as f64 / 127.0;
-                (t * sharpness).min(1.0)
-            } else if time < note.end {
-                1.0
-            } else {
-                let t = (time - note.end) / KEY_RELEASE_SECONDS;
-                (1.0 - t).max(0.0)
-            };
+            let depth = note.key_depth(time);
             let slot = states.slot(note.midi);
             if depth as f32 >= states.depth[slot] {
                 states.depth[slot] = depth as f32;
@@ -324,6 +368,34 @@ impl KeyStates {
 }
 
 const ROLL_SECONDS: f64 = 0.05;
+
+fn roll_in_time(notes: &mut [TimelineNote], grips: &[Vec<GripEvent>; 2]) {
+    for (side, events) in grips.iter().enumerate() {
+        for event in events {
+            for (finger, _) in &event.struck {
+                let Some((midi, _)) = event.grip.keys.iter().find(|(_, f)| f == finger) else { continue };
+                let on_time = notes.iter().any(|n| {
+                    n.hand as usize == side && n.midi == *midi && (n.start - event.time).abs() < 1e-6
+                });
+                if on_time {
+                    continue;
+                }
+                let rolled = notes.iter_mut().filter(|n| {
+                    n.hand as usize == side
+                        && n.midi == *midi
+                        && n.finger == Some(*finger)
+                        && n.start < event.time - 1e-6
+                        && n.start > event.time - 4.0 * ROLL_SECONDS - 1e-6
+                });
+                if let Some(note) = rolled.max_by(|a, b| a.start.total_cmp(&b.start)) {
+                    note.start = event.time;
+                    note.end = note.end.max(event.time + 0.02);
+                    note.damped = note.damped.max(note.end);
+                }
+            }
+        }
+    }
+}
 
 fn grip_event(
     notes: &[(&TimelineNote, Finger)],
@@ -1387,6 +1459,9 @@ mod tests {
         for event in grips {
             assert!(event.release >= event.time, "a grip let go of before it is taken: {shown:?}");
         }
+        let mut starts: Vec<f64> = timeline.notes.iter().filter(|n| n.start >= 1.0).map(|n| n.start).collect();
+        starts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        assert!(starts.len() >= 3, "a rolled chord sounds as it is rolled: {starts:?}");
     }
 
     #[test]
@@ -1564,6 +1639,42 @@ mod tests {
                 "the hand rose to {height:.2} at {t:.2}s while the key was held"
             );
         }
+    }
+
+    #[test]
+    fn a_key_goes_down_ahead_of_its_sound_and_bottoms_just_after() {
+        for velocity in [10u8, 30, 63, 64, 90, 127] {
+            let q = TICKS_PER_QUARTER as i64;
+            let mut score = score_of(&[(60, q, q, Hand::Right)]);
+            score.notes[0].velocity = velocity;
+            let timeline = Timeline::build(&score, &fingered(&score));
+            let note = &timeline.notes[0];
+            assert!(note.key_moves < note.start, "the key moves before the hammer sounds");
+            let mut last = 0.0;
+            let mut at = note.key_moves;
+            while at < note.key_bottoms() {
+                let depth = note.key_depth(at);
+                assert!(depth >= last - 1e-9 && depth <= 1.0, "velocity {velocity}: {last} then {depth}");
+                last = depth;
+                at += 0.0005;
+            }
+            assert_eq!(note.key_depth(note.key_bottoms()), 1.0, "velocity {velocity}");
+            let near = note.key_bottoms() - 0.03 * (note.key_bottoms() - note.key_moves);
+            assert!(note.key_depth(near) > 0.99, "no jump at the bottom, velocity {velocity}");
+        }
+        assert!(key_seconds(110) < key_seconds(40), "a louder note goes down faster");
+    }
+
+    #[test]
+    fn a_repeated_key_comes_up_before_it_goes_down_again() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut score = score_of(&[(60, 0, q / 4, Hand::Right), (60, q / 4, q / 4, Hand::Right)]);
+        score.notes[1].velocity = 20;
+        let timeline = Timeline::build(&score, &fingered(&score));
+        let (first, second) = (&timeline.notes[0], &timeline.notes[1]);
+        assert!(second.key_moves > first.key_rises, "{} {}", second.key_moves, first.key_rises);
+        assert_eq!(first.end, second.start, "the sound is untouched");
+        assert!(timeline.key_depression(second.key_moves).depth_of(60) < 0.8);
     }
 
     #[test]
