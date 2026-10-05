@@ -15,7 +15,6 @@ pub struct Mood {
     pub loudness: f32,
     pub lift: f32,
     pub weight: f32,
-    pub softness: f32,
 }
 
 impl Mood {
@@ -31,7 +30,6 @@ impl Mood {
         loudness: -8.0,
         lift: 0.7,
         weight: 0.8,
-        softness: 1.3,
     };
     pub const WARM: Mood = Mood {
         name: "warm",
@@ -45,7 +43,6 @@ impl Mood {
         loudness: 0.0,
         lift: 1.0,
         weight: 1.0,
-        softness: 1.0,
     };
     pub const PASSIONATE: Mood = Mood {
         name: "passionate",
@@ -59,7 +56,6 @@ impl Mood {
         loudness: 8.0,
         lift: 1.4,
         weight: 1.5,
-        softness: 0.8,
     };
     pub const PLAYFUL: Mood = Mood {
         name: "playful",
@@ -73,7 +69,6 @@ impl Mood {
         loudness: 0.0,
         lift: 1.2,
         weight: 1.0,
-        softness: 1.0,
     };
 
     pub const ALL: [Mood; 4] = [Mood::CALM, Mood::WARM, Mood::PASSIONATE, Mood::PLAYFUL];
