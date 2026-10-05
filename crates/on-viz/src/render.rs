@@ -125,6 +125,7 @@ pub struct Performance {
     pub timeline: Timeline,
     pub layout: Layout,
     pub animators: Vec<HandAnimator>,
+    pub decisions: crate::timeline::Decisions,
     pub assets_root: std::path::PathBuf,
     pub hands_available: bool,
     pub soundfont: Option<std::path::PathBuf>,
@@ -143,7 +144,8 @@ impl Performance {
         let animators = timeline.animators(&profile, BiomechWeights::default());
 
         let torso = on_hand::torso::Torso::new(&profile, layout.centre_mm().0);
-        Self { timeline, layout, animators, assets_root, hands_available, soundfont, torso }
+        let decisions = crate::timeline::Decisions::new(&animators, timeline.duration + 2.0);
+        Self { timeline, layout, animators, decisions, assets_root, hands_available, soundfont, torso }
     }
 }
 
@@ -922,7 +924,13 @@ fn advance_transport(
                 Some(target) if (heard - target).abs() > 0.25 => {}
                 _ => {
                     transport.pending_seek = None;
-                    transport.position = heard;
+                    transport.position = follow(
+                        transport.position,
+                        heard,
+                        time.delta_secs_f64(),
+                        transport.speed,
+                        transport.playing,
+                    );
                 }
             }
         }
@@ -943,6 +951,18 @@ fn advance_transport(
             player.set_playing(looping);
         }
     }
+}
+
+const CLOCK_SNAP_SECONDS: f64 = 0.15;
+
+const CLOCK_SETTLE_SECONDS: f64 = 0.25;
+
+pub(crate) fn follow(position: f64, heard: f64, dt: f64, speed: f64, playing: bool) -> f64 {
+    let error = heard - position;
+    if !playing || error.abs() > CLOCK_SNAP_SECONDS {
+        return heard;
+    }
+    position + (dt * speed + error * (dt / CLOCK_SETTLE_SECONDS).min(1.0)).max(0.0)
 }
 
 fn handle_input(
@@ -1289,4 +1309,41 @@ pub fn run(
         .add_plugins(crate::ui::MenuPlugin)
         .run();
     Ok(())
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::follow;
+
+    fn play(buffer: f64, frames: usize) -> Vec<f64> {
+        let (frame, mut position, mut out) = (1.0 / 60.0, 0.0, Vec::new());
+        for n in 1..=frames {
+            let now = n as f64 * frame;
+            let heard = (now / buffer).floor() * buffer;
+            position = follow(position, heard, frame, 1.0, true);
+            out.push(position);
+        }
+        out
+    }
+
+    #[test]
+    fn the_clock_never_runs_backwards_between_audio_buffers() {
+        let track = play(0.0107, 600);
+        assert!(track.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    #[test]
+    fn the_clock_moves_evenly_and_stays_with_the_audio() {
+        let track = play(0.0107, 600);
+        let steps: Vec<f64> = track.windows(2).skip(60).map(|w| w[1] - w[0]).collect();
+        let (lo, hi) = steps.iter().fold((f64::MAX, f64::MIN), |(a, b), s| (a.min(*s), b.max(*s)));
+        assert!(hi - lo < 0.004, "frame steps vary from {lo} to {hi}");
+        assert!((track[599] - 10.0).abs() < 0.012, "{}", track[599]);
+    }
+
+    #[test]
+    fn a_jump_in_the_audio_is_followed_at_once() {
+        assert_eq!(follow(1.0, 5.0, 1.0 / 60.0, 1.0, true), 5.0);
+        assert_eq!(follow(1.0, 1.2, 1.0 / 60.0, 1.0, false), 1.2);
+    }
 }

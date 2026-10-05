@@ -419,14 +419,18 @@ pub fn pose_hands(
     mut transforms: Query<&mut Transform>,
 ) {
     let offset = Vec3::Y * KEYBOARD_Y_MM;
+    let poses = crate::timeline::pose_both_decided(
+        &performance.animators,
+        &performance.decisions,
+        transport.position,
+    );
 
     for (root, rig) in &rigs {
         if rig.digits.is_empty() {
             continue;
         }
         let animator = &performance.animators[rig.hand as usize];
-        let pose = crate::timeline::pose_both(&performance.animators, transport.position)
-            [rig.hand as usize];
+        let pose = poses[rig.hand as usize];
         let skeleton = animator.skeleton();
         let posture = skeleton.forward(&pose);
 

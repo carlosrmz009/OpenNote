@@ -649,12 +649,32 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
     height * (through * std::f32::consts::PI).sin()
 }
 
+pub struct Decisions(Vec<Apart>);
+
+impl Decisions {
+    pub fn new(animators: &[HandAnimator], until: f64) -> Self {
+        let steps = (until.max(0.0) / DECIDE_EVERY_SECONDS).ceil() as usize + 1;
+        Self((0..steps).map(|step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS)).collect())
+    }
+}
+
 pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
+    posed_apart(animators, time, |step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS))
+}
+
+pub fn pose_both_decided(animators: &[HandAnimator], decisions: &Decisions, time: f64) -> [HandPose; 2] {
+    posed_apart(animators, time, |step| match decisions.0.get(step as usize) {
+        Some(decided) => *decided,
+        None => apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS),
+    })
+}
+
+fn posed_apart(animators: &[HandAnimator], time: f64, decide: impl Fn(i64) -> Apart) -> [HandPose; 2] {
     let mut poses = [
         animators[Hand::Left as usize].pose_at(time),
         animators[Hand::Right as usize].pose_at(time),
     ];
-    let apart = apart_around(animators, time);
+    let apart = apart_around(time, decide);
     for (side, animator) in animators.iter().enumerate().take(2) {
         let (swing, lift) = (apart.swing[side], apart.lift[side]);
         if swing == 0.0 && lift == 0.0 {
@@ -689,7 +709,7 @@ struct Apart {
     swing: [f32; 2],
 }
 
-fn apart_around(animators: &[HandAnimator], time: f64) -> Apart {
+fn apart_around(time: f64, decide: impl Fn(i64) -> Apart) -> Apart {
     let first = ((time - EASE_SECONDS) / DECIDE_EVERY_SECONDS).ceil().max(0.0) as i64;
     let last = ((time + EASE_SECONDS) / DECIDE_EVERY_SECONDS).floor() as i64;
     let mut lift = [0.0f32; 2];
@@ -700,7 +720,7 @@ fn apart_around(animators: &[HandAnimator], time: f64) -> Apart {
         if reach <= 0.0 {
             continue;
         }
-        let decided = apart_at(animators, at);
+        let decided = decide(step);
         for side in 0..2 {
             lift[side] = lift[side].max(reach * decided.lift[side]);
             let turn = decided.swing[side];
@@ -1270,6 +1290,29 @@ mod tests {
                     finger.number()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn deciding_ahead_of_time_changes_nothing() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut entries = Vec::new();
+        let mut fingers = Vec::new();
+        for beat in 0..12 {
+            let (left, right, finger) =
+                if beat % 2 == 0 { (60, 62, Finger::Thumb) } else { (59, 64, Finger::Index) };
+            fingers.push((entries.len() as u32, finger));
+            entries.push((left, beat * q / 2, q / 4, Hand::Left));
+            fingers.push((entries.len() as u32, finger));
+            entries.push((right, beat * q / 2, q / 4, Hand::Right));
+        }
+        let score = score_of(&entries);
+        let timeline = Timeline::build(&score, &pinned(&fingers));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let decisions = Decisions::new(&animators, timeline.duration + 1.0);
+        for n in 0..200 {
+            let at = n as f64 * timeline.duration / 199.0 + 0.0013;
+            assert_eq!(pose_both(&animators, at), pose_both_decided(&animators, &decisions, at), "at {at}");
         }
     }
 
