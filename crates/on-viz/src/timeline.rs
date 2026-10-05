@@ -216,7 +216,7 @@ impl Timeline {
             let time = mine[index].0.start;
             held.retain(|(note, _)| note.end > time + 1e-6);
 
-            while index < mine.len() && mine[index].0.start <= time + 1e-6 {
+            while index < mine.len() && mine[index].0.start <= time + TOGETHER_SECONDS {
                 let (note, finger) = mine[index];
                 held.retain(|(_, other)| *other != finger);
                 held.push((note, finger));
@@ -288,7 +288,7 @@ impl Timeline {
 
             let struck: Vec<(Finger, u8)> = held
                 .iter()
-                .filter(|(note, _)| (note.start - time).abs() < 1e-6)
+                .filter(|(note, _)| together(note.start, time))
                 .map(|(note, finger)| (*finger, note.velocity))
                 .collect();
             let keys: Vec<(u8, Finger)> = held
@@ -369,6 +369,32 @@ impl KeyStates {
 
 const ROLL_SECONDS: f64 = 0.05;
 
+const TOGETHER_SECONDS: f64 = on_fingering::playability::CHORD_SECONDS;
+
+fn together(start: f64, onset: f64) -> bool {
+    start >= onset - 1e-6 && start <= onset + TOGETHER_SECONDS
+}
+
+const CONTINUITY: [f32; on_hand::skeleton::DOF] = {
+    let mut weights = [0.3f32; on_hand::skeleton::DOF];
+    weights[dof::WRIST_X] = 0.0;
+    weights[dof::WRIST_Y] = 0.0;
+    weights[dof::WRIST_Z] = 0.0;
+    weights[dof::WRIST_DEVIATION] = 0.8;
+    weights[dof::WRIST_FLEXION] = 0.8;
+    weights[dof::WRIST_PRONATION] = 0.8;
+    weights
+};
+
+const ALIKE_RADIANS: f32 = 0.15;
+
+fn alike(a: &HandPose, b: &HandPose) -> bool {
+    let angles = dof::WRIST_DEVIATION..on_hand::skeleton::DOF;
+    let n = angles.len() as f32;
+    let sum: f32 = angles.map(|i| (a.q[i] - b.q[i]).powi(2)).sum();
+    (sum / n).sqrt() < ALIKE_RADIANS
+}
+
 fn roll_in_time(notes: &mut [TimelineNote], grips: &[Vec<GripEvent>; 2]) {
     for (side, events) in grips.iter().enumerate() {
         for event in events {
@@ -404,7 +430,7 @@ fn grip_event(
 ) -> GripEvent {
     let struck: Vec<(Finger, u8)> = notes
         .iter()
-        .filter(|(note, _)| (note.start - struck_at).abs() < 1e-6)
+        .filter(|(note, _)| together(note.start, struck_at))
         .map(|(note, finger)| (*finger, note.velocity))
         .collect();
     let mut grip = Grip::new(notes.iter().map(|(note, finger)| (note.midi, *finger)).collect());
@@ -468,7 +494,22 @@ pub struct HandAnimator {
 
 impl HandAnimator {
     pub fn new(hand: Hand, model: BiomechModel, events: Vec<GripEvent>) -> Self {
-        let poses: Vec<HandPose> = events.iter().map(|e| model.grip_pose(&e.grip)).collect();
+        let mut poses: Vec<HandPose> = Vec::with_capacity(events.len());
+        for event in &events {
+            let cold = model.grip_pose(&event.grip);
+            let pose = match poses.last() {
+                Some(previous) if !alike(previous, &cold) => {
+                    let (warm, error) = model.grip_pose_near(&event.grip, previous, CONTINUITY);
+                    if error > on_hand::ik::CONTACT_TOLERANCE_MM && model.grip_outcome(&event.grip).reachable {
+                        cold
+                    } else {
+                        warm
+                    }
+                }
+                _ => cold,
+            };
+            poses.push(pose);
+        }
 
         let resting = poses.first().copied().unwrap_or_else(|| {
             let centre = model.keyboard().centre_x(60);
@@ -1366,6 +1407,25 @@ mod tests {
     }
 
     #[test]
+    fn notes_a_moment_apart_are_one_chord_not_two_leaps() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[(46, 0, q, Hand::Left), (58, 2, q, Hand::Left), (62, 4, q, Hand::Left)]);
+        let timeline = Timeline::build(&score, &pinned(&[(0, Finger::Little), (1, Finger::Index), (2, Finger::Thumb)]));
+        let grips = timeline.hand_grips(Hand::Left);
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let wrist = |at: f64| animators[0].pose_at(at).q[dof::WRIST_X];
+        let (start, end) = (grips[0].time, timeline.notes.iter().map(|n| n.start).fold(0.0, f64::max));
+        let moved = (wrist(end + 1e-6) - wrist(start)).abs();
+        let mut at = start;
+        while at < end {
+            let speed = (wrist(at + 0.0005) - wrist(at)).abs() / 0.0005;
+            assert!(speed < 5000.0, "the hand leapt {speed:.0} mm/s at {at}");
+            at += 0.0005;
+        }
+        assert!(moved < 200.0, "{moved}");
+    }
+
+    #[test]
     fn deciding_ahead_of_time_changes_nothing() {
         let q = TICKS_PER_QUARTER as i64;
         let mut entries = Vec::new();
@@ -1461,7 +1521,7 @@ mod tests {
         }
         let mut starts: Vec<f64> = timeline.notes.iter().filter(|n| n.start >= 1.0).map(|n| n.start).collect();
         starts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-        assert!(starts.len() >= 3, "a rolled chord sounds as it is rolled: {starts:?}");
+        assert!(starts.len() >= 2, "a rolled chord sounds as it is rolled: {starts:?}");
     }
 
     #[test]

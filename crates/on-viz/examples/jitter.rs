@@ -233,6 +233,13 @@ fn main() -> anyhow::Result<()> {
             println!("      accel  {}", percentiles(accel));
             println!("      jerk   {}", percentiles(jerk));
         }
+        let wrist = &tracks[side][0];
+        let fastest = (1..wrist.len()).max_by(|a, b| {
+            wrist[*a].distance(wrist[*a - 1]).total_cmp(&wrist[*b].distance(wrist[*b - 1]))
+        });
+        if let Some(at) = fastest {
+            println!("    {hand:?} fastest wrist at {:.3} s", at as f64 * fine);
+        }
         let joint_speed = |index: usize| {
             angles[side].windows(2).map(|w| (w[1][index] - w[0][index]).abs() / fine as f32).fold(0.0f32, f32::max)
         };
@@ -245,6 +252,19 @@ fn main() -> anyhow::Result<()> {
     }
     println!("  fingertip to its pressed key (mm): {}", percentiles(contact).replace("p", " p"));
 
+    let mut shown = 0;
+    let mut last = f64::MIN;
+    for (time, hand, moved) in &jumps {
+        if time - last > 0.25 {
+            if shown == 12 {
+                println!("    ... and more");
+                break;
+            }
+            println!("    {time:7.2}s {hand:?} a joint moved {moved:6.1} mm in one frame ({:.0} mm/s)", f64::from(*moved) * FPS);
+            shown += 1;
+        }
+        last = *time;
+    }
     let mut shown = 0;
     let mut last = f64::MIN;
     for (time, hand, jolt) in &jolts {

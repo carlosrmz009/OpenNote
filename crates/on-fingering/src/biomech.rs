@@ -250,6 +250,13 @@ impl BiomechModel {
         pose
     }
 
+    pub fn grip_pose_near(&self, grip: &Grip, near: &HandPose, weights: [f32; on_hand::skeleton::DOF]) -> (HandPose, f32) {
+        let targets = self.targets(grip);
+        let cold = self.grip_pose(grip);
+        let outcome = reach(&self.skeleton, &ReachRequest::new(&targets).from_pose(cold).near(*near, weights));
+        (outcome.pose, outcome.max_error_mm)
+    }
+
     pub fn grip_cost(&self, grip: &Grip) -> f32 {
         self.grip_outcome(grip).cost(&self.weights)
     }

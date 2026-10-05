@@ -20,6 +20,7 @@ pub struct ReachRequest<'a> {
     pub max_iterations: usize,
     pub idle_clearance: f32,
     pub clearance_weight: f32,
+    pub continuity: Option<(HandPose, [f32; DOF])>,
 }
 
 impl<'a> ReachRequest<'a> {
@@ -32,7 +33,13 @@ impl<'a> ReachRequest<'a> {
             max_iterations: 60,
             idle_clearance: IDLE_CLEARANCE_MM,
             clearance_weight: 6.0,
+            continuity: None,
         }
+    }
+
+    pub fn near(mut self, pose: HandPose, weights: [f32; DOF]) -> Self {
+        self.continuity = Some((pose, weights));
+        self
     }
 
     pub fn from_pose(mut self, seed: HandPose) -> Self {
@@ -113,6 +120,9 @@ pub fn reach(sk: &Skeleton, req: &ReachRequest<'_>) -> ReachOutcome {
 }
 
 fn seeds(sk: &Skeleton, req: &ReachRequest<'_>) -> Vec<HandPose> {
+    if let Some((near, _)) = req.continuity {
+        return vec![req.seed.unwrap_or_else(|| seed_pose(sk, req.targets)), near];
+    }
     let base = req.seed.unwrap_or_else(|| seed_pose(sk, req.targets));
     let mut out = vec![base];
 
@@ -275,6 +285,14 @@ fn build_rows(
             grad: r.grad.iter().copied().filter(|(_, g)| *g != 0.0).collect(),
         });
     }
+    if let Some((near, weights)) = &req.continuity {
+        for i in 0..DOF {
+            if weights[i] > 0.0 {
+                let k = weights[i].sqrt();
+                rows.push(Row { residual: k * (posture.pose.q[i] - near.q[i]), grad: vec![(i, k)] });
+            }
+        }
+    }
 }
 
 fn objective(sk: &Skeleton, posture: &Posture, req: &ReachRequest<'_>) -> f32 {
@@ -288,6 +306,12 @@ fn objective(sk: &Skeleton, posture: &Posture, req: &ReachRequest<'_>) -> f32 {
         }
         let shortfall = (req.idle_clearance - posture.tip(finger).z).max(0.0);
         total += req.clearance_weight * shortfall * shortfall;
+    }
+    if let Some((near, weights)) = &req.continuity {
+        for i in 0..DOF {
+            let d = posture.pose.q[i] - near.q[i];
+            total += weights[i] * d * d;
+        }
     }
     total + strain_breakdown(sk, posture, &req.weights).total()
 }
