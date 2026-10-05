@@ -373,6 +373,8 @@ impl KeyStates {
 
 const ROLL_SECONDS: f64 = 0.05;
 
+const HOLD_RAMP_SECONDS: f64 = 0.15;
+
 const TOGETHER_SECONDS: f64 = on_fingering::playability::CHORD_SECONDS;
 
 fn together(start: f64, onset: f64) -> bool {
@@ -500,10 +502,11 @@ pub struct HandAnimator {
 struct Motion {
     track: crate::motion::Track,
     strikes: crate::motion::Strikes,
+    lag: crate::motion::Lag,
 }
 
 pub fn smooth_motion() -> bool {
-    std::env::var("ON_MOTION").is_ok_and(|v| v == "v2")
+    std::env::var("ON_MOTION").map_or(true, |v| v != "v1")
 }
 
 impl HandAnimator {
@@ -539,6 +542,9 @@ impl HandAnimator {
     pub fn moving(hand: Hand, model: BiomechModel, events: Vec<GripEvent>, notes: &[TimelineNote]) -> Self {
         let twin = BiomechModel::new(model.skeleton().profile().clone(), hand, *model.weights());
         let mut animator = Self::new(hand, twin, events);
+        if animator.events.is_empty() {
+            return animator;
+        }
         animator.poses = crate::motion::smooth_wrists(&animator.events, &animator.poses, &model);
         if let Some(first) = animator.poses.first() {
             animator.resting = *first;
@@ -546,7 +552,12 @@ impl HandAnimator {
         let mine: Vec<TimelineNote> = notes.iter().filter(|n| n.hand == hand).cloned().collect();
         let track = crate::motion::Track::new(&animator.events, &animator.poses);
         let strikes = crate::motion::Strikes::new(&mine, &animator.events, &track.stays);
-        animator.motion = Some(Motion { track, strikes });
+        let (from, until) = match (track.stays.first(), animator.events.last()) {
+            (Some(first), Some(last)) => (first.arrive - 1.0, last.release + 2.0),
+            _ => (0.0, 0.0),
+        };
+        let lag = crate::motion::Lag::new(&track, from, until);
+        animator.motion = Some(Motion { track, strikes, lag });
         animator
     }
 
@@ -598,6 +609,12 @@ impl HandAnimator {
             return self.resting;
         }
         let mut pose = motion.track.at(time);
+        let lag = motion.lag.at(time);
+        for (k, offset) in lag.iter().enumerate() {
+            let index = dof::THUMB_CMC_FLEX + k;
+            let idle = 1.0 - motion.strikes.engaged(crate::motion::digit_of(index), time);
+            pose.q[index] += offset * idle;
+        }
         let stays = &motion.track.stays;
         let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
         if let (Some(current), Some(next)) = (self.events.get(index), stays.get(index + 1)) {
@@ -785,6 +802,21 @@ impl HandAnimator {
     }
 
     pub fn holding(&self, time: f64, ramp: f64) -> f32 {
+        if let Some(motion) = &self.motion {
+            let stays = &motion.track.stays;
+            let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
+            let ramp = ramp.max(HOLD_RAMP_SECONDS);
+            let mut held = 0.0f32;
+            for k in index.saturating_sub(1)..(index + 2).min(stays.len()) {
+                if self.events[k].grip.keys.is_empty() {
+                    continue;
+                }
+                let until = stays[k].leave.max(self.events[k].release.min(stays.get(k + 1).map_or(f64::MAX, |s| s.arrive)));
+                let inside = (time - stays[k].arrive).min(until - time);
+                held = held.max(crate::motion::minimum_jerk((inside + ramp) / ramp) as f32);
+            }
+            return held;
+        }
         let index = self.current_index(time).unwrap_or(0);
         let mut held = 0.0f32;
         for event in &self.events[index.saturating_sub(1)..(index + 2).min(self.events.len())] {

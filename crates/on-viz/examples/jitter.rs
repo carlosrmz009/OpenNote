@@ -50,9 +50,9 @@ fn percentiles(mut values: Vec<f32>) -> String {
     format!("p50 {:8.0}  p95 {:8.0}  p99 {:8.0}  max {:8.0}", at(0.5), at(0.95), at(0.99), values[values.len() - 1])
 }
 
-fn twitches(track: &[Vec3]) -> usize {
+fn twitches(track: &[Vec3]) -> Vec<usize> {
     let window = (TWITCH_SECONDS * FINE).round() as usize;
-    let mut count = 0;
+    let mut found = Vec::new();
     for axis in 0..3 {
         let x: Vec<f32> = track.iter().map(|p| p[axis]).collect();
         let mut turns: Vec<usize> = Vec::new();
@@ -65,11 +65,12 @@ fn twitches(track: &[Vec3]) -> usize {
         for pair in turns.windows(3) {
             let (p, q, r) = (pair[0], pair[1], pair[2]);
             if r - p <= window && (x[q] - x[p]).abs() > TWITCH_MM && (x[r] - x[q]).abs() > TWITCH_MM {
-                count += 1;
+                found.push(q);
             }
         }
     }
-    count
+    found.sort_unstable();
+    found
 }
 
 fn main() -> anyhow::Result<()> {
@@ -222,6 +223,7 @@ fn main() -> anyhow::Result<()> {
         for (label, range) in [("wrist", 0..1), ("tips", 1..6)] {
             let (mut speed, mut accel, mut jerk) = (Vec::new(), Vec::new(), Vec::new());
             let mut twitch = 0;
+            let mut when: Vec<usize> = Vec::new();
             for k in range {
                 let p = &tracks[side][k];
                 for i in 1..p.len().saturating_sub(2) {
@@ -229,9 +231,17 @@ fn main() -> anyhow::Result<()> {
                     accel.push(((p[i + 1] - 2.0 * p[i] + p[i - 1]) / (fine * fine) as f32).length());
                     jerk.push(((p[i + 2] - 3.0 * p[i + 1] + 3.0 * p[i] - p[i - 1]) / (fine * fine * fine) as f32).length());
                 }
-                twitch += twitches(p);
+                let found = twitches(p);
+                twitch += found.len();
+                when.extend(found);
             }
             println!("    {hand:?} {label:5} twitches {twitch:5}");
+            if std::env::var("ON_WHEN").is_ok() && label == "wrist" {
+                when.sort_unstable();
+                when.dedup();
+                let times: Vec<String> = when.iter().take(12).map(|i| format!("{:.3}", *i as f64 * fine)).collect();
+                println!("      at {}", times.join(" "));
+            }
             println!("      speed  {}", percentiles(speed));
             println!("      accel  {}", percentiles(accel));
             println!("      jerk   {}", percentiles(jerk));

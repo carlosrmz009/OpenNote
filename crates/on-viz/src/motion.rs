@@ -188,6 +188,70 @@ impl Track {
     }
 }
 
+const LAG_RATE: f64 = 240.0;
+
+const LAG_HZ: f64 = 7.0;
+
+const LAG_DAMPING: f64 = 0.55;
+
+const FIRST_DIGIT: usize = dof::THUMB_CMC_FLEX;
+
+const DIGITS: usize = DOF - FIRST_DIGIT;
+
+pub struct Lag {
+    start: f64,
+    rows: Vec<[f32; DIGITS]>,
+}
+
+impl Lag {
+    pub fn new(track: &Track, from: f64, until: f64) -> Self {
+        let dt = 1.0 / LAG_RATE;
+        let omega = std::f64::consts::TAU * LAG_HZ;
+        let samples = ((until - from).max(0.0) * LAG_RATE).ceil() as usize + 2;
+        let first = track.at(from);
+        let mut x: [f64; DIGITS] = std::array::from_fn(|i| f64::from(first.q[FIRST_DIGIT + i]));
+        let mut v = [0.0f64; DIGITS];
+        let mut rows = Vec::with_capacity(samples);
+        for n in 0..samples {
+            let target = track.at(from + n as f64 * dt);
+            let mut row = [0.0f32; DIGITS];
+            for i in 0..DIGITS {
+                let goal = f64::from(target.q[FIRST_DIGIT + i]);
+                v[i] += dt * (omega * omega * (goal - x[i]) - 2.0 * LAG_DAMPING * omega * v[i]);
+                x[i] += dt * v[i];
+                row[i] = (x[i] - goal) as f32;
+            }
+            rows.push(row);
+        }
+        Self { start: from, rows }
+    }
+
+    pub fn at(&self, time: f64) -> [f32; DIGITS] {
+        let u = (time - self.start) * LAG_RATE;
+        if u <= 0.0 || self.rows.len() < 4 {
+            return [0.0; DIGITS];
+        }
+        let i = u.floor() as usize;
+        if i + 2 >= self.rows.len() {
+            return [0.0; DIGITS];
+        }
+        let f = (u - u.floor()) as f32;
+        let p = |k: usize| self.rows[k.min(self.rows.len() - 1)];
+        let (a, b, c, d) = (p(i.saturating_sub(1)), p(i), p(i + 1), p(i + 2));
+        std::array::from_fn(|j| {
+            let (a, b, c, d) = (a[j], b[j], c[j], d[j]);
+            b + 0.5 * f * (c - a + f * (2.0 * a - 5.0 * b + 4.0 * c - d + f * (3.0 * (b - c) + d - a)))
+        })
+    }
+}
+
+pub fn digit_of(index: usize) -> Finger {
+    match index {
+        i if i < dof::FINGER_BASE => Finger::Thumb,
+        i => Finger::ALL[1 + (i - dof::FINGER_BASE) / 3],
+    }
+}
+
 pub fn smooth_wrists(events: &[GripEvent], poses: &[HandPose], model: &BiomechModel) -> Vec<HandPose> {
     let reach = 3.0 * SMOOTH_SIGMA;
     let times: Vec<f64> = events.iter().map(arrival).collect();
@@ -361,6 +425,10 @@ impl Strikes {
             Some((z, w, f)) => (z + taking * (striking.0 - z), w.max(taking), f + taking * (floor - f)),
             _ => striking,
         })
+    }
+
+    pub fn engaged(&self, finger: Finger, time: f64) -> f32 {
+        self.height(finger, time).map_or(0.0, |(_, w, _)| w)
     }
 
     pub fn press(&self, skeleton: &Skeleton, pose: &mut HandPose, time: f64) {
