@@ -1,0 +1,11 @@
+[package]
+name = "on-hand"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Biomechanical model of the pianist's hand: keyboard geometry, kinematics, IK and a strain functional."
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "on-score"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Score intermediate representation with MusicXML and MIDI import/export."
+
+[dependencies]
+on-hand.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+midly.workspace = true
+musicxml.workspace = true
+tracing.workspace = true
