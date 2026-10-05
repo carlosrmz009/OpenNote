@@ -18,6 +18,63 @@ const DEFAULT_VELOCITY: u8 = 72;
 
 const FORTE_VELOCITY: f64 = 90.0;
 
+fn marked_velocity(mark: &musicxml::elements::DynamicsType) -> Option<(u8, u8)> {
+    use musicxml::elements::DynamicsType as D;
+    Some(match mark {
+        D::Pppppp(_) | D::Ppppp(_) | D::Pppp(_) => (20, 0),
+        D::Ppp(_) => (30, 0),
+        D::Pp(_) => (40, 0),
+        D::P(_) => (52, 0),
+        D::Mp(_) => (64, 0),
+        D::Mf(_) => (76, 0),
+        D::F(_) => (90, 0),
+        D::Ff(_) => (104, 0),
+        D::Fff(_) | D::Ffff(_) | D::Fffff(_) | D::Ffffff(_) => (116, 0),
+        D::Fp(_) => (52, crate::art::ACCENT),
+        D::Sf(_) | D::Sfz(_) | D::Sffz(_) | D::Fz(_) | D::Rf(_) | D::Rfz(_) => (0, crate::art::STRONG_ACCENT),
+        D::Sfp(_) | D::Sfpp(_) => (52, crate::art::STRONG_ACCENT),
+        _ => return None,
+    })
+}
+
+fn note_marks(note: &musicxml::elements::Note) -> (u8, Vec<i8>) {
+    use musicxml::elements::ArticulationsType as A;
+    let mut flags = 0u8;
+    let mut slurs = Vec::new();
+    for notations in &note.content.notations {
+        for entry in &notations.content.notations {
+            match entry {
+                NotationContentTypes::Articulations(list) => {
+                    for a in &list.content {
+                        flags |= match a {
+                            A::Staccato(_) | A::Spiccato(_) => crate::art::STACCATO,
+                            A::Staccatissimo(_) => crate::art::STACCATISSIMO,
+                            A::Tenuto(_) => crate::art::TENUTO,
+                            A::DetachedLegato(_) => crate::art::TENUTO | crate::art::STACCATO,
+                            A::Accent(_) | A::Stress(_) => crate::art::ACCENT,
+                            A::StrongAccent(_) => crate::art::STRONG_ACCENT,
+                            _ => 0,
+                        };
+                    }
+                }
+                NotationContentTypes::Fermata(_) => flags |= crate::art::FERMATA,
+                NotationContentTypes::Dynamics(dynamics) => {
+                    for mark in &dynamics.content {
+                        flags |= marked_velocity(mark).map_or(0, |(_, f)| f);
+                    }
+                }
+                NotationContentTypes::Slur(slur) => slurs.push(match slur.attributes.r#type {
+                    musicxml::datatypes::StartStopContinue::Start => 1,
+                    musicxml::datatypes::StartStopContinue::Stop => -1,
+                    musicxml::datatypes::StartStopContinue::Continue => 0,
+                }),
+                _ => {}
+            }
+        }
+    }
+    (flags, slurs)
+}
+
 pub struct MusicXmlDocument {
     document: ScorePartwise,
     score: Score,
@@ -201,11 +258,16 @@ fn read_part(
     let mut pressed: Option<Ticks> = None;
     let mut measure_start: Ticks = 0;
     let mut last_onset: Ticks = 0;
+    let mut slurs: Vec<Ticks> = Vec::new();
+    let mut wedge: Option<(Ticks, i8)> = None;
 
     for (measure_index, element) in part.content.iter().enumerate() {
         let PartElement::Measure(measure) = element else {
             continue;
         };
+        if part_index == 0 {
+            score.marks.measures.push(measure_start);
+        }
         let mut cursor = measure_start;
         let mut measure_end = measure_start;
 
@@ -229,6 +291,37 @@ fn read_part(
                     read_sound(sound, cursor, score, &mut velocity, &mut pressed);
                 }
                 MeasureElement::Direction(direction) => {
+                    for kind in &direction.content.direction_type {
+                        use musicxml::elements::DirectionTypeContents as T;
+                        match &kind.content {
+                            T::Dynamics(list) => {
+                                for mark in list.iter().flat_map(|d| d.content.iter()) {
+                                    if let Some((level, _)) = marked_velocity(mark) {
+                                        if level > 0 {
+                                            velocity = level;
+                                            score.marks.dynamics.push((cursor, level));
+                                        }
+                                    }
+                                }
+                            }
+                            T::Wedge(w) => {
+                                use musicxml::datatypes::WedgeType as W;
+                                match w.attributes.r#type {
+                                    W::Crescendo => wedge = Some((cursor, 1)),
+                                    W::Diminuendo => wedge = Some((cursor, -1)),
+                                    W::Stop => {
+                                        if let Some((from, way)) = wedge.take() {
+                                            if cursor > from {
+                                                score.marks.hairpins.push((from, cursor, way));
+                                            }
+                                        }
+                                    }
+                                    W::Continue => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(sound) = &direction.content.sound {
                         read_sound(sound, cursor, score, &mut velocity, &mut pressed);
                     }
@@ -247,8 +340,23 @@ fn read_part(
                             cursor += parsed.consumed;
                             measure_end = measure_end.max(cursor);
                         }
-                        if let Some(note) = parsed.note {
-                            score.notes.push(note);
+                        if let Some(parsed_note) = parsed.note {
+                            let (flags, slur_marks) = note_marks(note);
+                            if flags != 0 {
+                                score.marks.articulations.insert(source, flags);
+                            }
+                            for mark in slur_marks {
+                                if mark > 0 {
+                                    slurs.push(parsed_note.onset);
+                                } else if mark < 0 {
+                                    if let Some(from) = slurs.pop() {
+                                        if parsed_note.onset > from {
+                                            score.marks.slurs.push((from, parsed_note.onset));
+                                        }
+                                    }
+                                }
+                            }
+                            score.notes.push(parsed_note);
                         }
                     }
                 }

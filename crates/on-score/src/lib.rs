@@ -35,7 +35,7 @@ impl TieState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceRef {
     MusicXml {
         part: usize,
@@ -91,6 +91,31 @@ pub struct Score {
     pub notes: Vec<Note>,
     pub tempo: TempoMap,
     pub pedal: Vec<(Ticks, Ticks)>,
+    pub marks: Marks,
+}
+
+pub mod art {
+    pub const STACCATO: u8 = 1;
+    pub const STACCATISSIMO: u8 = 2;
+    pub const TENUTO: u8 = 4;
+    pub const ACCENT: u8 = 8;
+    pub const STRONG_ACCENT: u8 = 16;
+    pub const FERMATA: u8 = 32;
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Marks {
+    pub dynamics: Vec<(Ticks, u8)>,
+    pub hairpins: Vec<(Ticks, Ticks, i8)>,
+    pub slurs: Vec<(Ticks, Ticks)>,
+    pub articulations: std::collections::HashMap<SourceRef, u8>,
+    pub measures: Vec<Ticks>,
+}
+
+impl Marks {
+    pub fn articulation(&self, source: SourceRef) -> u8 {
+        self.articulations.get(&source).copied().unwrap_or(0)
+    }
 }
 
 impl Score {
