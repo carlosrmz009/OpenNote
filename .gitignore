@@ -66,3 +66,4 @@ __pycache__/
 /corpus-classical-train/
 /bench_refresh_urls.txt
 /models/*.jsonl
+/models/*.onm
