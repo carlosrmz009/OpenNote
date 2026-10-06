@@ -8,7 +8,7 @@ fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let model = std::env::var("OPENNOTE_MODEL")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| manifest.join("../../models/helios-beta1.json"));
+        .unwrap_or_else(|_| manifest.join("../../models/helios-beta1.5.json"));
     println!("cargo:rerun-if-env-changed=OPENNOTE_MODEL");
     let bytes = match std::fs::read(&model) {
         Ok(bytes) => {
