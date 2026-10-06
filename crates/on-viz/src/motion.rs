@@ -54,6 +54,8 @@ const CURL_STIFFNESS: f32 = 4.0;
 
 const SPREAD_STIFFNESS: f32 = 2.0;
 
+const MCP_LEAST_DEG: f32 = -5.0;
+
 const REACH_STEP: f32 = 0.35;
 
 const REACH_PASSES: usize = 4;
@@ -622,6 +624,9 @@ impl Strikes {
                 for j in digit_dofs(*finger) {
                     let room = if is_spread(*j) { SPREAD_ROOM } else { BEND_ROOM };
                     pose.q[*j] = pose.q[*j].clamp(before.q[*j] - room, before.q[*j] + room);
+                    if is_knuckle(*j) {
+                        pose.q[*j] = pose.q[*j].max(MCP_LEAST_DEG.to_radians().min(before.q[*j]));
+                    }
                 }
             }
             skeleton.clamp(pose);
@@ -709,6 +714,10 @@ fn stiffness(j: usize) -> f32 {
         j if j >= dof::FINGER_BASE && (j - dof::FINGER_BASE) % 3 == dof::PIP_FLEX => CURL_STIFFNESS,
         _ => 1.0,
     }
+}
+
+fn is_knuckle(j: usize) -> bool {
+    j >= dof::FINGER_BASE && (j - dof::FINGER_BASE) % 3 == dof::MCP_FLEX
 }
 
 fn is_spread(j: usize) -> bool {

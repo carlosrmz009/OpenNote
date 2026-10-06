@@ -503,6 +503,30 @@ fn main() -> anyhow::Result<()> {
                 thumb_out += 1;
             }
         }
+        let per: Vec<String> = (0..4)
+            .map(|slot| {
+                let count = angles[side]
+                    .iter()
+                    .filter(|q| q[dof::finger(slot) + dof::MCP_FLEX] < -0.2 && q[dof::finger(slot) + dof::PIP_FLEX] > 1.0)
+                    .count();
+                format!("{}:{:.1}%", slot + 2, 100.0 * count as f32 / angles[side].len().max(1) as f32)
+            })
+            .collect();
+        if std::env::var("ON_HOOKS").is_ok() {
+            let mut last = -1.0f64;
+            let mut shown = 0;
+            for (i, q) in angles[side].iter().enumerate() {
+                let t = i as f64 * fine;
+                let hooked: Vec<usize> = (0..4).filter(|slot| q[dof::finger(*slot) + dof::MCP_FLEX] < -0.2 && q[dof::finger(*slot) + dof::PIP_FLEX] > 1.0).collect();
+                if !hooked.is_empty() && t - last > 0.5 && shown < 8 {
+                    println!("    hook {t:.3}s side {side} fingers {:?}", hooked.iter().map(|s| s + 2).collect::<Vec<_>>());
+                    shown += 1;
+                    last = t;
+                }
+            }
+        }
+        let thumb_hook = angles[side].iter().filter(|q| q[dof::THUMB_MCP_FLEX] < -0.25 && q[dof::THUMB_IP_FLEX] > 0.8).count();
+        println!("  side {side} hooks by finger: 1:{:.1}% {}", 100.0 * thumb_hook as f32 / angles[side].len().max(1) as f32, per.join(" "));
         let n = angles[side].len().max(1) as f32 / 100.0;
         println!(
             "  side {side} posture: hooked finger {:.1}%  flat hand {:.1}%  thumb out {:.1}%",
