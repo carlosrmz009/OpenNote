@@ -50,6 +50,35 @@ fn percentiles(mut values: Vec<f32>) -> String {
     format!("p50 {:8.0}  p95 {:8.0}  p99 {:8.0}  max {:8.0}", at(0.5), at(0.95), at(0.99), values[values.len() - 1])
 }
 
+const STRAY_MM: f32 = 1.5;
+
+fn key_under(keyboard: &Keyboard, tip: Vec3) -> Option<u8> {
+    use on_hand::keyboard::{BLACK_KEY_FRONT_Y, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
+    if tip.y < 0.0 || tip.y > WHITE_KEY_LENGTH {
+        return None;
+    }
+    let (mut near, mut high) = (MIDI_LOWEST, MIDI_HIGHEST);
+    while near < high {
+        let middle = near + (high - near) / 2;
+        if keyboard.centre_x(middle) < tip.x {
+            near = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let around = near.saturating_sub(2).max(MIDI_LOWEST)..=near.saturating_add(2).min(MIDI_HIGHEST);
+    let inside = |midi: &u8| {
+        let (x0, x1, y0, y1) = keyboard.footprint(*midi);
+        tip.x >= x0 && tip.x <= x1 && tip.y >= y0 && tip.y <= y1
+    };
+    if tip.y > BLACK_KEY_FRONT_Y {
+        if let Some(black) = around.clone().filter(|m| is_black(*m)).find(inside) {
+            return Some(black);
+        }
+    }
+    around.filter(|m| !is_black(*m)).find(inside)
+}
+
 fn twitches(track: &[Vec3]) -> Vec<usize> {
     let window = (TWITCH_SECONDS * FINE).round() as usize;
     let mut found = Vec::new();
@@ -132,6 +161,17 @@ fn main() -> anyhow::Result<()> {
         }
         let lean = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
         println!("  per frame: hands {each:.2} ms, lean {lean:.2} ms");
+        return Ok(());
+    }
+    if let Ok(at) = std::env::var("ON_ANGLES") {
+        let at: f64 = at.parse()?;
+        let posed = poses(&animators, at);
+        for side in 0..2 {
+            let raw = animators[side].unpressed(at);
+            let deg = |q: &HandPose| -> Vec<String> { (6..on_hand::skeleton::DOF).map(|i| format!("{:.0}", q.q[i].to_degrees())).collect() };
+            println!("{:?} shown  thumb {:?} | index/middle/ring/little (mcp spread pip) {:?}", Hand::ALL[side], &deg(&posed[side])[..4], &deg(&posed[side])[4..]);
+            println!("{:?} planned thumb {:?} | {:?}", Hand::ALL[side], &deg(&raw)[..4], &deg(&raw)[4..]);
+        }
         return Ok(());
     }
     if let Ok(at) = std::env::var("ON_GRIPS") {
@@ -262,6 +302,8 @@ fn main() -> anyhow::Result<()> {
     let mut angles: [Vec<[f32; on_hand::skeleton::DOF]>; 2] = Default::default();
     let mut contact: Vec<f32> = Vec::new();
     let keyboard = Keyboard::new();
+    let mut strays: Vec<(f64, Hand, on_hand::Finger, u8, f32)> = Vec::new();
+    let mut straying: [[Option<u8>; 5]; 2] = [[None; 5]; 2];
     for n in 0..samples {
         let t = n as f64 * fine;
         let posed = poses(&animators, t);
@@ -273,6 +315,27 @@ fn main() -> anyhow::Result<()> {
             angles[side].push(posed[side].q);
         }
         let keys = timeline.key_depression(t);
+        for side in 0..2 {
+            for finger in on_hand::Finger::ALL {
+                let tip = joints[side][1 + 4 * finger.index() + 3];
+                let under = key_under(&keyboard, tip);
+                let stray = under.and_then(|midi| {
+                    let (top, dip) = if is_black(midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
+                    let surface = top - keys.depth_of(midi) * dip;
+                    let into = surface - tip.z;
+                    (into > STRAY_MM && keys.depth_of(midi) < 0.05).then_some((midi, into))
+                });
+                let slot = &mut straying[side][finger.index()];
+                match stray {
+                    Some((midi, into)) if *slot != Some(midi) => {
+                        strays.push((t, Hand::ALL[side], finger, midi, into));
+                        *slot = Some(midi);
+                    }
+                    Some(_) => {}
+                    None => *slot = None,
+                }
+            }
+        }
         for note in timeline.notes.iter().filter(|note| note.sounds_at(t)) {
             let Some(finger) = note.finger else { continue };
             let depth = keys.depth_of(note.midi);
@@ -289,6 +352,22 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("{path}");
+    let own = |t: f64, hand: Hand, finger: on_hand::Finger, midi: u8, early: bool| {
+        timeline.notes.iter().any(|n| {
+            n.hand == hand && n.finger == Some(finger) && n.midi == midi && if early {
+                n.key_moves >= t - 0.01 && n.key_moves <= t + 0.08
+            } else {
+                n.key_rises <= t && n.key_rises >= t - 0.25
+            }
+        })
+    };
+    let early = strays.iter().filter(|s| own(s.0, s.1, s.2, s.3, true)).count();
+    let late = strays.iter().filter(|s| !own(s.0, s.1, s.2, s.3, true) && own(s.0, s.1, s.2, s.3, false)).count();
+    let strays: Vec<_> = strays.into_iter().filter(|s| !own(s.0, s.1, s.2, s.3, true) && !own(s.0, s.1, s.2, s.3, false)).collect();
+    println!("  stray touches (a finger pushing a key nobody is playing): {}  (+{early} early on its own key, {late} late off it)", strays.len());
+    for (t, hand, finger, midi, into) in strays.iter().take(if std::env::var("ON_STRAYS").is_ok() { 40 } else { 0 }) {
+        println!("    {t:8.3}s {hand:?} {finger:?} on {midi}, {into:.1} mm in");
+    }
     println!("  built in {load_seconds:.2} s{}", if prior.is_some() { " (fingered with the model)" } else { "" });
     every.sort_by(f32::total_cmp);
     let at_percentile = |p: f64| every[((every.len() - 1) as f64 * p) as usize];

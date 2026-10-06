@@ -589,7 +589,7 @@ impl HandAnimator {
             return animator;
         }
         animator.poses = crate::motion::smooth_wrists(&animator.events, &animator.poses, &model);
-        crate::motion::relax_thumbs(&animator.events, &mut animator.poses, &model);
+        crate::motion::relax_idle_fingers(&animator.events, &mut animator.poses, &model);
         if let Some(first) = animator.poses.first() {
             animator.resting = *first;
         }
@@ -730,13 +730,7 @@ impl HandAnimator {
             }
             pose.q[dof::WRIST_Z] += self.breath(index, time);
         }
-        let (weight, hardness) = crate::motion::sink(&self.events, time);
-        if weight > 0.0 {
-            let (depth, angle) = crate::motion::sink_depth(hardness);
-            let weight = weight * motion.style.weight;
-            pose.q[dof::WRIST_Z] -= depth * weight;
-            pose.q[dof::WRIST_FLEXION] -= angle * weight;
-        }
+        pose.q[dof::WRIST_Z] -= crate::motion::stroke(&self.events, time) * motion.style.weight;
         self.skeleton.clamp(&mut pose);
         pose
     }
