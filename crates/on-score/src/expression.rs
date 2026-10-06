@@ -103,6 +103,7 @@ const PHRASE_END_TEMPO: f64 = 0.12;
 const FINAL_RITARDANDO: f64 = 0.25;
 const FERMATA_TEMPO: f64 = 0.8;
 const PHRASE_BARS: usize = 4;
+const PHRASE_LEAST_BARS: usize = 2;
 
 pub fn perform(score: &Score, mood: &Mood, amount: f32) -> Score {
     let mut out = score.clone();
@@ -247,12 +248,13 @@ pub fn phrases(score: &Score) -> Vec<(Ticks, Ticks)> {
     gaps.sort_unstable();
     let median = gaps.get(gaps.len() / 2).copied().unwrap_or(TICKS_PER_QUARTER as Ticks).max(1);
 
+    let rest = (TICKS_PER_QUARTER as Ticks).max(2 * median);
     let mut cuts: Vec<Ticks> = Vec::new();
     let mut sounding_until = Ticks::MIN;
     let mut by_onset = score.notes.iter().collect::<Vec<_>>();
     by_onset.sort_by_key(|n| n.onset);
     for note in &by_onset {
-        if sounding_until != Ticks::MIN && note.onset - sounding_until >= median / 2 {
+        if sounding_until != Ticks::MIN && note.onset - sounding_until >= rest {
             cuts.push(note.onset);
         }
         sounding_until = sounding_until.max(note.offset());
@@ -290,7 +292,15 @@ pub fn phrases(score: &Score) -> Vec<(Ticks, Ticks)> {
         }
         out.push((from, stop));
     }
-    out
+    let shortest = PHRASE_LEAST_BARS as Ticks * bar;
+    let mut merged: Vec<(Ticks, Ticks)> = Vec::with_capacity(out.len());
+    for (start, stop) in out {
+        match merged.last_mut() {
+            Some(last) if stop - start < shortest || last.1 - last.0 < shortest => last.1 = stop,
+            _ => merged.push((start, stop)),
+        }
+    }
+    merged
 }
 
 fn shaped_tempo(score: &Score, mood: &Mood, amount: f32, k_time: f64, phrases: &[(Ticks, Ticks)]) -> crate::TempoMap {
@@ -386,6 +396,15 @@ mod tests {
         score.marks.articulations.insert(score.notes[11].source, art::ACCENT);
         score.finalise();
         score
+    }
+
+    #[test]
+    fn short_detached_notes_are_one_phrase_not_many() {
+        let q = TICKS_PER_QUARTER as Ticks;
+        let notes = (0..64u32).map(|i| note(i, 60 + (i % 8) as u8, i as Ticks * q / 2, q / 5)).collect();
+        let mut score = Score { notes, ..Default::default() };
+        score.finalise();
+        assert!(phrases(&score).len() <= 2, "{:?}", phrases(&score));
     }
 
     #[test]

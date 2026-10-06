@@ -102,6 +102,38 @@ fn main() -> anyhow::Result<()> {
     let _ = DECISIONS.set(Decisions::new(&animators, timeline.duration + 2.0));
     let load_seconds = loading.elapsed().as_secs_f64();
 
+    if std::env::var("ON_PHRASES").is_ok() {
+        let phrases = on_score::expression::phrases(score);
+        let lengths: Vec<f64> = phrases.iter().map(|(a, b)| score.tempo.seconds_at(*b) - score.tempo.seconds_at(*a)).collect();
+        let short = lengths.iter().filter(|l| **l < 2.0).count();
+        println!("  {} phrases, {} shorter than 2 s, median {:.1} s", phrases.len(), short, {
+            let mut l = lengths.clone();
+            l.sort_by(f64::total_cmp);
+            l.get(l.len() / 2).copied().unwrap_or(0.0)
+        });
+        return Ok(());
+    }
+    if std::env::var("ON_BENCH").is_ok() {
+        let frames = 600;
+        let started = std::time::Instant::now();
+        for n in 0..frames {
+            let at = timeline.duration * f64::from(n) / f64::from(frames);
+            std::hint::black_box(poses(&animators, at));
+        }
+        let each = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        let started = std::time::Instant::now();
+        for n in 0..frames {
+            let at = timeline.duration * f64::from(n) / f64::from(frames);
+            for animator in &animators {
+                for k in -6..=6 {
+                    std::hint::black_box(animator.unpressed(at + f64::from(k) * 0.2));
+                }
+            }
+        }
+        let lean = started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        println!("  per frame: hands {each:.2} ms, lean {lean:.2} ms");
+        return Ok(());
+    }
     if let Ok(at) = std::env::var("ON_GRIPS") {
         let at: f64 = at.parse()?;
         for hand in Hand::ALL {
