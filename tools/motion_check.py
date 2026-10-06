@@ -33,7 +33,7 @@ def measure(exe, midi, model):
 def main():
     exe = ROOT / "target" / "release" / "examples" / "jitter.exe"
     subprocess.run(["cargo", "build", "--release", "-q", "-p", "on-viz", "--example", "jitter"], cwd=ROOT, check=True)
-    model = ROOT / "models" / (sys.argv[1] if len(sys.argv) > 1 else "helios-beta1.json")
+    model = ROOT / "models" / (sys.argv[1] if len(sys.argv) > 1 else "helios-beta1.5.json")
     OUT.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y-%m-%d_%H-%M")
     report = {"when": stamp, "model": model.name, "pieces": {}}
