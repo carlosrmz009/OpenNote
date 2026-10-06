@@ -85,7 +85,7 @@ fn settled_wrist(animator: &crate::HandAnimator, time: f64) -> Vec3 {
     let (mut sum, mut total) = (Vec3::ZERO, 0.0f32);
     for k in -LEAN_SAMPLES..=LEAN_SAMPLES {
         let weight = (-0.5 * (f64::from(k) * step / LEAN_SIGMA_SECONDS).powi(2)).exp() as f32;
-        sum += animator.pose_at(time + f64::from(k) * step).wrist_position() * weight;
+        sum += animator.unpressed(time + f64::from(k) * step).wrist_position() * weight;
         total += weight;
     }
     sum / total

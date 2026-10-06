@@ -102,6 +102,18 @@ fn main() -> anyhow::Result<()> {
     let _ = DECISIONS.set(Decisions::new(&animators, timeline.duration + 2.0));
     let load_seconds = loading.elapsed().as_secs_f64();
 
+    if let Ok(at) = std::env::var("ON_GRIPS") {
+        let at: f64 = at.parse()?;
+        for hand in Hand::ALL {
+            for e in timeline.hand_grips(hand).iter().filter(|e| (e.time - at).abs() < 0.4) {
+                println!("{hand:?} {:.3} until {:.3} {:?} struck {:?}", e.time, e.release, e.grip.keys, e.struck);
+            }
+        }
+        for n in timeline.notes.iter().filter(|n| (n.start - at).abs() < 0.4) {
+            println!("note {:?} {} {:?} {:.3}-{:.3} key {:.3}..{:.3}", n.hand, n.midi, n.finger, n.start, n.end, n.key_moves, n.key_rises);
+        }
+        return Ok(());
+    }
     if let Ok(span) = std::env::var("ON_TRACK") {
         let (from, to) = span.split_once(',').expect("ON_TRACK=from,to");
         let (from, to): (f64, f64) = (from.parse()?, to.parse()?);
@@ -116,7 +128,7 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect();
             println!("{at:8.3}  L {}   R {}", line[0], line[1]);
-            at += 1.0 / 60.0;
+            at += std::env::var("ON_STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0 / 60.0);
         }
         return Ok(());
     }
@@ -129,6 +141,12 @@ fn main() -> anyhow::Result<()> {
                 .map(|i| format!("{i}:{:.3}->{:.3}", a.q[i], b.q[i]))
                 .collect();
             println!("{:?}: {}", Hand::ALL[side], moved.join("  "));
+            let (a, b) = (animators[side].unpressed(at - 0.0005), animators[side].unpressed(at + 0.0005));
+            let moved: Vec<String> = (0..on_hand::skeleton::DOF)
+                .filter(|i| (a.q[*i] - b.q[*i]).abs() > 0.01)
+                .map(|i| format!("{i}:{:.3}->{:.3}", a.q[i], b.q[i]))
+                .collect();
+            println!("  unpressed: {}", moved.join("  "));
         }
         return Ok(());
     }
@@ -141,6 +159,7 @@ fn main() -> anyhow::Result<()> {
     let mut breaks: Vec<(f64, f32)> = Vec::new();
     let mut jumps: Vec<(f64, Hand, f32)> = Vec::new();
     let mut every: Vec<f32> = Vec::new();
+    let mut overlaps: Vec<f32> = Vec::new();
 
     let mut at = 0.0;
     while at <= timeline.duration {
@@ -185,6 +204,10 @@ fn main() -> anyhow::Result<()> {
                     breaks.push((lo, size));
                 }
             }
+        }
+        let depth = on_viz::timeline::overlap_depth(&now[0], &now[1]);
+        if depth > 2.0 {
+            overlaps.push(depth);
         }
         corrections.push(correction);
         if let Some(before) = &previous {
@@ -242,6 +265,11 @@ fn main() -> anyhow::Result<()> {
     println!("  worst joint movement per frame: median {median:.1} mm, 99th {p99:.1} mm, worst {:.1} mm", every[every.len() - 1]);
     println!("  frames where a joint outran a hand: {}", jumps.len());
     println!("  frames where moving the hands apart jolted one: {}", jolts.len());
+    println!(
+        "  frames where the hands pass through each other: {} (deepest {:.0} mm)",
+        overlaps.len(),
+        overlaps.iter().copied().fold(0.0f32, f32::max)
+    );
     println!("  places a hand steps rather than moves: {}", breaks.len());
     for (time, size) in breaks.iter().take(8) {
         println!("    {time:9.4}s  {size:5.1} mm");
@@ -294,6 +322,61 @@ fn main() -> anyhow::Result<()> {
         );
     }
     println!("  fingertip to its pressed key (mm): {}", percentiles(contact).replace("p", " p"));
+    for (label, picked) in [("bend", [dof::MCP_FLEX, dof::PIP_FLEX]), ("spread", [dof::MCP_SPREAD, dof::MCP_SPREAD])] {
+        let mut rates: Vec<f32> = Vec::new();
+        for side in 0..2 {
+            for slot in 0..4 {
+                for j in picked.iter().map(|o| dof::finger(slot) + o).collect::<std::collections::BTreeSet<_>>() {
+                    rates.extend(angles[side].windows(2).map(|w| 100.0 * (w[1][j] - w[0][j]).abs() / fine as f32));
+                }
+            }
+        }
+        println!("  finger {label} speed (centirad/s): {}", percentiles(rates));
+    }
+    if std::env::var("ON_PEAKS").is_ok() {
+        let mut peaks: Vec<(f32, f64, usize, usize)> = Vec::new();
+        for side in 0..2 {
+            for k in 1..6 {
+                let p = &tracks[side][k];
+                for i in 1..p.len().saturating_sub(1) {
+                    let speed = ((p[i + 1] - p[i - 1]) / (2.0 * fine as f32)).length();
+                    peaks.push((speed, i as f64 * fine, side, k - 1));
+                }
+            }
+        }
+        let mut joints: Vec<(f32, f64, usize, usize)> = Vec::new();
+        for side in 0..2 {
+            for j in dof::THUMB_CMC_FLEX..on_hand::skeleton::DOF {
+                for (i, w) in angles[side].windows(2).enumerate() {
+                    joints.push(((w[1][j] - w[0][j]).abs() / fine as f32, i as f64 * fine, side, j));
+                }
+            }
+        }
+        joints.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut seen: Vec<f64> = Vec::new();
+        for (rate, t, side, j) in joints {
+            if seen.iter().any(|s| (s - t).abs() < 0.1) {
+                continue;
+            }
+            println!("    joint peak {t:8.3}s {:?} dof {j} {rate:5.1} rad/s", Hand::ALL[side]);
+            seen.push(t);
+            if seen.len() == 12 {
+                break;
+            }
+        }
+        peaks.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut shown: Vec<f64> = Vec::new();
+        for (speed, t, side, finger) in peaks {
+            if shown.iter().any(|s| (s - t).abs() < 0.1) {
+                continue;
+            }
+            println!("    tip peak {t:8.3}s {:?} finger {} {speed:6.0} mm/s", Hand::ALL[side], finger + 1);
+            shown.push(t);
+            if shown.len() == 15 {
+                break;
+            }
+        }
+    }
     for side in 0..2 {
         let (mut hooked, mut flat, mut thumb_out) = (0usize, 0usize, 0usize);
         for q in &angles[side] {

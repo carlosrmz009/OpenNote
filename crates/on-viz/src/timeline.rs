@@ -484,7 +484,17 @@ const SWING_LEAD_SECONDS: f64 = 0.08;
 
 const DECIDE_EVERY_SECONDS: f64 = 1.0 / 30.0;
 
-const EASE_SECONDS: f64 = 0.2;
+const APART_WIDEN_SECONDS: f64 = 0.15;
+
+const APART_SMOOTH_SECONDS: f64 = 0.3;
+
+const SHIFT_SMOOTH_SECONDS: f64 = 0.12;
+
+const FINISH_TAPS: i32 = 4;
+
+const FINISH_SECONDS: f64 = 0.010;
+
+const FINISH_KEEP: f32 = 1e-6;
 
 const ENGAGE_MM: f32 = 30.0;
 
@@ -642,6 +652,38 @@ impl HandAnimator {
     }
 
     pub fn pose_at(&self, time: f64) -> HandPose {
+        self.finished(time, |at| self.unpressed(at))
+    }
+
+    fn finished(&self, time: f64, base: impl Fn(f64) -> HandPose) -> HandPose {
+        let mut pose = base(time);
+        let Some(motion) = &self.motion else { return pose };
+        let taps: Vec<[f32; on_hand::skeleton::DOF]> = (-FINISH_TAPS..=FINISH_TAPS)
+            .map(|i| {
+                let at = time + FINISH_SECONDS * f64::from(i) / f64::from(FINISH_TAPS.max(1));
+                let raw = base(at);
+                let mut done = raw;
+                motion.strikes.press(&self.skeleton, &mut done, at);
+                std::array::from_fn(|d| done.q[d] - raw.q[d])
+            })
+            .collect();
+        let exact = &taps[FINISH_TAPS as usize];
+        for d in dof::THUMB_CMC_FLEX..on_hand::skeleton::DOF {
+            let (mut sum, mut total) = (0.0f32, 0.0f32);
+            for (k, tap) in taps.iter().enumerate() {
+                let u = (k as f32 - FINISH_TAPS as f32) / (FINISH_TAPS + 1) as f32;
+                let weight = (1.0 - u * u).powi(3);
+                sum += weight * tap[d];
+                total += weight;
+            }
+            let smooth = sum / total;
+            pose.q[d] += smooth + FINISH_KEEP * ((exact[d] - smooth) / FINISH_KEEP).tanh();
+        }
+        self.skeleton.clamp(&mut pose);
+        pose
+    }
+
+    pub fn unpressed(&self, time: f64) -> HandPose {
         if let Some(motion) = &self.motion {
             return self.flowing(motion, time);
         }
@@ -696,7 +738,6 @@ impl HandAnimator {
             pose.q[dof::WRIST_FLEXION] -= angle * weight;
         }
         self.skeleton.clamp(&mut pose);
-        motion.strikes.press(&self.skeleton, &mut pose, time);
         pose
     }
 
@@ -928,36 +969,100 @@ fn lift_between(current: &GripEvent, next: &GripEvent, time: f64) -> f32 {
     height * (through * std::f32::consts::PI).sin()
 }
 
-pub struct Decisions(Vec<Apart>);
+type Shift = [[f32; SHIFTED]; 2];
+
+const SHIFTED: usize = dof::WRIST_PRONATION + 1;
+
+pub struct Decisions {
+    first: i64,
+    shifts: Vec<Shift>,
+}
 
 impl Decisions {
     pub fn new(animators: &[HandAnimator], until: f64) -> Self {
-        let steps = (until.max(0.0) / DECIDE_EVERY_SECONDS).ceil() as usize + 1;
-        Self((0..steps).map(|step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS)).collect())
+        let lead = ((SHIFT_SMOOTH_SECONDS + FINISH_SECONDS) / DECIDE_EVERY_SECONDS).ceil() as i64 + 1;
+        Self::between(animators, -lead, (until.max(0.0) / DECIDE_EVERY_SECONDS).ceil() as i64)
     }
 
-    fn at(&self, animators: &[HandAnimator], time: f64) -> Apart {
-        apart_around(time, |step| match self.0.get(step as usize) {
-            Some(decided) => *decided,
-            None => apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS),
+    fn between(animators: &[HandAnimator], first: i64, last: i64) -> Self {
+        let step = DECIDE_EVERY_SECONDS;
+        let margin = ((APART_WIDEN_SECONDS + APART_SMOOTH_SECONDS) / step).ceil() as i64 + 1;
+        let lowest = first - margin;
+        let raw: Vec<Apart> = (lowest..=last + margin)
+            .map(|k| if k < 0 { Apart::default() } else { apart_at(animators, k as f64 * step) })
+            .collect();
+        let shifts = (first..=last)
+            .map(|k| {
+                let at = k as f64 * step;
+                let apart = apart_around(at, |j| raw[(j - lowest) as usize]);
+                let base = [animators[0].unpressed(at), animators[1].unpressed(at)];
+                let moved = posed_apart(animators, at, base, apart);
+                [0, 1].map(|side| std::array::from_fn(|d| moved[side].q[d] - base[side].q[d]))
+            })
+            .collect();
+        Self { first, shifts }
+    }
+
+    fn shift(&self, time: f64) -> Shift {
+        let step = DECIDE_EVERY_SECONDS;
+        let from = ((time - SHIFT_SMOOTH_SECONDS) / step).ceil() as i64;
+        let to = ((time + SHIFT_SMOOTH_SECONDS) / step).floor() as i64;
+        let mut sum = [[0.0f32; SHIFTED]; 2];
+        let mut total = 0.0f32;
+        for k in from..=to {
+            let u = ((time - k as f64 * step) / SHIFT_SMOOTH_SECONDS) as f32;
+            let weight = (1.0 - u * u).max(0.0).powi(3);
+            if weight <= 0.0 {
+                continue;
+            }
+            total += weight;
+            let Some(shift) = usize::try_from(k - self.first).ok().and_then(|i| self.shifts.get(i)) else { continue };
+            for side in 0..2 {
+                for d in 0..SHIFTED {
+                    sum[side][d] += weight * shift[side][d];
+                }
+            }
+        }
+        if total > 0.0 {
+            for side in &mut sum {
+                for value in side.iter_mut() {
+                    *value /= total;
+                }
+            }
+        }
+        sum
+    }
+
+    fn pose(&self, animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
+        [0, 1].map(|side| {
+            let animator = &animators[side];
+            animator.finished(time, |at| {
+                let shift = self.shift(at);
+                let mut pose = animator.unpressed(at);
+                for d in 0..SHIFTED {
+                    pose.q[d] += shift[side][d];
+                }
+                animator.skeleton.clamp(&mut pose);
+                pose
+            })
         })
     }
 }
 
 pub fn pose_both(animators: &[HandAnimator], time: f64) -> [HandPose; 2] {
-    let apart = apart_around(time, |step| apart_at(animators, step as f64 * DECIDE_EVERY_SECONDS));
-    posed_apart(animators, time, apart)
+    let step = DECIDE_EVERY_SECONDS;
+    let reach = SHIFT_SMOOTH_SECONDS + FINISH_SECONDS;
+    let from = ((time - reach) / step).floor() as i64;
+    let to = ((time + reach) / step).ceil() as i64;
+    Decisions::between(animators, from, to).pose(animators, time)
 }
 
 pub fn pose_both_decided(animators: &[HandAnimator], decisions: &Decisions, time: f64) -> [HandPose; 2] {
-    posed_apart(animators, time, decisions.at(animators, time))
+    decisions.pose(animators, time)
 }
 
-fn posed_apart(animators: &[HandAnimator], time: f64, apart: Apart) -> [HandPose; 2] {
-    let mut poses = [
-        animators[Hand::Left as usize].pose_at(time),
-        animators[Hand::Right as usize].pose_at(time),
-    ];
+fn posed_apart(animators: &[HandAnimator], time: f64, base: [HandPose; 2], apart: Apart) -> [HandPose; 2] {
+    let mut poses = base;
     for (side, animator) in animators.iter().enumerate().take(2) {
         let (swing, lift) = (apart.swing[side], apart.lift[side]);
         if swing == 0.0 && lift == 0.0 {
@@ -993,37 +1098,54 @@ struct Apart {
 }
 
 fn apart_around(time: f64, decide: impl Fn(i64) -> Apart) -> Apart {
-    let first = ((time - EASE_SECONDS) / DECIDE_EVERY_SECONDS).ceil().max(0.0) as i64;
-    let last = ((time + EASE_SECONDS) / DECIDE_EVERY_SECONDS).floor() as i64;
-    let mut lift = [0.0f32; 2];
-    let mut swing = [[0.0f32; 2]; 2];
-    for step in first..=last {
-        let at = step as f64 * DECIDE_EVERY_SECONDS;
-        let reach = reach((time - at).abs());
-        if reach <= 0.0 {
+    let step = DECIDE_EVERY_SECONDS;
+    let widen = (APART_WIDEN_SECONDS / step).round() as i64;
+    let first = ((time - APART_SMOOTH_SECONDS) / step).ceil() as i64;
+    let last = ((time + APART_SMOOTH_SECONDS) / step).floor() as i64;
+    let lowest = first - widen;
+    let raw: Vec<[f32; 6]> = (lowest..=last + widen)
+        .map(|k| {
+            if k < 0 {
+                return [0.0; 6];
+            }
+            let a = decide(k);
+            [
+                a.lift[0],
+                a.lift[1],
+                a.swing[0].max(0.0),
+                (-a.swing[0]).max(0.0),
+                a.swing[1].max(0.0),
+                (-a.swing[1]).max(0.0),
+            ]
+        })
+        .collect();
+    let mut sum = [0.0f32; 6];
+    let mut total = 0.0f32;
+    for k in first..=last {
+        let u = ((time - k as f64 * step) / APART_SMOOTH_SECONDS) as f32;
+        let weight = (1.0 - u * u).max(0.0).powi(3);
+        if weight <= 0.0 {
             continue;
         }
-        let decided = decide(step);
-        for side in 0..2 {
-            lift[side] = lift[side].max(reach * decided.lift[side]);
-            let turn = decided.swing[side];
-            swing[side][0] = swing[side][0].max(reach * turn.max(0.0));
-            swing[side][1] = swing[side][1].max(reach * (-turn).max(0.0));
+        let at = (k - lowest) as usize;
+        let span = &raw[at - widen as usize..=at + widen as usize];
+        for (c, slot) in sum.iter_mut().enumerate() {
+            *slot += weight * span.iter().map(|r| r[c]).fold(0.0f32, f32::max);
         }
+        total += weight;
     }
-    Apart { lift, swing: [swing[0][0] - swing[0][1], swing[1][0] - swing[1][1]] }
-}
-
-fn reach(gap: f64) -> f32 {
-    let u = ((EASE_SECONDS - gap) / (EASE_SECONDS - DECIDE_EVERY_SECONDS)).clamp(0.0, 1.0) as f32;
-    u * u * (3.0 - 2.0 * u)
+    if total <= 0.0 {
+        return Apart::default();
+    }
+    let v = sum.map(|x| x / total);
+    Apart { lift: [v[0], v[1]], swing: [v[2] - v[3], v[4] - v[5]] }
 }
 
 fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
     let mut apart = Apart::default();
     let poses = [
-        animators[Hand::Left as usize].pose_at(time),
-        animators[Hand::Right as usize].pose_at(time),
+        animators[Hand::Left as usize].unpressed(time),
+        animators[Hand::Right as usize].unpressed(time),
     ];
     let joints = [
         animators[Hand::Left as usize].joints(&poses[0]),
@@ -1151,17 +1273,7 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
         trial.q[dof::WRIST_Y] += held.y - now.y;
         trial
     };
-    const RAISE_SLACK_MM: f32 = 0.5;
-    let before = animator.joints(pose);
-    let trial = raised(height);
-    let after = animator.joints(&trial);
-    let allowed = before
-        .iter()
-        .zip(&after)
-        .filter(|(was, is)| is.z < was.z)
-        .map(|(was, is)| (was.z.max(0.0) + RAISE_SLACK_MM) / (was.z - is.z))
-        .fold(1.0f32, f32::min);
-    *pose = if allowed >= 1.0 { trial } else { raised(height * allowed) };
+    *pose = raised(height);
 }
 
 fn swing_angle(
@@ -1673,6 +1785,51 @@ mod tests {
         for n in 0..200 {
             let at = n as f64 * timeline.duration / 199.0 + 0.0013;
             assert_eq!(pose_both(&animators, at), pose_both_decided(&animators, &decisions, at), "at {at}");
+        }
+    }
+
+    #[test]
+    fn hands_side_by_side_do_not_twitch() {
+        let q = TICKS_PER_QUARTER as i64;
+        let mut entries = Vec::new();
+        let mut fingers = Vec::new();
+        for beat in 0..16 {
+            let (left, right, left_finger, right_finger) = match beat % 4 {
+                0 => (55, 57, Finger::Thumb, Finger::Thumb),
+                1 => (53, 59, Finger::Index, Finger::Index),
+                2 => (52, 60, Finger::Middle, Finger::Middle),
+                _ => (53, 59, Finger::Index, Finger::Index),
+            };
+            fingers.push((entries.len() as u32, left_finger));
+            entries.push((left, beat * q / 4, q / 4, Hand::Left));
+            fingers.push((entries.len() as u32, right_finger));
+            entries.push((right, beat * q / 4, q / 4, Hand::Right));
+        }
+        let timeline = Timeline::build(&score_of(&entries), &pinned(&fingers));
+        let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
+        let decisions = Decisions::new(&animators, timeline.duration + 1.0);
+        let step = 1.0 / 240.0;
+        let samples = (timeline.duration / step) as usize;
+        let met = (0..samples).step_by(12).any(|n| {
+            let at = n as f64 * step;
+            (pose_both_decided(&animators, &decisions, at)[0].q[dof::WRIST_X] - animators[0].pose_at(at).q[dof::WRIST_X]).abs() > 1.0
+        });
+        assert!(met, "the hands never came close enough to be moved apart, so this showed nothing");
+        for side in 0..2 {
+            let x: Vec<f32> = (0..samples)
+                .map(|n| pose_both_decided(&animators, &decisions, n as f64 * step)[side].q[dof::WRIST_X])
+                .collect();
+            let turns: Vec<usize> = (1..x.len() - 1).filter(|&i| (x[i] - x[i - 1]) * (x[i + 1] - x[i]) < 0.0).collect();
+            for pair in turns.windows(3) {
+                let (p, m, r) = (pair[0], pair[1], pair[2]);
+                let quick = (r - p) as f64 * step <= 0.08;
+                assert!(
+                    !(quick && (x[m] - x[p]).abs() > 1.0 && (x[r] - x[m]).abs() > 1.0),
+                    "{:?} wrist twitched at {:.3}s",
+                    Hand::ALL[side],
+                    m as f64 * step
+                );
+            }
         }
     }
 

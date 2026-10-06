@@ -42,7 +42,11 @@ const FADE_SECONDS: f64 = 0.08;
 
 const TAKE_HOLD: f64 = 0.4;
 
-const LEAST_STRIKE: f64 = 0.02;
+const LEAST_STRIKE: f64 = 0.05;
+
+const FINGER_TRAVEL_MM_PER_SECOND: f64 = 500.0;
+
+const SAME_FINGER_GAP: (f64, f64) = (0.02, 0.15);
 
 const REACH_DAMPING: f32 = 400.0;
 
@@ -54,7 +58,19 @@ const REACH_GIVE_MM: (f32, f32) = (6.0, 14.0);
 
 const AIM_PULL_MM: f32 = 12.0;
 
+const SPREAD_ROOM: f32 = 0.15;
+
+const KEY_EDGE_MM: f32 = 6.0;
+
+const KEY_CLEAR_MM: f32 = 3.0;
+
+const BEND_ROOM: f32 = 0.7;
+
+const Z_PULL_MM: (f32, f32) = (18.0, 25.0);
+
 const REACH_AXES: Vec3 = Vec3::new(1.0, 0.25, 1.0);
+
+const LEVER_MM: (f32, f32) = (5.0, 20.0);
 
 const TOGETHER: f64 = on_fingering::playability::CHORD_SECONDS;
 
@@ -66,7 +82,7 @@ const SINK_RECOVER: (f64, f64) = (0.22, 0.5);
 
 const SINK_MM: (f32, f32) = (1.6, 6.5);
 
-const SINK_DEG: (f32, f32) = (3.5, 13.0);
+const SINK_REACH_MM: f32 = 90.0;
 
 const SINK_ROOM: (f64, f64) = (0.15, 0.3);
 
@@ -445,10 +461,8 @@ pub fn sink(events: &[GripEvent], time: f64) -> (f32, f32) {
 }
 
 pub fn sink_depth(hardness: f32) -> (f32, f32) {
-    (
-        SINK_MM.0 + (SINK_MM.1 - SINK_MM.0) * hardness,
-        (SINK_DEG.0 + (SINK_DEG.1 - SINK_DEG.0) * hardness).to_radians(),
-    )
+    let depth = SINK_MM.0 + (SINK_MM.1 - SINK_MM.0) * hardness;
+    (depth, (depth / SINK_REACH_MM).atan())
 }
 
 pub fn hop_room(gap: f64) -> f32 {
@@ -471,6 +485,7 @@ fn surface(midi: u8) -> (f32, f32) {
 struct Strike {
     note: TimelineNote,
     aim: Vec2,
+    reach: Vec2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -511,14 +526,17 @@ impl Strikes {
             };
             note.key_rises = note.key_rises.min(release_by).max(note.key_bottoms());
             let aim = skeleton.forward(&poses[struck]).tip(finger).truncate();
-            by_finger[finger.index()].push(Strike { note, aim });
+            let reach = aim - poses[struck].wrist_position().truncate();
+            by_finger[finger.index()].push(Strike { note, aim, reach });
         }
         for list in &mut by_finger {
             list.sort_by(|a, b| a.note.key_moves.total_cmp(&b.note.key_moves));
             for i in 1..list.len() {
                 let next = list[i].note.key_moves;
+                let travel = f64::from(list[i].reach.distance(list[i - 1].reach)) / FINGER_TRAVEL_MM_PER_SECOND;
+                let gap = travel.clamp(SAME_FINGER_GAP.0, SAME_FINGER_GAP.1);
                 let note = &mut list[i - 1].note;
-                note.key_rises = note.key_rises.min(next - LET_GO_SECONDS - 0.02).max(note.key_moves);
+                note.key_rises = note.key_rises.min(next - LET_GO_SECONDS - gap).max(note.key_bottoms());
             }
         }
         Self { by_finger, lift: 1.0 }
@@ -529,7 +547,7 @@ impl Strikes {
         let after = list.partition_point(|s| s.note.key_moves <= time);
         let mut going = None;
         if after > 0 {
-            let Strike { note, aim } = &list[after - 1];
+            let Strike { note, aim, .. } = &list[after - 1];
             let (top, dip) = surface(note.midi);
             let up = note.key_rises + LET_GO_SECONDS;
             if time <= up {
@@ -541,7 +559,7 @@ impl Strikes {
             }
         }
         let alone = going.map(|w| Plan { going: Some(w), striking: None, taking: 0.0 });
-        let Some(Strike { note: next, aim }) = list.get(after) else { return alone };
+        let Some(Strike { note: next, aim, .. }) = list.get(after) else { return alone };
         let free_from = if after > 0 { list[after - 1].note.key_rises + LET_GO_SECONDS } else { f64::MIN };
         let from = (next.key_moves - STRIKE_WINDOW).max(free_from).min(next.key_moves - LEAST_STRIKE);
         if time < from {
@@ -553,7 +571,8 @@ impl Strikes {
         let contact = (1.5 * if is_black(next.midi) { BLACK_KEY_DIP } else { KEY_DIP }) as f64 / key_seconds(next.velocity);
         let peak = from + 0.55 * (next.key_moves - from);
         let (top, _) = surface(next.midi);
-        let taking = minimum_jerk((time - from) / (TAKE_HOLD * (next.key_moves - from))) as f32;
+        let span = next.key_moves - from;
+        let taking = minimum_jerk((time - from) / (TAKE_HOLD * span).max(span.min(LEAST_STRIKE))) as f32;
         let raised = if time < peak {
             f64::from(height) * minimum_jerk((time - from) / (peak - from))
         } else {
@@ -572,18 +591,30 @@ impl Strikes {
     }
 
     pub fn press(&self, skeleton: &Skeleton, pose: &mut HandPose, time: f64) {
-        let plans: Vec<(Finger, Plan)> =
-            Finger::ALL.iter().filter_map(|f| Some((*f, self.plan(*f, time)?))).collect();
-        if plans.is_empty() {
+        let natural = skeleton.forward(pose);
+        let targets: Vec<(Finger, Vec3)> = Finger::ALL
+            .iter()
+            .filter_map(|f| {
+                let plan = self.plan(*f, time);
+                let free = above_the_keys(natural.tip(*f), plan.map_or(0.0, |p| p.weight()));
+                match plan {
+                    Some(plan) => Some((*f, plan.target(free))),
+                    None => (free != natural.tip(*f)).then_some((*f, free)),
+                }
+            })
+            .collect();
+        if targets.is_empty() {
             return;
         }
-        let natural = skeleton.forward(pose);
-        let targets: Vec<(Finger, Vec3)> = plans.iter().map(|(f, plan)| (*f, plan.target(natural.tip(*f)))).collect();
         let before = *pose;
         for _ in 0..REACH_PASSES {
             let posture = skeleton.forward(pose);
             for (finger, target) in &targets {
                 reach_step(skeleton, &posture, pose, *finger, *target);
+                for j in digit_dofs(*finger) {
+                    let room = if is_spread(*j) { SPREAD_ROOM } else { BEND_ROOM };
+                    pose.q[*j] = pose.q[*j].clamp(before.q[*j] - room, before.q[*j] + room);
+                }
             }
             skeleton.clamp(pose);
         }
@@ -625,11 +656,23 @@ impl Plan {
 impl Want {
     fn target(&self, free: Vec3) -> Vec3 {
         let z = self.z + self.floor * (free.z - self.z).max(0.0);
-        let z = free.z + self.weight * (z - free.z);
+        let z = free.z + (self.weight * (z - free.z)).clamp(-Z_PULL_MM.0, Z_PULL_MM.1);
         let (aim, weight) = self.aim;
         let xy = free.truncate() + weight * (aim - free.truncate()).clamp_length_max(AIM_PULL_MM);
         xy.extend(z)
     }
+}
+
+fn above_the_keys(tip: Vec3, engaged: f32) -> Vec3 {
+    let over = minimum_jerk(f64::from(tip.y / KEY_EDGE_MM)) as f32;
+    let black = minimum_jerk(f64::from((tip.y - BLACK_KEY_FRONT_Y + KEY_EDGE_MM) / (2.0 * KEY_EDGE_MM))) as f32;
+    let clear = black * BLACK_KEY_HEIGHT + KEY_CLEAR_MM;
+    let below = (clear - tip.z).max(0.0) * over * (1.0 - engaged);
+    if below > 1e-3 { tip + Vec3::Z * below } else { tip }
+}
+
+fn is_spread(j: usize) -> bool {
+    j == dof::THUMB_CMC_ABD || (j >= dof::FINGER_BASE && (j - dof::FINGER_BASE) % 3 == dof::MCP_SPREAD)
 }
 
 fn digit_dofs(finger: Finger) -> &'static [usize] {
@@ -657,7 +700,15 @@ fn reach_step(skeleton: &Skeleton, posture: &Posture, pose: &mut HandPose, finge
     }
     let joints = digit_dofs(finger);
     let n = joints.len();
-    let columns: Vec<Vec3> = joints.iter().map(|j| skeleton.tip_jacobian(posture, finger, *j)).collect();
+    let levers: Vec<f32> = joints
+        .iter()
+        .map(|j| {
+            let column = skeleton.tip_jacobian(posture, finger, *j) * REACH_AXES;
+            minimum_jerk(f64::from((column.length() - LEVER_MM.0) / LEVER_MM.1)) as f32
+        })
+        .collect();
+    let columns: Vec<Vec3> =
+        joints.iter().zip(&levers).map(|(j, lever)| skeleton.tip_jacobian(posture, finger, *j) * *lever).collect();
     let mut a = [[0.0f32; 5]; 4];
     for r in 0..n {
         for c in 0..n {
@@ -680,6 +731,6 @@ fn reach_step(skeleton: &Skeleton, posture: &Posture, pose: &mut HandPose, finge
         step[k] = (a[k][n] - known) / a[k][k];
     }
     for (k, j) in joints.iter().enumerate() {
-        pose.q[*j] += step[k].clamp(-REACH_STEP, REACH_STEP);
+        pose.q[*j] += (levers[k] * step[k]).clamp(-REACH_STEP, REACH_STEP);
     }
 }
