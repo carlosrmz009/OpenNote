@@ -175,14 +175,38 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     if let Ok(at) = std::env::var("ON_GRIPS") {
-        let at: f64 = at.parse()?;
+        let (from, to) = match at.split_once(',') {
+            Some((a, b)) => (a.parse::<f64>()?, b.parse::<f64>()?),
+            None => {
+                let at: f64 = at.parse()?;
+                (at - 0.4, at + 0.4)
+            }
+        };
+        let at = 0.5 * (from + to);
+        let reach = 0.5 * (to - from);
         for hand in Hand::ALL {
-            for e in timeline.hand_grips(hand).iter().filter(|e| (e.time - at).abs() < 0.4) {
+            for e in timeline.hand_grips(hand).iter().filter(|e| (e.time - at).abs() < reach) {
                 println!("{hand:?} {:.3} until {:.3} {:?} struck {:?}", e.time, e.release, e.grip.keys, e.struck);
             }
         }
-        for n in timeline.notes.iter().filter(|n| (n.start - at).abs() < 0.4) {
+        for n in timeline.notes.iter().filter(|n| (n.start - at).abs() < reach && std::env::var("ON_NOTES").is_ok()) {
             println!("note {:?} {} {:?} {:.3}-{:.3} key {:.3}..{:.3}", n.hand, n.midi, n.finger, n.start, n.end, n.key_moves, n.key_rises);
+        }
+        return Ok(());
+    }
+    if let Ok(span) = std::env::var("ON_TIPS") {
+        let (from, to) = span.split_once(',').expect("ON_TIPS=from,to");
+        let (from, to): (f64, f64) = (from.parse()?, to.parse()?);
+        let mut at = from;
+        while at <= to {
+            let posed = poses(&animators, at);
+            for side in 0..2 {
+                let joints = animators[side].joints(&posed[side]);
+                let tips: Vec<String> = (0..5).map(|f| format!("{:5.1}", joints[1 + 4 * f + 3].z)).collect();
+                print!("{at:8.3} {:?} wrist z {:5.1} flex {:5.1}  tips z {}   ", Hand::ALL[side], posed[side].q[dof::WRIST_Z], posed[side].q[dof::WRIST_FLEXION].to_degrees(), tips.join(" "));
+            }
+            println!();
+            at += 0.02;
         }
         return Ok(());
     }

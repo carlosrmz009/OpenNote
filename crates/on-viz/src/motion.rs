@@ -84,15 +84,22 @@ const TOGETHER: f64 = on_fingering::playability::CHORD_SECONDS;
 
 const STROKE_MM: (f32, f32) = (2.5, 8.0);
 
-const STROKE_RISE: f32 = 0.4;
+const HAND_PREPARE: f64 = 0.25;
 
-const STROKE_PREPARE: f64 = 0.18;
+const HAND_SHARE: (f32, f32, f32, f32) = (0.85, 0.7, 0.6, 0.15);
+
+const HAND_SLOW: (f64, f64) = (0.25, 0.3);
+
+const HAND_RUN: (f64, f64) = (0.1, 0.15);
+
+const HAND_LIFT_RATE: f64 = 70.0;
+
+const HAND_RELEASE: f64 = 0.8;
 
 const STROKE_RECOVER: (f64, f64) = (0.12, 0.35);
 
 const STROKE_ROOM: (f64, f64) = (0.15, 0.3);
 
-const STROKE_FAST_SHARE: f32 = 0.0;
 
 const HOP_ROOM: (f64, f64) = (0.08, 0.2);
 
@@ -446,33 +453,63 @@ pub fn relax_idle_fingers(events: &[GripEvent], poses: &mut [HandPose], model: &
     }
 }
 
-pub fn stroke(events: &[GripEvent], time: f64) -> f32 {
+fn struck_keys(event: &GripEvent) -> Vec<u8> {
+    let mut keys: Vec<u8> = event
+        .struck
+        .iter()
+        .filter_map(|(finger, _)| event.grip.keys.iter().find(|(_, f)| f == finger).map(|(m, _)| *m))
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
+pub fn hand_share(events: &[GripEvent], i: usize) -> f32 {
+    let event = &events[i];
+    let keys = struck_keys(event);
+    let before = if i > 0 { event.time - events[i - 1].time } else { f64::INFINITY };
+    let repeated = i > 0 && !keys.is_empty() && struck_keys(&events[i - 1]) == keys;
+    let base = if repeated {
+        HAND_SHARE.0
+    } else if keys.len() >= 2 {
+        HAND_SHARE.1
+    } else {
+        HAND_SHARE.3 * minimum_jerk((before - HAND_RUN.0) / HAND_RUN.1) as f32
+    };
+    base.max(HAND_SHARE.2 * minimum_jerk((before - HAND_SLOW.0) / HAND_SLOW.1) as f32)
+}
+
+pub fn strike_lift(velocity: u8) -> f32 {
+    STRIKE_LIFT_MM.0 + STRIKE_LIFT_MM.1 * f32::from(velocity) / 127.0
+}
+
+pub fn stroke(events: &[GripEvent], time: f64) -> (f32, f32) {
     let first = events.partition_point(|e| e.time < time - STROKE_RECOVER.1 - 0.05);
     let (mut down, mut up) = (0.0f32, 0.0f32);
     for (i, event) in events.iter().enumerate().skip(first) {
-        if event.time > time + STROKE_PREPARE + 0.12 {
+        if event.time > time + HAND_PREPARE + 0.12 {
             break;
         }
         let Some(hardest) = event.struck.iter().map(|(_, v)| *v).max() else { continue };
         let before = if i > 0 { event.time - events[i - 1].time } else { f64::INFINITY };
         let after = events.get(i + 1).map_or(f64::INFINITY, |e| e.time - event.time);
         let loud = f32::from(hardest) / 127.0;
-        let room = STROKE_FAST_SHARE + (1.0 - STROKE_FAST_SHARE) * minimum_jerk((before - STROKE_ROOM.0) / STROKE_ROOM.1) as f32;
+        let room = minimum_jerk((before - STROKE_ROOM.0) / STROKE_ROOM.1) as f32;
         let depth = (STROKE_MM.0 + STROKE_MM.1 * loud.powf(1.5)) * room;
         let key = key_seconds(hardest);
         let moves = event.time - KEY_LEAD * key;
         let bottom = event.time + KEY_TRAIL * key;
-        let prepare = STROKE_PREPARE.min(0.6 * before);
+        let prepare = HAND_PREPARE.min(0.6 * before);
+        let lift = (hand_share(events, i) * strike_lift(hardest)).min((before * HAND_LIFT_RATE) as f32);
         let recover = (0.8 * after).clamp(STROKE_RECOVER.0, STROKE_RECOVER.1);
         if time >= moves - prepare && time < moves {
-            up += STROKE_RISE * depth * bump((time - moves + prepare) / prepare);
+            up += lift * bump((time - moves + prepare) / prepare);
         } else if time >= moves && time < bottom {
             down = down.max(depth * minimum_jerk((time - moves) / (bottom - moves)) as f32);
         } else if time >= bottom {
             down = down.max(depth * (1.0 - minimum_jerk((time - bottom) / recover)) as f32);
         }
     }
-    down - up
+    (down, up)
 }
 
 pub fn hop_room(gap: f64) -> f32 {
@@ -496,6 +533,7 @@ struct Strike {
     note: TimelineNote,
     aim: Vec2,
     reach: Vec2,
+    share: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -537,14 +575,17 @@ impl Strikes {
             note.key_rises = note.key_rises.min(release_by).max(note.key_bottoms());
             let aim = skeleton.forward(&poses[struck]).tip(finger).truncate();
             let reach = aim - poses[struck].wrist_position().truncate();
-            by_finger[finger.index()].push(Strike { note, aim, reach });
+            let share = hand_share(events, struck);
+            by_finger[finger.index()].push(Strike { note, aim, reach, share });
         }
         for list in &mut by_finger {
             list.sort_by(|a, b| a.note.key_moves.total_cmp(&b.note.key_moves));
             for i in 1..list.len() {
                 let next = list[i].note.key_moves;
                 let travel = f64::from(list[i].reach.distance(list[i - 1].reach)) / FINGER_TRAVEL_MM_PER_SECOND;
-                let gap = travel.clamp(SAME_FINGER_GAP.0, SAME_FINGER_GAP.1);
+                let between = list[i].note.start - list[i - 1].note.start;
+                let lifted = f64::from(list[i].share) * HAND_RELEASE * HAND_PREPARE.min(0.6 * between);
+                let gap = travel.clamp(SAME_FINGER_GAP.0, SAME_FINGER_GAP.1).max(lifted - LET_GO_SECONDS);
                 let note = &mut list[i - 1].note;
                 note.key_rises = note.key_rises.min(next - LET_GO_SECONDS - gap).max(note.key_bottoms());
             }
@@ -570,15 +611,14 @@ impl Strikes {
         }
         let held = going.and_then(|w| list.get(after.wrapping_sub(1)).map(|s| (s.note.midi, w.weight)));
         let alone = going.map(|w| Plan { going: Some(w), striking: None, taking: 0.0, own: [held, None] });
-        let Some(Strike { note: next, aim, .. }) = list.get(after) else { return alone };
+        let Some(Strike { note: next, aim, share, .. }) = list.get(after) else { return alone };
         let free_from = if after > 0 { list[after - 1].note.key_rises + LET_GO_SECONDS } else { f64::MIN };
         let from = (next.key_moves - STRIKE_WINDOW).max(free_from).min(next.key_moves - LEAST_STRIKE);
         if time < from {
             return alone;
         }
         let window = (next.key_moves - from) as f32;
-        let loud = f32::from(next.velocity) / 127.0;
-        let height = ((STRIKE_LIFT_MM.0 + STRIKE_LIFT_MM.1 * loud) * self.lift).min(0.5 * window * FINGER_SPEED_MM);
+        let height = (strike_lift(next.velocity) * (1.0 - *share) * self.lift).min(0.5 * window * FINGER_SPEED_MM);
         let contact = (1.5 * if is_black(next.midi) { BLACK_KEY_DIP } else { KEY_DIP }) as f64 / key_seconds(next.velocity);
         let peak = from + 0.55 * (next.key_moves - from);
         let (top, _) = surface(next.midi);

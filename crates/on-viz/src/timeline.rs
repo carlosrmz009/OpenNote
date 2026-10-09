@@ -114,6 +114,10 @@ const BREATH_NEAR_SECONDS: f64 = 0.08;
 
 const REST_LIFT_MM: f32 = 40.0;
 
+const HAND_TILT_SHARE: f32 = 0.5;
+
+const HAND_TILT_REACH_MM: f32 = 120.0;
+
 const REST_CLEAR_MM: f32 = 140.0;
 
 const REST_MARGIN_SECONDS: f64 = 0.5;
@@ -730,7 +734,10 @@ impl HandAnimator {
             }
             pose.q[dof::WRIST_Z] += self.breath(index, time);
         }
-        pose.q[dof::WRIST_Z] -= crate::motion::stroke(&self.events, time) * motion.style.weight;
+        let (down, up) = crate::motion::stroke(&self.events, time);
+        let up = up * motion.style.lift;
+        pose.q[dof::WRIST_Z] += up * (1.0 - HAND_TILT_SHARE) - down * motion.style.weight;
+        pose.q[dof::WRIST_FLEXION] -= (up * HAND_TILT_SHARE / HAND_TILT_REACH_MM).atan();
         self.skeleton.clamp(&mut pose);
         pose
     }
