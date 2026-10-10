@@ -120,6 +120,22 @@ const NOTE_GLOW: f32 = 9.5;
 
 const WHITE_KEY_DEPTH_MM: f32 = 14.0;
 
+const KEY_GAP_MM: f32 = 1.4;
+
+const WHITE_KEY_EDGE_MM: f32 = 1.6;
+
+const BLACK_KEY_EDGE_MM: f32 = 1.4;
+
+const BLACK_KEY_NARROWING_MM: f32 = 2.6;
+
+const BLACK_KEY_RECESS_MM: f32 = 6.0;
+
+const KEY_EDGE_SEGMENTS: usize = 4;
+
+const WHITE_KEY_ROUGHNESS: f32 = 0.28;
+
+const BLACK_KEY_ROUGHNESS: f32 = 0.18;
+
 const HIT_LINE_DEPTH_MM: f32 = 6.0;
 
 #[derive(Resource)]
@@ -417,12 +433,12 @@ fn place_camera(
     }
 }
 
-fn key_material(image: Handle<Image>, roughness: f32) -> StandardMaterial {
+fn key_material(image: Handle<Image>, black: bool) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(image),
-        perceptual_roughness: roughness,
-        reflectance: 0.35,
+        perceptual_roughness: if black { BLACK_KEY_ROUGHNESS } else { WHITE_KEY_ROUGHNESS },
+        reflectance: 0.5,
         ..default()
     }
 }
@@ -475,17 +491,27 @@ fn setup_keyboard(
 
         let material = materials.add(key_material(
             if black { black_texture.clone() } else { white_texture.clone() },
-            if black { 0.14 } else { 0.42 },
+            black,
         ));
 
         let (mesh, z) = if black {
             (
-                meshes.add(Cuboid::new(width, length, BLACK_KEY_HEIGHT)),
+                meshes.add(key_mesh(
+                    Vec3::new(width, length, BLACK_KEY_HEIGHT),
+                    BLACK_KEY_EDGE_MM,
+                    BLACK_KEY_NARROWING_MM,
+                    BLACK_KEY_RECESS_MM,
+                )),
                 BLACK_KEY_HEIGHT / 2.0,
             )
         } else {
             (
-                meshes.add(Cuboid::new(width, length, WHITE_KEY_DEPTH_MM)),
+                meshes.add(key_mesh(
+                    Vec3::new(width - KEY_GAP_MM, length, WHITE_KEY_DEPTH_MM),
+                    WHITE_KEY_EDGE_MM,
+                    0.0,
+                    0.0,
+                )),
                 -WHITE_KEY_DEPTH_MM / 2.0,
             )
         };
@@ -587,6 +613,75 @@ fn setup_notes(
             },
         ));
     }
+}
+
+fn key_mesh(size: Vec3, radius: f32, narrowing: f32, recess: f32) -> Mesh {
+    let half = size / 2.0;
+    let inner = half - Vec3::splat(radius);
+    let samples = |h: f32| -> Vec<f32> {
+        let arc: Vec<f32> = (0..=KEY_EDGE_SEGMENTS)
+            .map(|k| {
+                let angle = std::f32::consts::FRAC_PI_4 * k as f32 / KEY_EDGE_SEGMENTS as f32;
+                (h - radius) + radius * angle.tan()
+            })
+            .collect();
+        arc.iter().rev().map(|t| -t).chain(arc.iter().copied()).collect()
+    };
+    let narrow = narrowing / size.x;
+    let pull = recess / size.y;
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+    for (normal, across, along) in [
+        (Vec3::Z, Vec3::X, Vec3::Y),
+        (Vec3::NEG_Z, Vec3::Y, Vec3::X),
+        (Vec3::X, Vec3::Y, Vec3::Z),
+        (Vec3::NEG_X, Vec3::Z, Vec3::Y),
+        (Vec3::Y, Vec3::Z, Vec3::X),
+        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
+    ] {
+        let (us, vs) = (samples(half.dot(across)), samples(half.dot(along)));
+        let base = positions.len() as u32;
+        for &v in &vs {
+            for &u in &us {
+                let flat = normal * half + across * u + along * v;
+                let core = flat.clamp(-inner, inner);
+                let outward = (flat - core).normalize();
+                let p = core + outward * radius;
+                let rise = (p.z + half.z) / size.z;
+                let jacobian = Mat3::from_cols(
+                    Vec3::new(1.0 - narrow * rise, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0 - pull * rise, 0.0),
+                    Vec3::new(-p.x * narrow / size.z, (half.y - p.y) * pull / size.z, 1.0),
+                );
+                positions.push([
+                    p.x * (1.0 - narrow * rise),
+                    p.y + (half.y - p.y) * pull * rise,
+                    p.z,
+                ]);
+                normals.push((jacobian.inverse().transpose() * outward).normalize().to_array());
+                uvs.push([(p.x + half.x) / size.x, (half.y - p.y) / size.y]);
+            }
+        }
+        let row = us.len() as u32;
+        for j in 0..vs.len() as u32 - 1 {
+            for i in 0..row - 1 {
+                let a = base + j * row + i;
+                indices.extend([a, a + 1, a + row + 1, a, a + row + 1, a + row]);
+            }
+        }
+    }
+
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
 }
 
 fn note_mesh(width: f32, height: f32) -> Mesh {

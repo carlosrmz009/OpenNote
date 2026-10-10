@@ -46,42 +46,32 @@ fn rounded_box_distance(point: (f32, f32), half: (f32, f32), radius: f32) -> f32
     outside + qx.max(qy).min(0.0) - radius
 }
 
-const SEAM_DARKNESS: f32 = 0.85;
-
-const SEAM_WIDTH: f32 = 0.032;
+const UNDER_RAIL: f32 = 0.05;
 
 pub fn white_key() -> Image {
-    let ivory: Rgba = [219, 222, 238, 255];
-    let seam: Rgba = [146, 120, 82, 255];
-    generate(move |u, v| {
-        let along = 0.93 + 0.07 * v;
-        let base = blend([0, 0, 0, 255], ivory, along);
-        let from_edge = u.min(1.0 - u) / SEAM_WIDTH;
-        let shade = if from_edge >= 1.0 {
-            0.0
-        } else {
-            (1.0 - from_edge).powi(2) * SEAM_DARKNESS
-        };
-        blend(base, seam, shade)
+    let back: Rgba = [198, 193, 181, 255];
+    let front: Rgba = [228, 225, 216, 255];
+    generate(move |_, v| {
+        let colour = blend(back, front, v.powf(0.8));
+        let shade = (1.0 - v / UNDER_RAIL).clamp(0.0, 1.0).powi(2);
+        blend(colour, [120, 112, 100, 255], shade * 0.5)
     })
 }
 
+const BEVEL: f32 = 0.14;
+
 pub fn black_key() -> Image {
-    let body: Rgba = [5, 4, 27, 255];
-    let sheen: Rgba = [46, 40, 88, 255];
-    let tip: Rgba = [58, 52, 104, 255];
+    let back: Rgba = [16, 15, 15, 255];
+    let front: Rgba = [6, 6, 6, 255];
     generate(move |u, v| {
-        let from_band = ((u - 0.40) / 0.14).abs();
-        let gloss = (1.0 - from_band).clamp(0.0, 1.0).powi(3);
-        let mut colour = blend(body, sheen, gloss * 0.40);
-        if v > 0.93 {
-            colour = blend(colour, tip, ((v - 0.93) / 0.07).powf(0.7));
-        }
-        let from_edge = u.min(1.0 - u) / 0.03;
-        if from_edge < 1.0 {
-            colour = blend(colour, [0, 0, 0, 255], (1.0 - from_edge) * 0.55);
-        }
-        colour
+        let colour = blend(back, front, v);
+        let lit = ((u - (1.0 - BEVEL)) / BEVEL).clamp(0.0, 1.0);
+        let colour = blend(colour, [62, 60, 58, 255], lit * 0.8);
+        let shaded = (1.0 - u / BEVEL).clamp(0.0, 1.0);
+        let colour = blend(colour, [0, 0, 0, 255], shaded);
+        let across = (1.0 - ((u - 0.5) / 0.2).abs()).clamp(0.0, 1.0).powf(0.6);
+        let fade = (1.0 - v / 0.85).clamp(0.0, 1.0);
+        blend(colour, [255, 255, 255, 255], across * fade * 0.32)
     })
 }
 
@@ -246,29 +236,22 @@ mod tests {
     }
 
     #[test]
-    fn a_white_key_is_pale_in_the_middle_and_has_a_seam_at_each_side() {
+    fn a_white_key_is_warm_ivory_that_brightens_toward_the_player() {
         let image = white_key();
-        let middle = luminance(pixel(&image, 0.5, 0.5));
-        let edge = luminance(pixel(&image, 0.004, 0.5));
-        assert!(
-            (150.0..238.0).contains(&middle),
-            "a white key should read as a light grey: {middle}"
-        );
-        let seam = pixel(&image, 0.004, 0.5);
-        assert!(edge < middle * 0.80, "the seam should be clearly darker: {edge}");
-        assert!(
-            seam[0] as i32 - seam[2] as i32 > 20,
-            "the seam should be warm, not neutral: {seam:?}"
-        );
+        let middle = pixel(&image, 0.5, 0.5);
+        assert!(luminance(middle) > 180.0, "a white key should be pale: {middle:?}");
+        assert!(middle[0] > middle[2], "ivory is warm, not blue: {middle:?}");
+        assert!(luminance(pixel(&image, 0.5, 0.95)) > luminance(pixel(&image, 0.5, 0.2)));
+        assert!(luminance(pixel(&image, 0.5, 0.0)) < luminance(middle) * 0.85);
     }
 
     #[test]
     fn a_black_key_is_dark_but_carries_a_highlight() {
         let image = black_key();
-        let band = luminance(pixel(&image, 0.40, 0.4));
-        let away = luminance(pixel(&image, 0.85, 0.4));
+        let band = luminance(pixel(&image, 0.5, 0.1));
+        let away = luminance(pixel(&image, 0.85, 0.1));
         assert!(away < 45.0, "a black key should be dark away from the gloss: {away}");
-        assert!(band > away * 2.0, "the gloss band should stand out: {band} vs {away}");
+        assert!(band > away * 1.4, "the gloss band should stand out: {band} vs {away}");
     }
 
     #[test]
