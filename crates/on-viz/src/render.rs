@@ -11,6 +11,8 @@ use crate::timeline::{HandAnimator, Timeline};
 
 const CAMERA_HEIGHT_MM: f32 = 600.0;
 
+const CAMERA_TILT_DEG: f32 = 25.0;
+
 const VIEW_MARGIN: f32 = 1.06;
 
 const LANE_Z: f32 = BLACK_KEY_HEIGHT + 4.0;
@@ -387,7 +389,9 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
 
 fn camera_placement(layout: &Layout) -> Transform {
     let (cx, cy) = layout.centre_mm();
-    Transform::from_xyz(cx, cy, CAMERA_HEIGHT_MM).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Y)
+    let tilt = CAMERA_TILT_DEG.to_radians();
+    Transform::from_xyz(cx, cy - CAMERA_HEIGHT_MM * tilt.sin(), CAMERA_HEIGHT_MM * tilt.cos())
+        .looking_at(Vec3::new(cx, cy, 0.0), Vec3::Y)
 }
 
 fn camera_projection(layout: &Layout) -> Projection {
@@ -1028,7 +1032,7 @@ fn move_notes(
         let (bottom, height) = bar_extent(layout, bar, now);
         let top = bottom + height;
 
-        transform.translation.y = bottom + height / 2.0;
+        transform.translation.y = bottom + height / 2.0 + (LANE_Z + 1.0 - NOTE_Z) * CAMERA_TILT_DEG.to_radians().tan();
 
         *visibility = if top > 0.0 && bottom < layout.lane_height {
             Visibility::Visible
