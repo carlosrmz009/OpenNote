@@ -457,6 +457,41 @@ fn main() -> anyhow::Result<()> {
         );
     }
     println!("  fingertip to its pressed key (mm): {}", percentiles(contact).replace("p", " p"));
+    let (mut tip_drops, mut hand_drops, mut shares, mut pivots) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for note in &timeline.notes {
+        let Some(finger) = note.finger else { continue };
+        let side = note.hand as usize;
+        let tip_of = |pose: &HandPose| animators[side].joints(pose)[1 + 4 * finger.index() + 3].z;
+        let low = poses(&animators, note.key_bottoms())[side];
+        let high = (0..=72)
+            .map(|i| poses(&animators, note.key_moves - 0.3 + f64::from(i) / 240.0)[side])
+            .max_by(|a, b| tip_of(a).total_cmp(&tip_of(b)))
+            .expect("sampled");
+        let tip = tip_of(&high) - tip_of(&low);
+        if tip < 2.0 {
+            continue;
+        }
+        let mut carried = low;
+        carried.q[dof::THUMB_CMC_FLEX..].copy_from_slice(&high.q[dof::THUMB_CMC_FLEX..]);
+        let hand = tip_of(&high) - tip_of(&carried);
+        tip_drops.push(tip);
+        pivots.push((high.q[dof::WRIST_FLEXION] - low.q[dof::WRIST_FLEXION]).to_degrees().abs());
+        hand_drops.push(hand);
+        shares.push(100.0 * (hand / tip).clamp(-1.0, 2.0));
+    }
+    let wrist_led = shares.iter().filter(|s| **s >= 50.0).count();
+    let spread = |mut v: Vec<f32>| {
+        if v.is_empty() {
+            return "-".to_string();
+        }
+        v.sort_by(f32::total_cmp);
+        let at = |p: f64| v[((v.len() - 1) as f64 * p) as usize];
+        format!("p10 {:5.1}  p50 {:5.1}  p90 {:5.1}", at(0.1), at(0.5), at(0.9))
+    };
+    println!("  strokes: fingertip drop (mm) {}", spread(tip_drops));
+    println!("           by the hand (mm)    {}", spread(hand_drops));
+    println!("           wrist pivot (deg)   {}", spread(pivots));
+    println!("           hand share (%)      {}  hand-led {wrist_led}/{}", spread(shares.clone()), shares.len());
     for (label, picked) in [("bend", [dof::MCP_FLEX, dof::PIP_FLEX]), ("spread", [dof::MCP_SPREAD, dof::MCP_SPREAD])] {
         let mut rates: Vec<f32> = Vec::new();
         for side in 0..2 {

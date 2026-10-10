@@ -17,6 +17,8 @@ PATTERNS = {
     "wrist_twitches": r"wrist twitches\s+(\d+)",
     "tip_twitches": r"tips  twitches\s+(\d+)",
     "contact_p95": r"fingertip to its key as it sounds \(mm\):\s+p50\s+\S+\s+p95\s+(\S+)",
+    "hand_share_p50": r"hand share \(%\)\s+p10\s+\S+\s+p50\s+(\S+)",
+    "wrist_pivot_p50": r"wrist pivot \(deg\)\s+p10\s+\S+\s+p50\s+(\S+)",
 }
 
 
@@ -46,7 +48,7 @@ def main():
             found, text = measure(exe, midi, model)
             report["pieces"][piece] = found
             log.write(text)
-    totals = {key: sum(p[key] or 0 for p in report["pieces"].values()) for key in PATTERNS if key != "contact_p95"}
+    totals = {key: sum(p[key] or 0 for p in report["pieces"].values()) for key in PATTERNS if not key.endswith(("p95", "p50"))}
     contacts = [p["contact_p95"] for p in report["pieces"].values() if p["contact_p95"] is not None]
     totals["contact_p95_worst"] = max(contacts) if contacts else None
     report["totals"] = totals

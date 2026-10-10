@@ -114,9 +114,9 @@ const BREATH_NEAR_SECONDS: f64 = 0.08;
 
 const REST_LIFT_MM: f32 = 40.0;
 
-const HAND_TILT_SHARE: f32 = 0.5;
+const HAND_TILT_SHARE: f32 = 0.85;
 
-const HAND_TILT_REACH_MM: f32 = 120.0;
+const HAND_TILT_REACH_MM: f32 = 130.0;
 
 const REST_CLEAR_MM: f32 = 140.0;
 
@@ -734,7 +734,7 @@ impl HandAnimator {
             }
             pose.q[dof::WRIST_Z] += self.breath(index, time);
         }
-        let (down, up) = crate::motion::stroke(&self.events, time);
+        let (down, up) = crate::motion::stroke(&self.events, &motion.strikes, time);
         let up = up * motion.style.lift;
         pose.q[dof::WRIST_Z] += up * (1.0 - HAND_TILT_SHARE) - down * motion.style.weight;
         pose.q[dof::WRIST_FLEXION] -= (up * HAND_TILT_SHARE / HAND_TILT_REACH_MM).atan();
@@ -2316,6 +2316,34 @@ mod tests {
             between > 3.0,
             "and off it beforehand, or the note repeats without the hand moving: {between}"
         );
+    }
+
+    #[test]
+    fn a_repeated_note_is_played_from_the_wrist_more_than_the_finger() {
+        let q = TICKS_PER_QUARTER as i64;
+        let score = score_of(&[
+            (64, 0, q, Hand::Right),
+            (64, q, q, Hand::Right),
+            (64, 2 * q, q, Hand::Right),
+            (64, 3 * q, q, Hand::Right),
+        ]);
+        let fingerings = pinned(&[
+            (0, Finger::Middle),
+            (1, Finger::Middle),
+            (2, Finger::Middle),
+            (3, Finger::Middle),
+        ]);
+        let animator = animator_for(&score, &fingerings, Hand::Right);
+        let middle = dof::finger(1);
+        let struck = animator.pose_at(1.0);
+        let raised = (0..30)
+            .map(|i| animator.pose_at(0.6 + f64::from(i) * 0.01))
+            .min_by(|a, b| a.q[dof::WRIST_FLEXION].total_cmp(&b.q[dof::WRIST_FLEXION]))
+            .expect("sampled");
+        let wrist = (struck.q[dof::WRIST_FLEXION] - raised.q[dof::WRIST_FLEXION]).to_degrees();
+        let finger = (struck.q[middle + dof::MCP_FLEX] - raised.q[middle + dof::MCP_FLEX]).abs().to_degrees();
+        assert!(wrist > 6.0, "the hand should pivot up from the wrist between notes: {wrist:.1} degrees");
+        assert!(finger < wrist, "more than the knuckle bends: knuckle {finger:.1}, wrist {wrist:.1} degrees");
     }
 
     #[test]

@@ -84,17 +84,21 @@ const TOGETHER: f64 = on_fingering::playability::CHORD_SECONDS;
 
 const STROKE_MM: (f32, f32) = (2.5, 8.0);
 
-const HAND_PREPARE: f64 = 0.25;
+const HAND_PREPARE: f64 = 0.35;
 
-const HAND_SHARE: (f32, f32, f32, f32) = (0.85, 0.7, 0.6, 0.15);
+const HAND_SHARE: (f32, f32, f32, f32) = (0.9, 0.8, 0.7, 0.35);
 
-const HAND_SLOW: (f64, f64) = (0.25, 0.3);
+const HAND_LIFT_MM: (f32, f32) = (20.0, 36.0);
+
+const HELD_LIFT_MM: f32 = 6.0;
+
+const HAND_SLOW: (f64, f64) = (0.2, 0.3);
 
 const HAND_RUN: (f64, f64) = (0.1, 0.15);
 
-const HAND_LIFT_RATE: f64 = 70.0;
+const HAND_LIFT_RATE: f64 = 110.0;
 
-const HAND_RELEASE: f64 = 0.8;
+const HAND_RELEASE: f64 = 1.15;
 
 const STROKE_RECOVER: (f64, f64) = (0.12, 0.35);
 
@@ -482,7 +486,7 @@ pub fn strike_lift(velocity: u8) -> f32 {
     STRIKE_LIFT_MM.0 + STRIKE_LIFT_MM.1 * f32::from(velocity) / 127.0
 }
 
-pub fn stroke(events: &[GripEvent], time: f64) -> (f32, f32) {
+pub fn stroke(events: &[GripEvent], strikes: &Strikes, time: f64) -> (f32, f32) {
     let first = events.partition_point(|e| e.time < time - STROKE_RECOVER.1 - 0.05);
     let (mut down, mut up) = (0.0f32, 0.0f32);
     for (i, event) in events.iter().enumerate().skip(first) {
@@ -499,10 +503,16 @@ pub fn stroke(events: &[GripEvent], time: f64) -> (f32, f32) {
         let moves = event.time - KEY_LEAD * key;
         let bottom = event.time + KEY_TRAIL * key;
         let prepare = HAND_PREPARE.min(0.6 * before);
-        let lift = (hand_share(events, i) * strike_lift(hardest)).min((before * HAND_LIFT_RATE) as f32);
+        let full = (hand_share(events, i) * (HAND_LIFT_MM.0 + HAND_LIFT_MM.1 * loud)).min((before * HAND_LIFT_RATE) as f32);
+        let start = (moves - prepare).max(strikes.free_after(moves - TOGETHER));
+        let open = moves - start;
         let recover = (0.8 * after).clamp(STROKE_RECOVER.0, STROKE_RECOVER.1);
         if time >= moves - prepare && time < moves {
-            up += lift * bump((time - moves + prepare) / prepare);
+            let mut lifted = full.min(HELD_LIFT_MM) * bump((time - moves + prepare) / prepare);
+            if open > LEAST_STRIKE && time >= start {
+                lifted = lifted.max(full.min((open / 0.6 * HAND_LIFT_RATE) as f32) * bump((time - start) / open));
+            }
+            up += lifted;
         } else if time >= moves && time < bottom {
             down = down.max(depth * minimum_jerk((time - moves) / (bottom - moves)) as f32);
         } else if time >= bottom {
@@ -550,6 +560,14 @@ pub struct Strikes {
 }
 
 impl Strikes {
+    pub fn free_after(&self, before: f64) -> f64 {
+        self.by_finger
+            .iter()
+            .filter_map(|list| list[..list.partition_point(|s| s.note.key_moves < before)].last())
+            .map(|s| s.note.key_rises + LET_GO_SECONDS)
+            .fold(f64::MIN, f64::max)
+    }
+
     pub fn new(
         notes: &[TimelineNote],
         events: &[GripEvent],
