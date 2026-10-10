@@ -13,6 +13,10 @@ const CAMERA_HEIGHT_MM: f32 = 600.0;
 
 const CAMERA_TILT_DEG: f32 = 25.0;
 
+const BLOOM_HAZE: f32 = 0.22;
+
+const VIGNETTE: f32 = 0.40;
+
 const VIEW_MARGIN: f32 = 1.06;
 
 const LANE_Z: f32 = BLACK_KEY_HEIGHT + 4.0;
@@ -61,6 +65,12 @@ const FLASH_SIZE_MM: f32 = 58.0;
 const FLASH_HEIGHT_MM: f32 = 5.0;
 
 const FLASH_GLOW: f32 = 9.5;
+
+const BEAM_WIDTH_MM: f32 = 30.0;
+
+const BEAM_HEIGHT_MM: f32 = 150.0;
+
+const BEAM_GLOW: f32 = 0.9;
 
 const NOTE_LIGHT_LUMENS: f32 = 5_400.0;
 
@@ -112,7 +122,7 @@ const SPARK_SIZE_MM: std::ops::Range<f32> = 0.9..3.2;
 
 const SPARK_WHITE_FOR: f32 = 0.11;
 
-const CRYSTAL_TILE_MM: f32 = 165.0;
+const SPARK_TRAIL_SECONDS: f32 = 0.022;
 
 const LABEL_FONT_PX: f32 = 15.0;
 
@@ -293,6 +303,7 @@ struct NoteLight;
 struct Flash {
     midi: u8,
     spread: f32,
+    beam: bool,
 }
 
 #[derive(Resource)]
@@ -308,10 +319,12 @@ pub struct VisualizerPlugin;
 
 impl Plugin for VisualizerPlugin {
     fn build(&self, app: &mut App) {
+        bevy::asset::embedded_asset!(app, "note.wgsl");
         app.init_resource::<Transport>()
             .init_resource::<ViewportInset>()
             .init_resource::<NoteColours>()
             .add_plugins(crate::hands::HandsPlugin)
+            .add_plugins(MaterialPlugin::<NoteMaterial>::default())
             .add_systems(
                 Startup,
                 (
@@ -351,6 +364,12 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
     commands.spawn((
         Camera3d::default(),
         bevy::core_pipeline::tonemapping::Tonemapping::None,
+        bevy::post_process::effect_stack::Vignette {
+            intensity: VIGNETTE,
+            radius: 0.95,
+            smoothness: 2.2,
+            ..default()
+        },
         camera_projection(layout),
         camera_placement(layout),
         bevy::post_process::bloom::Bloom {
@@ -360,7 +379,7 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
                 threshold_softness: 0.35,
             },
             composite_mode: bevy::post_process::bloom::BloomCompositeMode::Additive,
-            low_frequency_boost: 0.05,
+            low_frequency_boost: BLOOM_HAZE,
             max_mip_dimension: 512,
             ..bevy::post_process::bloom::Bloom::NATURAL
         },
@@ -443,14 +462,25 @@ fn key_material(image: Handle<Image>, black: bool) -> StandardMaterial {
     }
 }
 
-fn note_material(image: Handle<Image>, tint: Color) -> StandardMaterial {
-    StandardMaterial {
-        base_color: glowing(tint, NOTE_GLOW),
-        base_color_texture: Some(image),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        ..default()
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Clone)]
+struct NoteMaterial {
+    #[uniform(0)]
+    tint: Vec4,
+}
+
+impl Material for NoteMaterial {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://on_viz/note.wgsl".into()
     }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+}
+
+fn note_material(tint: Color) -> NoteMaterial {
+    let colour = tint.to_linear();
+    NoteMaterial { tint: Vec4::new(colour.red, colour.green, colour.blue, NOTE_GLOW) }
 }
 
 fn glowing(tint: Color, brightness: f32) -> Color {
@@ -580,17 +610,15 @@ fn setup_keyboard(
 fn setup_notes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<NoteMaterial>>,
     performance: Res<Performance>,
     note_colours: Res<NoteColours>,
 ) {
     let layout = &performance.layout;
-    let texture = images.add(skin::note_bar());
-    let colours: Vec<Handle<StandardMaterial>> = note_colours
+    let colours: Vec<Handle<NoteMaterial>> = note_colours
         .0
         .iter()
-        .map(|colour| materials.add(note_material(texture.clone(), *colour)))
+        .map(|colour| materials.add(note_material(*colour)))
         .collect();
 
     for note in &performance.timeline.notes {
@@ -685,45 +713,20 @@ fn key_mesh(size: Vec3, radius: f32, narrowing: f32, recess: f32) -> Mesh {
 }
 
 fn note_mesh(width: f32, height: f32) -> Mesh {
-    let cap = (width * skin::NOTE_CAP).min(height * 0.5);
-    let middle = height - 2.0 * cap;
-    let bands = ((middle / CRYSTAL_TILE_MM).round() as usize).max(1);
-    let band = middle / bands as f32;
-
-    let (half_width, half_height) = (width / 2.0, height / 2.0);
-    let mut positions = Vec::new();
-    let mut uvs = Vec::new();
-    let mut indices = Vec::new();
-
-    let mut top = half_height;
-    let mut quad = |top: f32, bottom: f32, v_top: f32, v_bottom: f32| {
-        let base = positions.len() as u32;
-        for (y, v) in [(top, v_top), (bottom, v_bottom)] {
-            for (x, u) in [(-half_width, 0.0), (half_width, 1.0)] {
-                positions.push([x, y, 0.0]);
-                uvs.push([u, v]);
-            }
-        }
-        indices.extend([base, base + 2, base + 3, base, base + 3, base + 1]);
-    };
-
-    quad(top, top - cap, 0.0, skin::NOTE_CAP);
-    top -= cap;
-    for _ in 0..bands {
-        quad(top, top - band, skin::NOTE_CAP, 1.0 - skin::NOTE_CAP);
-        top -= band;
-    }
-    quad(top, -half_height, 1.0 - skin::NOTE_CAP, 1.0);
-
-    let count = positions.len();
+    let half = [width / 2.0, height / 2.0];
+    let corners = [[-1.0, 1.0], [1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]];
+    let positions: Vec<[f32; 3]> =
+        corners.iter().map(|[x, y]| [x * half[0], y * half[1], 0.0]).collect();
+    let local: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
     Mesh::new(
         bevy::mesh::PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; count])
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, local)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![half; 4])
+    .with_inserted_indices(bevy::mesh::Indices::U32(vec![0, 2, 3, 0, 3, 1]))
 }
 
 fn setup_sparks(
@@ -770,33 +773,51 @@ fn setup_flashes(
     note_colours: Res<NoteColours>,
 ) {
     let layout = &performance.layout;
-    let texture = images.add(skin::flash());
-    let colours = note_colours.0.map(|colour| {
-        materials.add(StandardMaterial {
-            base_color: glowing(mix(colour, Color::WHITE, 0.20), FLASH_GLOW),
-            base_color_texture: Some(texture.clone()),
-            unlit: true,
-            alpha_mode: AlphaMode::Add,
-            ..default()
+    let mut glow = |texture: Handle<Image>, whiteness: f32, brightness: f32| {
+        note_colours.0.map(|colour| {
+            materials.add(StandardMaterial {
+                base_color: glowing(mix(colour, Color::WHITE, whiteness), brightness),
+                base_color_texture: Some(texture.clone()),
+                unlit: true,
+                alpha_mode: AlphaMode::Add,
+                ..default()
+            })
         })
-    });
+    };
+    let colours = [
+        glow(images.add(skin::flash()), 0.20, FLASH_GLOW),
+        glow(images.add(skin::beam()), 0.05, BEAM_GLOW),
+    ];
 
-    let quad = meshes.add(Rectangle::new(FLASH_SIZE_MM, FLASH_SIZE_MM));
+    let quad = meshes.add(Rectangle::new(FLASH_SIZE_MM * skin::FLASH_STREAK, FLASH_SIZE_MM));
+    let shaft = meshes.add(
+        Mesh::from(Rectangle::new(BEAM_WIDTH_MM, BEAM_HEIGHT_MM))
+            .translated_by(Vec3::Y * BEAM_HEIGHT_MM / 2.0),
+    );
     for midi in layout.keys() {
         let (x0, x1, _, _) = layout.key_rect(midi);
+        let spread = (x1 - x0) / on_hand::keyboard::WHITE_KEY_WIDTH;
+        let x = (x0 + x1) / 2.0;
         commands.spawn((
             Mesh3d(quad.clone()),
-            MeshMaterial3d(colours[0].clone()),
-            Transform::from_xyz((x0 + x1) / 2.0, FLASH_HEIGHT_MM, LANE_Z + 1.0),
+            MeshMaterial3d(colours[0][0].clone()),
+            Transform::from_xyz(x, FLASH_HEIGHT_MM, LANE_Z + 1.0),
             Visibility::Hidden,
-            Flash { midi, spread: (x1 - x0) / on_hand::keyboard::WHITE_KEY_WIDTH },
+            Flash { midi, spread, beam: false },
+        ));
+        commands.spawn((
+            Mesh3d(shaft.clone()),
+            MeshMaterial3d(colours[1][0].clone()),
+            Transform::from_xyz(x, 0.0, LANE_Z + 0.5),
+            Visibility::Hidden,
+            Flash { midi, spread, beam: true },
         ));
     }
     commands.insert_resource(FlashColours(colours));
 }
 
 #[derive(Resource)]
-struct FlashColours([Handle<StandardMaterial>; 2]);
+struct FlashColours([[Handle<StandardMaterial>; 2]; 2]);
 
 fn raise_flashes(
     transport: Res<Transport>,
@@ -818,10 +839,14 @@ fn raise_flashes(
             }
             continue;
         };
-        transform.scale = Vec3::splat(flash.spread * depth.powf(0.55));
+        transform.scale = if flash.beam {
+            Vec3::new(flash.spread, depth.powf(0.8), 1.0)
+        } else {
+            Vec3::splat(flash.spread * depth.powf(0.55))
+        };
         *visibility = Visibility::Visible;
 
-        let wanted = &colours.0[hand as usize];
+        let wanted = &colours.0[flash.beam as usize][hand as usize];
         if material.0.id() != wanted.id() {
             material.0 = wanted.clone();
         }
@@ -959,27 +984,32 @@ fn update_sparks(
                 + (SPARK_SIZE_MM.end - SPARK_SIZE_MM.start) * scramble(seed ^ 0x27d4_eb2f);
             let phase = scramble(seed ^ 0x1656_67b1) * std::f32::consts::TAU;
 
-            let height = upward * age - 0.5 * SPARK_GRAVITY_MM * age * age;
-            if height < 0.0 {
+            let lean = if note.id.0 % 2 == 0 { 1.0 } else { -1.0 };
+            let place = |age: f32| {
+                let height = upward * age - 0.5 * SPARK_GRAVITY_MM * age * age;
+                let opened = (age / SPARK_LIFE).powf(SPARK_WANDER_SHAPE);
+                let spread =
+                    reach * (SPARK_WANDER_AT_BIRTH + (1.0 - SPARK_WANDER_AT_BIRTH) * opened);
+                let curl =
+                    (phase + age * SPARK_CURL_RATE).sin() * width * SPARK_CURL_KEYS * age;
+                let drift = lean * width * SPARK_DRIFT_KEYS * age * age;
+                Vec2::new(centre + spread + curl + drift, height)
+            };
+            let here = place(age);
+            if here.y < 0.0 {
                 continue;
             }
-            let opened = (age / SPARK_LIFE).powf(SPARK_WANDER_SHAPE);
-            let spread =
-                reach * (SPARK_WANDER_AT_BIRTH + (1.0 - SPARK_WANDER_AT_BIRTH) * opened);
-            let curl =
-                (phase + age * SPARK_CURL_RATE).sin() * width * SPARK_CURL_KEYS * age;
-            let lean = if note.id.0 % 2 == 0 { 1.0 } else { -1.0 };
-            let drift = lean * width * SPARK_DRIFT_KEYS * age * age;
 
             let taper = (1.0 - age / SPARK_LIFE).clamp(0.0, 1.0).powf(0.45);
             let scale = size * taper * evaporation;
             if scale <= 0.0 {
                 continue;
             }
+            let trail = here - place((age - SPARK_TRAIL_SECONDS).max(0.0));
 
-            transform.translation =
-                Vec3::new(centre + spread + curl + drift, height, LANE_Z + 2.0);
-            transform.scale = Vec3::splat(scale);
+            transform.translation = here.extend(LANE_Z + 2.0);
+            transform.rotation = Quat::from_rotation_z(f32::atan2(-trail.x, trail.y));
+            transform.scale = Vec3::new(scale, scale + trail.length() * taper, 1.0);
             *visibility = Visibility::Visible;
 
             let hand = note.hand as usize;

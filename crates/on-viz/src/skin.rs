@@ -39,13 +39,6 @@ fn sized(width: u32, height: u32, shade: impl Fn(f32, f32) -> Rgba) -> Image {
     )
 }
 
-fn rounded_box_distance(point: (f32, f32), half: (f32, f32), radius: f32) -> f32 {
-    let qx = point.0.abs() - half.0 + radius;
-    let qy = point.1.abs() - half.1 + radius;
-    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
-    outside + qx.max(qy).min(0.0) - radius
-}
-
 const UNDER_RAIL: f32 = 0.05;
 
 pub fn white_key() -> Image {
@@ -74,50 +67,6 @@ pub fn black_key() -> Image {
         blend(colour, [255, 255, 255, 255], across * fade * 0.32)
     })
 }
-
-const NOTE_CORNER: f32 = 0.21;
-
-pub fn note_bar() -> Image {
-    sized(NOTE_TEXTURE_SIZE, NOTE_TEXTURE_SIZE, |u, v| {
-        let point = (u - 0.5, v - 0.5);
-        let half = (0.5 - EDGE_FEATHER, 0.5 - EDGE_FEATHER);
-        let distance = rounded_box_distance(point, half, NOTE_CORNER);
-
-        let coverage = (-distance / EDGE_FEATHER).clamp(0.0, 1.0);
-        if coverage <= 0.0 {
-            return [255, 255, 255, 0];
-        }
-
-        let inside = (-distance).max(0.0);
-        let rim = (1.0 - inside / RIM_WIDTH).clamp(0.0, 1.0).powf(1.1);
-
-        let level = (NOTE_BODY * crystal(u, v) + (1.0 - NOTE_BODY) * rim).clamp(0.0, 1.0);
-        let level = (level * 255.0) as u8;
-        [level, level, level, (coverage * 255.0) as u8]
-    })
-}
-
-fn crystal(u: f32, v: f32) -> f32 {
-    let phase = (u * CRYSTAL_SLANT + v / NOTE_BAND) * std::f32::consts::TAU;
-    let broad = phase.sin();
-    let fine = (phase * 2.0 + 1.1).sin();
-    1.0 + CRYSTAL_DEPTH * (0.68 * broad + 0.32 * fine)
-}
-
-pub const NOTE_TEXTURE_SIZE: u32 = 128;
-
-pub const NOTE_CAP: f32 = 0.3;
-
-pub const NOTE_BAND: f32 = 1.0 - 2.0 * NOTE_CAP;
-
-const NOTE_BODY: f32 = 0.26;
-
-const CRYSTAL_SLANT: f32 = 0.45;
-const CRYSTAL_DEPTH: f32 = 0.38;
-
-const EDGE_FEATHER: f32 = 0.035;
-
-const RIM_WIDTH: f32 = 0.11;
 
 pub fn back_rail() -> Image {
     let felt: Rgba = [104, 24, 34, 255];
@@ -160,16 +109,32 @@ pub fn octave_line() -> Image {
     })
 }
 
+pub const FLASH_STREAK: f32 = 2.4;
+
 pub fn flash() -> Image {
     generate(|u, v| {
-        let (dx, dy) = ((u - 0.5) * 2.0, (v - 0.5) * 2.6);
+        let (dx, dy) = ((u - 0.5) * 2.0 * FLASH_STREAK, (v - 0.5) * 2.6);
         let radius = (dx * dx + dy * dy).sqrt();
         let falloff = (1.0 - radius).clamp(0.0, 1.0);
 
         let core = falloff.powf(7.0);
         let body = falloff.powf(2.4);
 
-        let level = (core + body * 0.34).clamp(0.0, 1.0);
+        let reach = (1.0 - (u - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+        let streak = (-(dy / 0.07).powi(2)).exp() * reach.powf(2.2);
+
+        let level = (core + body * 0.34 + streak * 0.30).clamp(0.0, 1.0);
+        [255, 255, 255, (level * 255.0) as u8]
+    })
+}
+
+pub fn beam() -> Image {
+    generate(|u, v| {
+        let across = (u - 0.5) * 2.0;
+        let shaft = (-(across / 0.30).powi(2)).exp();
+        let haze = (1.0 - across.abs()).clamp(0.0, 1.0).powf(1.5);
+        let rise = v.powf(2.6);
+        let level = ((shaft * 0.75 + haze * 0.25) * rise).clamp(0.0, 1.0);
         [255, 255, 255, (level * 255.0) as u8]
     })
 }
@@ -180,7 +145,8 @@ pub fn spark() -> Image {
         let radius = (dx * dx + dy * dy).sqrt() * 2.0;
         let core = (1.0 - radius).clamp(0.0, 1.0).powf(0.45);
         let halo = (1.0 - radius).clamp(0.0, 1.0).powf(3.0);
-        let level = (core * 0.85 + halo * 0.15).min(1.0);
+        let head = 0.35 + 0.65 * (1.0 - v).powf(1.4);
+        let level = ((core * 0.85 + halo * 0.15) * head).min(1.0);
         [255, 255, 255, (level * 255.0) as u8]
     })
 }
@@ -214,6 +180,7 @@ mod tests {
             case(),
             octave_line(),
             flash(),
+            beam(),
         ] {
             assert_eq!(image.width(), TEXTURE_WIDTH);
             assert_eq!(image.height(), TEXTURE_HEIGHT);
@@ -222,17 +189,6 @@ mod tests {
                 (TEXTURE_WIDTH * TEXTURE_HEIGHT * 4) as usize
             );
         }
-    }
-
-    #[test]
-    fn the_note_is_square_so_its_ends_keep_their_shape() {
-        let image = note_bar();
-        assert_eq!(image.width(), NOTE_TEXTURE_SIZE);
-        assert_eq!(image.height(), NOTE_TEXTURE_SIZE);
-        assert_eq!(
-            image.data.as_ref().unwrap().len(),
-            (NOTE_TEXTURE_SIZE * NOTE_TEXTURE_SIZE * 4) as usize
-        );
     }
 
     #[test]
@@ -260,42 +216,6 @@ mod tests {
         for v in [0.1f32, 0.5, 0.9] {
             assert!(luminance(pixel(&black, 0.5, v)) < luminance(pixel(&white, 0.5, v)));
         }
-    }
-
-    #[test]
-    fn the_signed_distance_is_negative_inside_and_positive_outside() {
-        let half = (0.5, 2.0);
-        assert!(rounded_box_distance((0.0, 0.0), half, 0.25) < 0.0);
-        assert!(rounded_box_distance((0.9, 0.0), half, 0.25) > 0.0);
-        assert!(rounded_box_distance((0.0, 3.0), half, 0.25) > 0.0);
-        assert!(rounded_box_distance((0.49, 1.99), half, 0.25) > 0.0);
-    }
-
-    #[test]
-    fn a_note_is_a_rounded_rectangle_rather_than_a_capsule() {
-        let image = note_bar();
-        assert_eq!(pixel(&image, 0.5, 0.5)[3], 255);
-        assert!(pixel(&image, 0.90, 0.5)[3] > 200, "the sides should still be square");
-        assert_eq!(pixel(&image, 0.02, 0.002)[3], 0, "the corner should be cut away");
-        assert_eq!(pixel(&image, 0.98, 0.998)[3], 0, "and the opposite corner too");
-    }
-
-    #[test]
-    fn a_note_has_a_brighter_rim_than_its_middle() {
-        let image = note_bar();
-        let centre = luminance(pixel(&image, 0.5, 0.5));
-        let rim = luminance(pixel(&image, 0.075, 0.5));
-        assert!(rim > centre, "the rim {rim} should be brighter than the body {centre}");
-    }
-
-    #[test]
-    fn a_notes_edge_is_soft_rather_than_a_hard_step() {
-        let image = note_bar();
-        let alphas: Vec<u8> = (0..14).map(|i| pixel(&image, i as f32 / 128.0, 0.5)[3]).collect();
-        assert!(
-            alphas.iter().any(|a| (20..235).contains(a)),
-            "no partly covered pixels along the edge: {alphas:?}"
-        );
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use bevy::camera::visibility::NoFrustumCulling;
-use bevy::mesh::skinning::SkinnedMesh;
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
+use bevy::mesh::VertexAttributeValues;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use on_hand::skeleton::Joint;
 use on_hand::{Finger, Hand};
@@ -26,6 +28,39 @@ fn wear_gloves(material: &mut StandardMaterial, cloth: Option<Handle<Image>>) {
 #[allow(dead_code)]
 const GLOVE_YELLOW: Color = Color::srgb(0.97, 0.78, 0.11);
 const BARE_SKIN: Color = Color::srgb(0.87, 0.69, 0.58);
+
+const BACK_OF_HAND: Color = Color::srgb(0.84, 0.65, 0.54);
+const PALM: Color = Color::srgb(0.90, 0.70, 0.63);
+const FOREARM: Color = Color::srgb(0.83, 0.64, 0.52);
+const KNUCKLE: Color = Color::srgb(0.76, 0.52, 0.45);
+const CREASE: Color = Color::srgb(0.74, 0.50, 0.46);
+const FINGERTIP: Color = Color::srgb(0.90, 0.60, 0.55);
+const NAIL: Color = Color::srgb(0.93, 0.76, 0.73);
+
+const KNUCKLE_REACH: [f32; 3] = [0.13, 0.085, 0.065];
+const CREASE_REACH: f32 = 0.022;
+const MOTTLE: f32 = 0.045;
+
+type Skin = ExtendedMaterial<StandardMaterial, Flesh>;
+
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Clone)]
+struct Flesh {
+    #[uniform(100)]
+    tone: FleshTone,
+}
+
+#[derive(bevy::render::render_resource::ShaderType, Clone)]
+struct FleshTone {
+    scatter: Vec4,
+    wrap: Vec4,
+    sheen: Vec4,
+}
+
+impl MaterialExtension for Flesh {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://on_viz/hand.wgsl".into()
+    }
+}
 
 fn is_arm_bone(name: &str) -> bool {
     let lowered = name.to_ascii_lowercase();
@@ -103,7 +138,9 @@ pub struct HandsPlugin;
 
 impl Plugin for HandsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_hands)
+        bevy::asset::embedded_asset!(app, "hand.wgsl");
+        app.add_plugins(MaterialPlugin::<Skin>::default())
+            .add_systems(Startup, setup_hands)
             .add_systems(Update, (rig_loaded_hands, prepare_hand_meshes));
     }
 }
@@ -389,28 +426,190 @@ fn measure_fit(
 
 fn prepare_hand_meshes(
     mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    skinned: Query<Entity, (With<Mesh3d>, With<SkinnedMesh>, Without<HandMesh>)>,
+    mut materials: ResMut<Assets<Skin>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    poses: Res<Assets<SkinnedMeshInverseBindposes>>,
+    names: Query<&Name>,
+    skinned: Query<(Entity, &Mesh3d, &SkinnedMesh), Without<HandMesh>>,
 ) {
-    for entity in &skinned {
-        commands.entity(entity).insert((
-            HandMesh,
-            NoFrustumCulling,
-            bevy::light::NotShadowReceiver,
-            MeshMaterial3d(materials.add(bare_hand())),
-        ));
+    for (entity, mesh, skin) in &skinned {
+        let bones: Vec<(String, Vec3)> = poses
+            .get(&skin.inverse_bindposes)
+            .map(|poses| {
+                skin.joints
+                    .iter()
+                    .zip(poses.iter())
+                    .map(|(joint, pose)| {
+                        let name = names
+                            .get(*joint)
+                            .map(|name| name.as_str().to_ascii_lowercase())
+                            .unwrap_or_default();
+                        (name, pose.inverse().transform_point3(Vec3::ZERO))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tinted = meshes.get_mut(&mesh.0).is_some_and(|mut mesh| {
+            complexion(&mesh, &bones)
+                .map(|colours| mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours))
+                .is_some()
+        });
+        commands
+            .entity(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert((
+                HandMesh,
+                NoFrustumCulling,
+                bevy::light::NotShadowReceiver,
+                MeshMaterial3d(materials.add(bare_hand(tinted))),
+            ));
     }
 }
 
-fn bare_hand() -> StandardMaterial {
-    StandardMaterial {
-        base_color: BARE_SKIN,
-        perceptual_roughness: 0.62,
-        reflectance: 0.14,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
+fn bare_hand(tinted: bool) -> Skin {
+    ExtendedMaterial {
+        base: StandardMaterial {
+            base_color: if tinted { Color::WHITE } else { BARE_SKIN },
+            perceptual_roughness: 0.56,
+            reflectance: 0.40,
+            diffuse_transmission: 0.12,
+            thickness: 6.0,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        },
+        extension: Flesh {
+            tone: FleshTone {
+                scatter: Vec4::new(1.0, 0.32, 0.20, 1.0),
+                wrap: Vec4::new(0.60, 0.24, 0.13, 0.55),
+                sheen: Vec4::new(0.10, 0.10, 0.12, 0.24),
+            },
+        },
     }
+}
+
+fn complexion(mesh: &Mesh, bones: &[(String, Vec3)]) -> Option<Vec<[f32; 4]>> {
+    let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return None;
+    };
+    let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        return None;
+    };
+    let Some(VertexAttributeValues::Float32x4(weights)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
+    else {
+        return None;
+    };
+    let joints: Vec<[u16; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)? {
+        VertexAttributeValues::Uint16x4(values) => values.clone(),
+        VertexAttributeValues::Uint8x4(values) => values.iter().map(|v| v.map(u16::from)).collect(),
+        _ => return None,
+    };
+
+    let head = |wanted: &str| bones.iter().find(|(name, _)| name.starts_with(wanted)).map(|(_, at)| *at);
+    let frame = crate::glove::HandFrame::new(
+        head("wrist")?,
+        head("finger3-1")?,
+        head("finger2-1")?,
+        head("finger5-1")?,
+        head("finger1-3")?,
+    );
+
+    let segment = |name: &str| -> Option<(usize, usize)> {
+        let rest = name.strip_prefix("finger")?;
+        let finger = rest.get(0..1)?.parse::<usize>().ok()?;
+        let bone = rest.get(2..3)?.parse::<usize>().ok()?;
+        (rest.get(1..2) == Some("-")).then_some((finger, bone))
+    };
+    let knuckles: Vec<(Vec3, Vec3, f32)> = bones
+        .iter()
+        .filter_map(|(name, at)| {
+            let (finger, bone) = segment(name)?;
+            let next = head(&format!("finger{finger}-{}", bone + 1));
+            let previous = head(&format!("finger{finger}-{}", bone.checked_sub(1)?));
+            let axis = match (next, previous) {
+                (Some(next), _) => next - *at,
+                (None, Some(previous)) => *at - previous,
+                _ => return None,
+            };
+            let reach = KNUCKLE_REACH[(bone.max(1) - 1).min(2)] * frame.palm;
+            Some((*at, axis.normalize_or_zero(), reach))
+        })
+        .collect();
+
+    let thumb_nail = (frame.dorsal * 0.5 - frame.across * 0.85).normalize_or_zero();
+    let distal: Vec<Option<(Vec3, Vec3, f32, Vec3)>> = bones
+        .iter()
+        .map(|(name, at)| {
+            let (finger, bone) = segment(name)?;
+            if bone != 3 {
+                return None;
+            }
+            let previous = head(&format!("finger{finger}-2"))?;
+            let length = (*at - previous).length() * 0.9;
+            let nail = if finger == 1 { thumb_nail } else { frame.dorsal };
+            Some((*at, (*at - previous).normalize_or_zero(), length.max(1e-6), nail))
+        })
+        .collect();
+    let on_arm: Vec<bool> = bones.iter().map(|(name, _)| is_arm_bone(name)).collect();
+
+    let linear = |colour: Color| {
+        let colour = colour.to_linear();
+        Vec3::new(colour.red, colour.green, colour.blue)
+    };
+    let mut out = Vec::with_capacity(positions.len());
+    for i in 0..positions.len() {
+        let point = Vec3::from(positions[i]);
+        let normal = Vec3::from(normals[i]).normalize_or_zero();
+        let facing = normal.dot(frame.dorsal);
+
+        let (mut arm, mut tip, mut nail) = (0.0, 0.0, 0.0);
+        for (joint, weight) in joints[i].iter().zip(weights[i]) {
+            let joint = *joint as usize;
+            if on_arm.get(joint).copied().unwrap_or(false) {
+                arm += weight;
+            }
+            if let Some(Some((at, axis, length, up))) = distal.get(joint) {
+                let along = (point - *at).dot(*axis) / length;
+                tip += weight * smooth(0.15, 0.85, along);
+                nail += weight * smooth(0.30, 0.48, along) * smooth(0.40, 0.72, normal.dot(*up));
+            }
+        }
+
+        let (mut knuckle, mut crease) = (0.0f32, 0.0f32);
+        for (at, axis, reach) in &knuckles {
+            let offset = point - *at;
+            let along = offset.dot(*axis);
+            let distance = offset.length() / reach;
+            knuckle = knuckle.max((-distance * distance).exp());
+            let sideways = (offset - *axis * along).length() / reach;
+            if sideways < 1.6 {
+                let line = along / (CREASE_REACH * frame.palm);
+                crease = crease.max((-line * line).exp());
+            }
+        }
+        knuckle *= smooth(0.1, 0.6, facing);
+        crease *= smooth(0.2, 0.7, -facing);
+
+        let mut colour = linear(BACK_OF_HAND).lerp(linear(PALM), smooth(-0.1, 0.6, -facing));
+        colour = colour.lerp(linear(FOREARM), arm.clamp(0.0, 1.0));
+        colour = colour.lerp(linear(FINGERTIP), tip.clamp(0.0, 1.0) * 0.8);
+        colour = colour.lerp(linear(KNUCKLE), knuckle * 0.7);
+        colour = colour.lerp(linear(CREASE), crease * 0.6);
+        let nail = nail.clamp(0.0, 1.0);
+        colour = colour.lerp(linear(NAIL), nail);
+
+        let scaled = point / frame.palm;
+        let mottle = (scaled.x * 17.0).sin() * (scaled.y * 13.0 + 1.3).sin() * (scaled.z * 19.0 + 0.7).sin();
+        colour *= 1.0 + MOTTLE * mottle;
+        out.push([colour.x, colour.y, colour.z, 1.0 - nail]);
+    }
+    Some(out)
+}
+
+fn smooth(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 #[allow(dead_code)]
