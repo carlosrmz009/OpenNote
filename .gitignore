@@ -67,3 +67,4 @@ __pycache__/
 /bench_refresh_urls.txt
 /models/*.jsonl
 /models/*.onm
+/corpus-known/

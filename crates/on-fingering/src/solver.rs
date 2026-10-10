@@ -73,6 +73,10 @@ pub trait FingeringPrior: Sync {
         0.0
     }
 
+    fn recall(&self, _score: &Score) -> Vec<(NoteId, Finger)> {
+        Vec::new()
+    }
+
     fn step_cost(
         &self,
         _hand: Hand,
@@ -195,7 +199,7 @@ impl Agreement {
         let ask = |set| {
             let mut single = options.clone();
             single.rule_set = set;
-            finger_score_with_prior(score, &single, prior)
+            finger_as_given(score, &single, prior)
         };
         let answers: Vec<Solution> = if inner_threads() {
             std::thread::scope(|scope| {
@@ -274,6 +278,24 @@ pub fn finger_score_with_prior(
     options: &FingeringOptions,
     prior: Option<&dyn FingeringPrior>,
 ) -> Solution {
+    let pins = prior.map(|p| p.recall(score)).unwrap_or_default();
+    let recalled;
+    let score = if pins.is_empty() {
+        score
+    } else {
+        tracing::info!("{} of {} notes fingered as documented in a known piece", pins.len(), score.notes.len());
+        let mut pinned = score.clone();
+        for (id, finger) in pins {
+            let note = &mut pinned.notes[id.index()];
+            note.given_finger = note.given_finger.or(Some(finger));
+        }
+        recalled = pinned;
+        &recalled
+    };
+    finger_as_given(score, options, prior)
+}
+
+fn finger_as_given(score: &Score, options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Solution {
     if options.rule_set == RuleSet::Consensus {
         return finger_score_consensus(score, options, prior);
     }

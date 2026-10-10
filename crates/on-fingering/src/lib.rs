@@ -1,4 +1,5 @@
 pub mod biomech;
+pub mod known;
 pub mod learned;
 pub mod patterns;
 pub mod playability;
@@ -10,6 +11,7 @@ pub mod solver;
 pub mod spans;
 
 pub use biomech::{BiomechModel, BiomechWeights, Grip};
+pub use known::{Known, KnownNote};
 pub use playability::{measure_solution, Playability};
 pub use prior::{NgramPrior, Symmetries};
 pub use ruler::Ruler;

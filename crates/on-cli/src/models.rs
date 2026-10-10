@@ -29,6 +29,16 @@ pub enum ModelsCommand {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Teach a model the fingerings of documented pieces, so it plays those pieces as documented.
+    Remember {
+        model: PathBuf,
+        /// Corpus folders of fingered pieces to remember.
+        #[arg(long, required = true, num_args = 1..)]
+        corpus: Vec<PathBuf>,
+        /// Where to write the model. Over the model itself by default.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 pub fn dir() -> PathBuf {
@@ -118,6 +128,33 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             sealed.extend(crate::seal::seal(&text, key));
             std::fs::write(&out, sealed)?;
             println!("sealed -> {}", out.display());
+        }
+        ModelsCommand::Remember { model, corpus, out } => {
+            let mut prior = on_fingering::NgramPrior::load(&model).context("reading the model")?;
+            prior.known = on_fingering::Known::default();
+            for path in &corpus {
+                ensure!(path.join("normalised").is_dir(), "{} is not a corpus folder", path.display());
+                let pieces = on_train::corpus::Corpus::at(path)?.load()?;
+                for piece in pieces {
+                    prior.known.add(
+                        piece
+                            .notes
+                            .iter()
+                            .map(|n| on_fingering::KnownNote {
+                                onset: n.onset,
+                                midi: n.midi,
+                                hand: n.hand.into(),
+                                finger: n.finger.and_then(on_hand::Finger::from_number),
+                                confidence: n.confidence.unwrap_or(1.0),
+                            })
+                            .collect(),
+                    );
+                }
+                println!("{}: {} pieces remembered so far", path.display(), prior.known.len());
+            }
+            let out = out.unwrap_or(model);
+            prior.save(&out)?;
+            println!("remembered {} pieces -> {}", prior.known.len(), out.display());
         }
     }
     Ok(())

@@ -116,6 +116,7 @@ pub struct NgramPrior {
     pooled: [HandCounts; 2],
     symmetries: Symmetries,
     pub learned: Option<crate::learned::Learned>,
+    pub known: crate::known::Known,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -215,6 +216,7 @@ impl NgramPrior {
             pooled_left: serialize_hand(&self.pooled[Hand::Left as usize]),
             pooled_right: serialize_hand(&self.pooled[Hand::Right as usize]),
             learned: self.learned.clone(),
+            known: self.known.clone(),
         };
         let text = serde_json::to_string_pretty(&stored)?;
         std::fs::write(path, text)?;
@@ -238,6 +240,7 @@ impl NgramPrior {
         prior.pooled[Hand::Right as usize] = deserialize_hand(&stored.pooled_right);
         prior.symmetries = stored.symmetries;
         prior.learned = stored.learned;
+        prior.known = stored.known;
         Ok(prior)
     }
 
@@ -369,6 +372,10 @@ impl FingeringPrior for NgramPrior {
         self.learned.as_ref().map_or(0.0, |l| l.chord(hand, notes, fingers))
     }
 
+    fn recall(&self, score: &on_score::Score) -> Vec<(on_score::NoteId, Finger)> {
+        self.known.recall(score)
+    }
+
     fn step_cost(
         &self,
         hand: Hand,
@@ -401,6 +408,8 @@ struct StoredModel {
     symmetries: Symmetries,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     learned: Option<crate::learned::Learned>,
+    #[serde(default, skip_serializing_if = "crate::known::Known::is_empty")]
+    known: crate::known::Known,
 }
 
 fn serialize_hand(counts: &HandCounts) -> HashMap<String, Tally> {
