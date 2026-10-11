@@ -33,7 +33,7 @@ impl SessionSettings {
             note_colours: crate::render::NoteColours::default().0,
             prior: None,
             mood: on_score::expression::Mood::default(),
-            expression: 1.0,
+            expression: 0.0,
         }
     }
 }

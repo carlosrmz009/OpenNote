@@ -45,9 +45,9 @@ pub struct SceneArgs {
     #[arg(long, value_enum, default_value_t = MoodArg::Warm)]
     pub mood: MoodArg,
 
-    /// How much expression to add, from 0 (exactly as written) to 2. Shapes dynamics,
-    /// timing and articulation, and the hands with them.
-    #[arg(long, default_value_t = 1.0)]
+    /// How much expression to add, from 0 (off: exactly as written, the default) to 2.
+    /// Shapes dynamics, timing and articulation, and the hands with them.
+    #[arg(long, default_value_t = 0.0)]
     pub expression: f32,
 }
 
