@@ -103,20 +103,24 @@ impl Known {
         ranked.truncate(CANDIDATES);
 
         let mut ballots = vec![[0.0f32; 5]; played.len()];
+        let mut elsewhere = vec![0.0f32; played.len()];
         for (_, k) in ranked {
             let piece = &self.pieces[k];
             let pitches: Vec<u8> = piece.iter().map(|v| unpack(*v).0).collect();
             for (i, j) in aligned(&wanted, &pitches) {
                 let (_, hand, finger, confidence) = unpack(piece[j]);
-                if let Some(finger) = finger.filter(|_| hand == played[i].3) {
+                let Some(finger) = finger else { continue };
+                if hand == played[i].3 {
                     ballots[i][finger.index()] += confidence.max(LEAST_CONFIDENCE);
+                } else {
+                    elsewhere[i] += confidence.max(LEAST_CONFIDENCE);
                 }
             }
         }
 
         let mut pins: HashMap<NoteId, Finger> = HashMap::new();
         for (i, ballot) in ballots.iter().enumerate() {
-            let total: f32 = ballot.iter().sum();
+            let total: f32 = ballot.iter().sum::<f32>() + elsewhere[i];
             let (best, weight) = ballot.iter().enumerate().fold((0, 0.0f32), |a, (f, w)| if *w > a.1 { (f, *w) } else { a });
             if weight >= LEAST_WEIGHT && weight >= LEAST_AGREEMENT * total {
                 pins.insert(played[i].2, Finger::ALL[best]);
@@ -124,14 +128,27 @@ impl Known {
         }
         for hand in Hand::ALL {
             for chord in score.chords(hand) {
-                let mut held: Vec<(u8, Finger)> =
-                    chord.notes.iter().filter_map(|id| pins.get(id).map(|f| (score.note(*id).midi, *f))).collect();
-                held.sort_by_key(|(midi, _)| *midi);
-                let rising = held.windows(2).all(|w| match hand {
-                    Hand::Right => w[0].1.index() < w[1].1.index(),
-                    Hand::Left => w[0].1.index() > w[1].1.index(),
-                });
-                if !rising {
+                let mut struck: Vec<(u8, Option<Finger>)> = chord
+                    .notes
+                    .iter()
+                    .filter(|id| !score.note(**id).tie.is_continuation())
+                    .map(|id| (score.note(*id).midi, pins.get(id).copied()))
+                    .collect();
+                struck.sort_by_key(|(midi, _)| *midi);
+                let room = |rank: usize, finger: Finger| {
+                    let (below, above) = match hand {
+                        Hand::Right => (finger.index(), 4 - finger.index()),
+                        Hand::Left => (4 - finger.index(), finger.index()),
+                    };
+                    let after: Vec<usize> = struck[rank + 1..].iter().filter_map(|(_, f)| f.map(|f| f.index())).collect();
+                    let rises = after.first().is_none_or(|next| match hand {
+                        Hand::Right => *next > finger.index(),
+                        Hand::Left => *next < finger.index(),
+                    });
+                    rises && below >= rank && above >= struck.len() - 1 - rank
+                };
+                let fits = struck.iter().enumerate().all(|(rank, (_, f))| f.is_none_or(|f| room(rank, f)));
+                if !fits {
                     for id in &chord.notes {
                         pins.remove(id);
                     }
@@ -397,6 +414,65 @@ mod tests {
             });
         }
         score
+    }
+
+    #[test]
+    fn a_pin_that_leaves_a_chord_note_no_finger_is_dropped() {
+        let tune = melody();
+        let under: Vec<usize> = (0..tune.len()).filter(|k| tune[*k].1 == Finger::Thumb).collect();
+        let mut known = Known::default();
+        for seconds in [0.3, 0.41] {
+            let mut notes = played(&tune, seconds);
+            for k in &under {
+                notes.push(KnownNote {
+                    onset: *k as f64 * seconds,
+                    midi: tune[*k].0 - 3,
+                    hand: Hand::Left,
+                    finger: Some(Finger::Index),
+                    confidence: 0.9,
+                });
+            }
+            known.add(notes);
+        }
+        let single = score_of(&tune.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+        let mut score = Score::default();
+        let mut above = Vec::new();
+        for (k, note) in single.notes.iter().enumerate() {
+            if under.contains(&k) {
+                let mut below = note.clone();
+                below.midi -= 3;
+                below.id = NoteId(score.notes.len() as u32);
+                score.notes.push(below);
+                above.push(NoteId(score.notes.len() as u32));
+            }
+            let mut note = note.clone();
+            note.id = NoteId(score.notes.len() as u32);
+            score.notes.push(note);
+        }
+        let pins: HashMap<NoteId, Finger> = known.recall(&score).into_iter().collect();
+        assert!(pins.len() > tune.len() / 2, "the rest of the piece is still recalled");
+        for id in &above {
+            assert!(!pins.contains_key(id), "note {}: a right thumb pinned above a right-hand note", id.0);
+        }
+    }
+
+    #[test]
+    fn a_note_the_pianists_took_with_the_other_hand_is_left_to_the_solver() {
+        let tune = melody();
+        let mut known = Known::default();
+        for seconds in [0.3, 0.41] {
+            let mut notes = played(&tune, seconds);
+            for (k, note) in notes.iter_mut().enumerate() {
+                if k % 4 == 0 {
+                    note.hand = Hand::Left;
+                }
+            }
+            known.add(notes);
+        }
+        let score = score_of(&tune.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+        let pins = known.recall(&score);
+        assert!(!pins.is_empty());
+        assert!(pins.iter().all(|(id, _)| id.index() % 4 != 0), "a note played by the other hand was pinned");
     }
 
     #[test]

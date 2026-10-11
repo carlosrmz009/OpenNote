@@ -210,6 +210,22 @@ fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    if std::env::var("ON_CROSS").is_ok() {
+        let mut at = 0.0;
+        let mut last = f64::NEG_INFINITY;
+        while at <= timeline.duration {
+            let posed = poses(&animators, at);
+            let tips = |side: usize| -> Vec<f32> { (0..5).map(|f| animators[side].joints(&posed[side])[1 + 4 * f + 3].x).collect() };
+            let (left, right) = (tips(0), tips(1));
+            let gap = right.iter().copied().fold(f32::INFINITY, f32::min) - left.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            if gap < 0.0 && at - last > 0.5 {
+                println!("{at:8.2}s crossed by {:.0} mm  left tips x {:?}  right tips x {:?}", -gap, left.iter().map(|x| x.round()).collect::<Vec<_>>(), right.iter().map(|x| x.round()).collect::<Vec<_>>());
+                last = at;
+            }
+            at += 0.02;
+        }
+        return Ok(());
+    }
     if let Ok(span) = std::env::var("ON_TRACK") {
         let (from, to) = span.split_once(',').expect("ON_TRACK=from,to");
         let (from, to): (f64, f64) = (from.parse()?, to.parse()?);

@@ -20,7 +20,7 @@ impl Default for HandAssignment {
         Self {
             profile: HandProfile::default(),
             overspan_weight: 0.76,
-            travel_weight: 0.00004,
+            travel_weight: 0.012,
             register_weight: 26.0,
             abandon_weight: 0.004,
             pivot_window_seconds: 1.5,
@@ -31,6 +31,10 @@ impl Default for HandAssignment {
 
 pub fn assign_hands(score: &mut Score, options: &HandAssignment) {
     if assign_from_staves(score) {
+        return;
+    }
+    if assign_from_tracks(score) {
+        keep_repeated_notes_in_one_hand(score, &Keyboard::new(), options.profile.comfortable_span_mm());
         return;
     }
     assign_by_search(score, options);
@@ -133,6 +137,29 @@ fn assign_from_staves(score: &mut Score) -> bool {
     true
 }
 
+const TRACKS_APART: f32 = 7.0;
+
+fn assign_from_tracks(score: &mut Score) -> bool {
+    let mut tracks: std::collections::BTreeMap<usize, (f32, usize)> = std::collections::BTreeMap::new();
+    for note in &score.notes {
+        let crate::SourceRef::Midi { track, .. } = note.source else { return false };
+        let entry = tracks.entry(track).or_default();
+        entry.0 += f32::from(note.midi);
+        entry.1 += 1;
+    }
+    let means: Vec<(usize, f32)> = tracks.iter().map(|(track, (sum, count))| (*track, sum / *count as f32)).collect();
+    let [(first, a), (second, b)] = means[..] else { return false };
+    if (a - b).abs() < TRACKS_APART {
+        return false;
+    }
+    let upper = if a > b { first } else { second };
+    for note in &mut score.notes {
+        let crate::SourceRef::Midi { track, .. } = note.source else { continue };
+        note.hand = Some(if track == upper { Hand::Right } else { Hand::Left });
+    }
+    true
+}
+
 struct Simultaneity {
     onset: Ticks,
     onset_seconds: f64,
@@ -218,6 +245,49 @@ fn assign_by_search(score: &mut Score, options: &HandAssignment) {
         }
         if i > 0 {
             split = back[i][split];
+        }
+    }
+    keep_repeated_notes_in_one_hand(score, &keyboard, max_span);
+}
+
+const REPEAT_SECONDS: f64 = 0.6;
+
+fn keep_repeated_notes_in_one_hand(score: &mut Score, keyboard: &Keyboard, max_span: f32) {
+    let mut order: Vec<usize> = (0..score.notes.len()).filter(|i| !score.notes[*i].tie.is_continuation()).collect();
+    order.sort_by(|a, b| {
+        let (a, b) = (&score.notes[*a], &score.notes[*b]);
+        a.midi.cmp(&b.midi).then(a.onset_seconds.total_cmp(&b.onset_seconds))
+    });
+    for w in 1..order.len().saturating_sub(1) {
+        let (before, note, after) = (&score.notes[order[w - 1]], &score.notes[order[w]], &score.notes[order[w + 1]]);
+        if before.midi != note.midi || after.midi != note.midi {
+            continue;
+        }
+        let (Some(was), Some(is), Some(next)) = (before.hand, note.hand, after.hand) else { continue };
+        if was != next || was == is {
+            continue;
+        }
+        if note.onset_seconds - before.onset_seconds > REPEAT_SECONDS || after.onset_seconds - note.onset_seconds > REPEAT_SECONDS {
+            continue;
+        }
+        let at = note.onset_seconds + 1e-6;
+        let sounding = score.notes.iter().filter(|n| n.id != note.id && n.onset_seconds <= at && n.offset_seconds() > at);
+        let (mut mine, mut theirs): (Vec<u8>, Vec<u8>) = (vec![note.midi], Vec::new());
+        for n in sounding {
+            match n.hand {
+                Some(h) if h == was => mine.push(n.midi),
+                Some(_) => theirs.push(n.midi),
+                None => {}
+            }
+        }
+        let (low, high) = (*mine.iter().min().expect("one"), *mine.iter().max().expect("one"));
+        let apart = match was {
+            Hand::Left => theirs.iter().all(|t| *t > high),
+            Hand::Right => theirs.iter().all(|t| *t < low),
+        };
+        if apart && mine.len() <= 5 && keyboard.interval_mm(low, high) <= max_span {
+            let id = note.id;
+            score.note_mut(id).hand = Some(was);
         }
     }
 }
@@ -495,6 +565,35 @@ mod tests {
         let mut s = Score { notes, ..Default::default() };
         s.finalise();
         s
+    }
+
+    #[test]
+    fn a_midi_file_with_a_track_for_each_hand_keeps_its_hands() {
+        let mut notes = Vec::new();
+        for (k, (midi, track)) in [(60, 1), (64, 0), (67, 0), (48, 1), (72, 0), (43, 1)].into_iter().enumerate() {
+            let mut n = note(k as u32, midi, k as Ticks * 240, None);
+            n.source = SourceRef::Midi { track, event: k };
+            notes.push(n);
+        }
+        let mut score = score_of(notes);
+        assign_hands(&mut score, &HandAssignment::default());
+        let hands: Vec<Hand> = score.notes.iter().map(|n| n.hand.unwrap()).collect();
+        assert_eq!(hands, vec![Hand::Left, Hand::Right, Hand::Right, Hand::Left, Hand::Right, Hand::Left]);
+    }
+
+    #[test]
+    fn a_repeated_note_does_not_hop_to_the_other_hand_and_back() {
+        let mut notes = Vec::new();
+        for (k, (midi, hand)) in [(52, Hand::Left), (52, Hand::Right), (52, Hand::Left), (67, Hand::Right)].into_iter().enumerate() {
+            let mut n = note(k as u32, midi, (k.min(2) as Ticks) * 240, None);
+            n.onset_seconds = k.min(2) as f64 * 0.25;
+            n.duration_seconds = 0.2;
+            n.hand = Some(hand);
+            notes.push(n);
+        }
+        let mut score = Score { notes, ..Default::default() };
+        keep_repeated_notes_in_one_hand(&mut score, &Keyboard::new(), HandProfile::default().comfortable_span_mm());
+        assert_eq!(score.notes[1].hand, Some(Hand::Left));
     }
 
     #[test]
