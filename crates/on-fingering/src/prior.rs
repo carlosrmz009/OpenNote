@@ -376,6 +376,10 @@ impl FingeringPrior for NgramPrior {
         self.known.recall(score)
     }
 
+    fn suggest(&self, score: &on_score::Score) -> HashMap<on_score::NoteId, [f32; 5]> {
+        self.known.suggest(score)
+    }
+
     fn step_cost(
         &self,
         hand: Hand,

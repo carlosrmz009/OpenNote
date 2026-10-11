@@ -77,6 +77,10 @@ pub trait FingeringPrior: Sync {
         Vec::new()
     }
 
+    fn suggest(&self, _score: &Score) -> std::collections::HashMap<NoteId, [f32; 5]> {
+        Default::default()
+    }
+
     fn step_cost(
         &self,
         _hand: Hand,
@@ -184,10 +188,13 @@ impl Solution {
 
 const AGREEMENT_WEIGHT: f32 = 0.6;
 
+const PASSAGE_WEIGHT: f32 = 2.5;
+
 #[derive(Debug, Clone, Default)]
 pub struct Agreement {
     votes: std::collections::HashMap<NoteId, [u8; 5]>,
     voters: u8,
+    passages: std::collections::HashMap<NoteId, [f32; 5]>,
 }
 
 impl Agreement {
@@ -220,7 +227,11 @@ impl Agreement {
                 votes.entry(fingering.note).or_default()[fingering.finger.index()] += 1;
             }
         }
-        Self { votes, voters: answers.len() as u8 }
+        Self { votes, voters: answers.len() as u8, passages: Default::default() }
+    }
+
+    fn passage(&self, note: NoteId, finger: Finger) -> f32 {
+        self.passages.get(&note).map_or(0.0, |share| PASSAGE_WEIGHT * share[finger.index()])
     }
 
     fn bonus(&self, note: NoteId, finger: Finger) -> f32 {
@@ -250,7 +261,17 @@ pub fn finger_score_consensus(
     options: &FingeringOptions,
     prior: Option<&dyn FingeringPrior>,
 ) -> Solution {
-    let agreement = Agreement::across_published(score, options, prior);
+    consensus_with(score, options, prior, Default::default())
+}
+
+fn consensus_with(
+    score: &Score,
+    options: &FingeringOptions,
+    prior: Option<&dyn FingeringPrior>,
+    passages: std::collections::HashMap<NoteId, [f32; 5]>,
+) -> Solution {
+    let mut agreement = Agreement::across_published(score, options, prior);
+    agreement.passages = passages;
     let tally = agreement.tally();
     let mut combined = options.clone();
     combined.rule_set = RuleSet::Consensus;
@@ -292,7 +313,16 @@ pub fn finger_score_with_prior(
         recalled = pinned;
         &recalled
     };
-    finger_as_given(score, options, prior)
+    let mut passages = prior.map(|p| p.suggest(score)).unwrap_or_default();
+    passages.retain(|id, _| score.note(*id).given_finger.is_none());
+    if !passages.is_empty() {
+        tracing::info!("{} of {} notes have a passage pianists commonly finger alike", passages.len(), score.notes.len());
+    }
+    if options.rule_set == RuleSet::Consensus {
+        return consensus_with(score, options, prior, passages);
+    }
+    let agreement = Agreement { passages, ..Default::default() };
+    solve_score(score, options, prior, Some(&agreement))
 }
 
 fn finger_as_given(score: &Score, options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Solution {
@@ -632,7 +662,7 @@ impl<'a> HandSolver<'a> {
         for i in 0..event.len() {
             let here = Placement::new(event.notes[i], candidate.fingers[i]);
             if let Some(votes) = self.agreement {
-                agreed -= votes.bonus(event.ids[i], candidate.fingers[i]);
+                agreed -= votes.bonus(event.ids[i], candidate.fingers[i]) + votes.passage(event.ids[i], candidate.fingers[i]);
             }
             rules += self
                 .rules

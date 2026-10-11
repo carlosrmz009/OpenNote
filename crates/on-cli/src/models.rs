@@ -134,8 +134,11 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             prior.known = on_fingering::Known::default();
             for path in &corpus {
                 ensure!(path.join("normalised").is_dir(), "{} is not a corpus folder", path.display());
-                let pieces = on_train::corpus::Corpus::at(path)?.load()?;
-                for piece in pieces {
+                let mut latest = std::collections::BTreeMap::new();
+                for piece in on_train::corpus::Corpus::at(path)?.load()? {
+                    latest.insert((piece.piece.clone(), piece.annotator.clone()), piece);
+                }
+                for piece in latest.into_values() {
                     prior.known.add(
                         piece
                             .notes

@@ -20,6 +20,14 @@ const LEAST_CONFIDENCE: f32 = 0.05;
 
 const TOGETHER_SECONDS: f64 = 0.01;
 
+const CHORD_SECONDS: f64 = 0.03;
+
+const PASSAGE: usize = 6;
+
+const LEAST_NOTES: usize = 100;
+
+const LEAST_VOTERS: u32 = 3;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Known {
     pieces: Vec<Vec<u16>>,
@@ -36,7 +44,16 @@ pub struct KnownNote {
 impl Known {
     pub fn add(&mut self, mut notes: Vec<KnownNote>) {
         notes.sort_by(|a, b| order(a.onset, a.midi).cmp(&order(b.onset, b.midi)));
-        self.pieces.push(notes.iter().map(pack).collect());
+        let mut last = [f64::NEG_INFINITY; 2];
+        let packed = notes
+            .iter()
+            .map(|n| {
+                let together = n.onset - last[n.hand as usize] < CHORD_SECONDS;
+                last[n.hand as usize] = n.onset;
+                pack(n, together)
+            })
+            .collect();
+        self.pieces.push(packed);
     }
 
     pub fn len(&self) -> usize {
@@ -58,6 +75,9 @@ impl Known {
             .filter_map(|n| n.hand.map(|hand| (order(n.onset_seconds, n.midi).0, n.midi, n.id, hand)))
             .collect();
         played.sort_by_key(|(at, midi, _, _)| (*at, *midi));
+        if played.len() < LEAST_NOTES {
+            return Vec::new();
+        }
         let pitches: Vec<u8> = played.iter().map(|p| p.1).collect();
         let mut wanted: HashMap<u64, Vec<usize>> = HashMap::new();
         for (at, gram) in grams(&pitches) {
@@ -73,8 +93,9 @@ impl Known {
             .enumerate()
             .map(|(k, piece)| {
                 let pitches: Vec<u8> = piece.iter().map(|v| unpack(*v).0).collect();
-                let found: HashSet<u64> = grams(&pitches).map(|(_, g)| g).filter(|g| wanted.contains_key(g)).collect();
-                (found.len() as f32 / wanted.len() as f32, k)
+                let own: HashSet<u64> = grams(&pitches).map(|(_, g)| g).collect();
+                let found = own.iter().filter(|g| wanted.contains_key(g)).count() as f32;
+                ((found / wanted.len() as f32).min(found / own.len().max(1) as f32), k)
             })
             .filter(|(share, _)| *share >= LEAST_SHARE)
             .collect();
@@ -120,6 +141,79 @@ impl Known {
         let mut pins: Vec<(NoteId, Finger)> = pins.into_iter().collect();
         pins.sort_by_key(|(id, _)| id.0);
         pins
+    }
+
+    pub fn suggest(&self, score: &Score) -> HashMap<NoteId, [f32; 5]> {
+        let mut out = HashMap::new();
+        if self.pieces.is_empty() {
+            return out;
+        }
+        let mut wanted: [HashMap<u64, Vec<usize>>; 2] = Default::default();
+        let mut ids: [Vec<NoteId>; 2] = Default::default();
+        for hand in Hand::ALL {
+            let mut played: Vec<&on_score::Note> =
+                score.notes.iter().filter(|n| n.hand == Some(hand) && !n.tie.is_continuation()).collect();
+            played.sort_by(|a, b| order(a.onset_seconds, a.midi).cmp(&order(b.onset_seconds, b.midi)));
+            let shapes: Vec<u64> = played
+                .iter()
+                .enumerate()
+                .map(|(k, n)| {
+                    let before = k.checked_sub(1).map(|k| played[k]);
+                    let together = before.is_some_and(|b| n.onset_seconds - b.onset_seconds < CHORD_SECONDS);
+                    shape(before.map(|b| b.midi), n.midi, together)
+                })
+                .collect();
+            for (at, key) in passages(&shapes) {
+                wanted[hand as usize].entry(key).or_default().push(at);
+            }
+            ids[hand as usize] = played.iter().map(|n| n.id).collect();
+        }
+        let mut votes: [Vec<[f32; 5]>; 2] = [vec![[0.0; 5]; ids[0].len()], vec![[0.0; 5]; ids[1].len()]];
+        let mut voters: [Vec<(u32, usize)>; 2] = [vec![(0, usize::MAX); ids[0].len()], vec![(0, usize::MAX); ids[1].len()]];
+        for (k, piece) in self.pieces.iter().enumerate() {
+            for hand in Hand::ALL {
+                let side = hand as usize;
+                if wanted[side].is_empty() {
+                    continue;
+                }
+                let mine: Vec<(Option<Finger>, f32, u64)> = {
+                    let mut previous = None;
+                    piece
+                        .iter()
+                        .map(|v| (unpack(*v), v >> 15 == 1))
+                        .filter(|((_, h, _, _), _)| *h == hand)
+                        .map(|((midi, _, finger, confidence), together)| {
+                            let s = shape(previous, midi, together);
+                            previous = Some(midi);
+                            (finger, confidence.max(LEAST_CONFIDENCE), s)
+                        })
+                        .collect()
+                };
+                let shapes: Vec<u64> = mine.iter().map(|m| m.2).collect();
+                for (j, key) in passages(&shapes) {
+                    let Some(at) = wanted[side].get(&key) else { continue };
+                    for i in at {
+                        for d in 0..PASSAGE {
+                            let Some(finger) = mine[j + d].0 else { continue };
+                            let seen = &mut voters[side][i + d];
+                            if seen.1 != k {
+                                *seen = (seen.0 + 1, k);
+                                votes[side][i + d][finger.index()] += mine[j + d].1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for side in 0..2 {
+            for (i, id) in ids[side].iter().enumerate() {
+                let total: f32 = votes[side][i].iter().sum();
+                if voters[side][i].0 >= LEAST_VOTERS && total > 0.0 {
+                    out.insert(*id, votes[side][i].map(|w| w / total));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -172,10 +266,10 @@ fn aligned(wanted: &HashMap<u64, Vec<usize>>, pitches: &[u8]) -> Vec<(usize, usi
     out
 }
 
-fn pack(note: &KnownNote) -> u16 {
+fn pack(note: &KnownNote, together: bool) -> u16 {
     let finger = note.finger.map_or(0, |f| f.index() as u16 + 1);
     let confidence = (note.confidence.clamp(0.0, 1.0) * 15.0).round() as u16;
-    u16::from(note.midi & 0x7f) | (note.hand as u16) << 7 | finger << 8 | confidence << 11
+    u16::from(note.midi & 0x7f) | (note.hand as u16) << 7 | finger << 8 | confidence << 11 | u16::from(together) << 15
 }
 
 fn unpack(value: u16) -> (u8, Hand, Option<Finger>, f32) {
@@ -184,8 +278,17 @@ fn unpack(value: u16) -> (u8, Hand, Option<Finger>, f32) {
         (value & 0x7f) as u8,
         Hand::ALL[usize::from((value >> 7) & 1)],
         (finger > 0).then(|| Finger::ALL[usize::from(finger - 1)]),
-        f32::from(value >> 11) / 15.0,
+        f32::from((value >> 11) & 15) / 15.0,
     )
+}
+
+fn shape(previous: Option<u8>, midi: u8, together: bool) -> u64 {
+    let step = previous.map_or(0, |p| (i32::from(midi) - i32::from(p)).clamp(-24, 24) + 25) as u64;
+    step << 2 | u64::from(on_hand::keyboard::is_black(midi)) << 1 | u64::from(together)
+}
+
+fn passages(shapes: &[u64]) -> impl Iterator<Item = (usize, u64)> + '_ {
+    shapes.windows(PASSAGE).enumerate().skip(1).map(|(at, w)| (at, w.iter().fold(0u64, |key, s| key << 8 | s)))
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -253,7 +356,10 @@ mod tests {
     fn melody() -> Vec<(u8, Finger)> {
         let fingers = [1, 2, 3, 1, 2, 3, 4, 5, 3, 2, 1, 2, 4, 3, 2, 1, 3, 5, 4, 2];
         let pitches = [60, 62, 64, 65, 67, 69, 71, 72, 69, 67, 65, 67, 71, 69, 67, 65, 69, 74, 72, 67];
-        pitches.iter().zip(fingers).map(|(p, f)| (*p, Finger::from_number(f).unwrap())).collect()
+        [0u8, 2, 4, 5, 7, 9]
+            .iter()
+            .flat_map(|shift| pitches.iter().zip(fingers).map(move |(p, f)| (p + shift, Finger::from_number(f).unwrap())))
+            .collect()
     }
 
     fn played(tune: &[(u8, Finger)], seconds: f64) -> Vec<KnownNote> {
@@ -320,6 +426,26 @@ mod tests {
     }
 
     #[test]
+    fn a_passage_many_pianists_finger_alike_is_suggested_in_an_unknown_piece() {
+        let tune = melody();
+        let mut known = Known::default();
+        for lead in [40u8, 43, 47] {
+            let mut piece: Vec<(u8, Finger)> = (0..6).map(|k| (lead + 2 * k, Finger::ALL[k as usize % 5])).collect();
+            piece.extend(tune[..10].iter().copied());
+            known.add(played(&piece, 0.3));
+        }
+        let mut pitches: Vec<u8> = vec![79, 77, 76, 74, 72, 71];
+        pitches.extend(tune[..10].iter().map(|(p, _)| p + 12));
+        let suggested = known.suggest(&score_of(&pitches));
+        assert!(known.recall(&score_of(&pitches)).is_empty(), "the piece itself is not known");
+        for k in 7..16 {
+            let share = suggested.get(&NoteId(k as u32)).unwrap_or_else(|| panic!("note {k} had no suggestion"));
+            let finger = tune[k - 6].1;
+            assert!(share[finger.index()] > 0.99, "note {k}: {share:?}, documented {finger:?}");
+        }
+    }
+
+    #[test]
     fn versions_that_disagree_pin_nothing() {
         let tune = melody();
         let mut other: Vec<(u8, Finger)> = tune.clone();
@@ -329,6 +455,20 @@ mod tests {
         let mut known = Known::default();
         known.add(played(&tune, 0.3));
         known.add(played(&other, 0.3));
+        let score = score_of(&tune.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+        assert!(known.recall(&score).is_empty());
+    }
+
+    #[test]
+    fn a_short_exercise_inside_a_long_piece_is_not_that_piece() {
+        let tune = melody();
+        let mut long: Vec<(u8, Finger)> = Vec::new();
+        for shift in [0u8, 1, 3, 12, 14] {
+            long.extend(tune.iter().map(|(p, f)| (p + shift, *f)));
+        }
+        let mut known = Known::default();
+        known.add(played(&long, 0.3));
+        known.add(played(&long, 0.35));
         let score = score_of(&tune.iter().map(|(p, _)| *p).collect::<Vec<_>>());
         assert!(known.recall(&score).is_empty());
     }
