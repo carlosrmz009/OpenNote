@@ -130,9 +130,9 @@ const NOTE_GLOW: f32 = 9.5;
 
 const WHITE_KEY_DEPTH_MM: f32 = 14.0;
 
-const KEY_GAP_MM: f32 = 1.4;
+const KEY_GAP_MM: f32 = 0.5;
 
-const WHITE_KEY_EDGE_MM: f32 = 1.6;
+const WHITE_KEY_EDGE_MM: f32 = 0.9;
 
 const BLACK_KEY_EDGE_MM: f32 = 1.4;
 
@@ -145,6 +145,14 @@ const KEY_EDGE_SEGMENTS: usize = 4;
 const WHITE_KEY_ROUGHNESS: f32 = 0.28;
 
 const BLACK_KEY_ROUGHNESS: f32 = 0.18;
+
+const LACQUER_EYE_MM: f32 = 900.0;
+
+const WHITE_LACQUER: Vec4 = Vec4::new(1.0, 0.04, 0.6, 0.0);
+
+const BLACK_LACQUER: Vec4 = Vec4::new(1.0, 0.05, 5.0, 0.0);
+
+const LACQUER_STRIP: Vec4 = Vec4::new(0.325, 0.007, 0.09, 0.03);
 
 const HIT_LINE_DEPTH_MM: f32 = 6.0;
 
@@ -320,11 +328,13 @@ pub struct VisualizerPlugin;
 impl Plugin for VisualizerPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "note.wgsl");
+        bevy::asset::embedded_asset!(app, "key.wgsl");
         app.init_resource::<Transport>()
             .init_resource::<ViewportInset>()
             .init_resource::<NoteColours>()
             .add_plugins(crate::hands::HandsPlugin)
             .add_plugins(MaterialPlugin::<NoteMaterial>::default())
+            .add_plugins(MaterialPlugin::<Lacquered>::default())
             .add_systems(
                 Startup,
                 (
@@ -452,13 +462,43 @@ fn place_camera(
     }
 }
 
-fn key_material(image: Handle<Image>, black: bool) -> StandardMaterial {
-    StandardMaterial {
-        base_color: Color::WHITE,
-        base_color_texture: Some(image),
-        perceptual_roughness: if black { BLACK_KEY_ROUGHNESS } else { WHITE_KEY_ROUGHNESS },
-        reflectance: 0.5,
-        ..default()
+type Lacquered = bevy::pbr::ExtendedMaterial<StandardMaterial, Lacquer>;
+
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Clone)]
+struct Lacquer {
+    #[uniform(100)]
+    finish: LacquerFinish,
+}
+
+#[derive(bevy::render::render_resource::ShaderType, Clone)]
+struct LacquerFinish {
+    shine: Vec4,
+    eye: Vec4,
+    strip: Vec4,
+}
+
+impl bevy::pbr::MaterialExtension for Lacquer {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://on_viz/key.wgsl".into()
+    }
+}
+
+fn key_material(image: Handle<Image>, black: bool, eye: Vec3) -> Lacquered {
+    bevy::pbr::ExtendedMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(image),
+            perceptual_roughness: if black { BLACK_KEY_ROUGHNESS } else { WHITE_KEY_ROUGHNESS },
+            reflectance: 0.5,
+            ..default()
+        },
+        extension: Lacquer {
+            finish: LacquerFinish {
+                shine: if black { BLACK_LACQUER } else { WHITE_LACQUER },
+                eye: eye.extend(0.0),
+                strip: LACQUER_STRIP,
+            },
+        },
     }
 }
 
@@ -507,21 +547,26 @@ fn setup_keyboard(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut lacquers: ResMut<Assets<Lacquered>>,
     mut images: ResMut<Assets<Image>>,
     performance: Res<Performance>,
 ) {
     let layout = &performance.layout;
     let white_texture = images.add(skin::white_key());
     let black_texture = images.add(skin::black_key());
+    let (cx, cy) = layout.centre_mm();
+    let tilt = CAMERA_TILT_DEG.to_radians();
+    let eye = Vec3::new(cx, cy - LACQUER_EYE_MM * tilt.sin(), LACQUER_EYE_MM * tilt.cos());
 
     for midi in layout.keys() {
         let (x0, x1, y0, y1) = layout.key_rect(midi);
         let (width, length) = (x1 - x0, y1 - y0);
         let black = is_black(midi);
 
-        let material = materials.add(key_material(
+        let material = lacquers.add(key_material(
             if black { black_texture.clone() } else { white_texture.clone() },
             black,
+            eye,
         ));
 
         let (mesh, z) = if black {
@@ -1171,8 +1216,8 @@ fn press_keys(
     transport: Res<Transport>,
     performance: Res<Performance>,
     note_colours: Res<NoteColours>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    keys: Query<(&KeyTop, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+    mut materials: ResMut<Assets<Lacquered>>,
+    keys: Query<(&KeyTop, &mut Transform, &MeshMaterial3d<Lacquered>)>,
 ) {
     let states = performance.timeline.key_depression(transport.position);
     for (key, mut transform, material) in keys {
@@ -1187,12 +1232,12 @@ fn press_keys(
                 Some(hand) => {
                     let tint = note_colours.0[hand as usize];
                     let glow = if black { BLACK_KEY_GLOW } else { KEY_GLOW };
-                    material.base_color = mix(Color::WHITE, tint, depth);
-                    material.emissive = tint.to_linear() * (depth * glow);
+                    material.base.base_color = mix(Color::WHITE, tint, depth);
+                    material.base.emissive = tint.to_linear() * (depth * glow);
                 }
                 None => {
-                    material.base_color = Color::WHITE;
-                    material.emissive = LinearRgba::BLACK;
+                    material.base.base_color = Color::WHITE;
+                    material.base.emissive = LinearRgba::BLACK;
                 }
             }
         }
