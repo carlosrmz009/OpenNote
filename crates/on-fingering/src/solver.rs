@@ -575,10 +575,17 @@ impl<'a> HandSolver<'a> {
             return out;
         }
 
-        let mut chosen = Vec::with_capacity(k);
-        self.enumerate(event, 0, &mut chosen, &mut out);
-        if out.is_empty() {
-            out.push(Candidate { fingers: spread_fingers(self.hand, k) });
+        // Fingerings written into the score can ask for the impossible together, such as
+        // a held note's finger on the wrong side of a struck one's. Rather than give up on
+        // the search, let go of the held notes' fingerings first, then of all of them.
+        let struck_only: Vec<Option<Finger>> =
+            event.pinned.iter().zip(&event.struck).map(|(pin, struck)| pin.filter(|_| *struck)).collect();
+        for pins in [event.pinned.clone(), struck_only, vec![None; k]] {
+            let mut chosen = Vec::with_capacity(k);
+            self.enumerate(event, &pins, 0, &mut chosen, &mut out);
+            if !out.is_empty() {
+                break;
+            }
         }
         out
     }
@@ -586,6 +593,7 @@ impl<'a> HandSolver<'a> {
     fn enumerate(
         &self,
         event: &Event,
+        pins: &[Option<Finger>],
         index: usize,
         chosen: &mut Vec<Finger>,
         out: &mut Vec<Candidate>,
@@ -596,7 +604,7 @@ impl<'a> HandSolver<'a> {
         }
         let remaining = event.len() - index - 1;
         for f in Finger::ALL {
-            if let Some(required) = event.pinned[index] {
+            if let Some(required) = pins[index] {
                 if f != required {
                     continue;
                 }
@@ -618,7 +626,7 @@ impl<'a> HandSolver<'a> {
                 continue;
             }
             chosen.push(f);
-            self.enumerate(event, index + 1, chosen, out);
+            self.enumerate(event, pins, index + 1, chosen, out);
             chosen.pop();
         }
     }
@@ -1136,6 +1144,20 @@ mod tests {
             "a solution came back with {} fingerings for six notes",
             outcome.map(|solution| solution.fingerings.len()).unwrap_or_default()
         );
+    }
+
+    #[test]
+    fn a_written_finger_is_kept_when_a_held_note_asks_for_the_impossible() {
+        // C5 is held with the fifth finger while E5, above it, is marked 2: the right hand
+        // cannot keep both. The struck note's written finger wins over the held one's.
+        let mut score = melody(&[72, 76], Hand::Right, 1.0);
+        score.notes[0].duration *= 4;
+        score.notes[0].given_finger = Some(Finger::Little);
+        score.notes[1].given_finger = Some(Finger::Index);
+        score.finalise();
+        let solution = finger_score(&score, &FingeringOptions::default());
+        let e5 = score.notes.iter().find(|n| n.midi == 76).unwrap().id;
+        assert_eq!(solution.finger_of(e5), Some(Finger::Index));
     }
 
     #[test]
