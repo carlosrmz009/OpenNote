@@ -88,6 +88,9 @@ impl MidiDocument {
 
 const DAMPER_PEDAL: u8 = 64;
 
+/// General MIDI's percussion channel (channel 10, counting from one).
+const DRUMS: u8 = 9;
+
 #[derive(Clone, Copy)]
 struct Pending {
     tick: Ticks,
@@ -117,12 +120,16 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
         }
     }
 
-    let mut pressed: Option<Ticks> = None;
+    let melodic = smf.tracks.iter().flatten().any(|event| {
+        matches!(event.kind, TrackEventKind::Midi { channel, message: MidiMessage::NoteOn { .. } } if channel.as_int() != DRUMS)
+    });
+    let mut held: Vec<Ticks> = Vec::new();
     let mut pedal: Vec<(Ticks, Ticks)> = Vec::new();
 
     for (track_index, track) in smf.tracks.iter().enumerate() {
         let mut tick: u64 = 0;
         let mut pending: HashMap<(u8, u8), Pending> = HashMap::new();
+        let mut pressed: Option<Ticks> = None;
 
         for (event_index, event) in track.iter().enumerate() {
             tick += event.delta.as_int() as u64;
@@ -130,6 +137,9 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
                 continue;
             };
             let channel = channel.as_int();
+            if channel == DRUMS && melodic && matches!(message, MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }) {
+                continue;
+            }
             match message {
                 MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
                     if let Some(open) = pending.remove(&(channel, key.as_int())) {
@@ -168,6 +178,7 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
             }
         }
 
+        held.extend(pressed);
         let end = rescale(tick as i64, source_ppq);
         let mut leftovers: Vec<_> = pending.into_iter().collect();
         leftovers.sort_by_key(|((_, key), open)| (open.tick, *key));
@@ -179,14 +190,21 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
     if score.notes.is_empty() {
         bail!("the MIDI file contains no notes");
     }
-    if let Some(down) = pressed {
+    for down in held {
         let end = score.notes.iter().map(|n| n.offset()).max().unwrap_or(down);
         if end > down {
             pedal.push((down, end));
         }
     }
     pedal.sort_by_key(|(down, _)| *down);
-    score.pedal = pedal;
+    let mut merged: Vec<(Ticks, Ticks)> = Vec::with_capacity(pedal.len());
+    for (down, up) in pedal {
+        match merged.last_mut() {
+            Some(last) if down <= last.1 => last.1 = last.1.max(up),
+            _ => merged.push((down, up)),
+        }
+    }
+    score.pedal = merged;
     score.finalise();
     Ok(score)
 }
@@ -347,6 +365,55 @@ mod tests {
         to_smf(&score).write(&mut bytes).unwrap();
         let back = MidiDocument::from_bytes(bytes).unwrap();
         assert!((back.score().tempo.bpm_at(0) - 144.0).abs() < 0.5);
+    }
+
+    fn file(tracks: &[&[(u32, u8, MidiMessage)]]) -> Score {
+        let mut smf = Smf::new(Header::new(Format::Parallel, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
+        for events in tracks {
+            let mut track = Track::new();
+            for &(delta, channel, message) in events.iter() {
+                track.push(TrackEvent { delta: delta.into(), kind: TrackEventKind::Midi { channel: channel.into(), message } });
+            }
+            track.push(TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) });
+            smf.tracks.push(track);
+        }
+        let mut bytes = Vec::new();
+        smf.write(&mut bytes).unwrap();
+        MidiDocument::from_bytes(bytes).unwrap().score().clone()
+    }
+
+    fn on(key: u8) -> MidiMessage {
+        MidiMessage::NoteOn { key: key.into(), vel: 90.into() }
+    }
+
+    fn off(key: u8) -> MidiMessage {
+        MidiMessage::NoteOff { key: key.into(), vel: 0.into() }
+    }
+
+    fn damper(down: bool) -> MidiMessage {
+        MidiMessage::Controller { controller: DAMPER_PEDAL.into(), value: if down { 127 } else { 0 }.into() }
+    }
+
+    #[test]
+    fn each_track_keeps_its_own_pedal() {
+        // The right hand's track ends with the pedal still down; the left hand's track
+        // pedals twice, from the start. One track's pedal must not pair with the other's.
+        let right: &[(u32, u8, MidiMessage)] = &[(0, 0, on(72)), (1920, 0, damper(true)), (1920, 0, off(72))];
+        let left: &[(u32, u8, MidiMessage)] =
+            &[(0, 1, damper(true)), (0, 1, on(48)), (480, 1, damper(false)), (480, 1, damper(true)), (480, 1, damper(false)), (480, 1, off(48))];
+        let score = file(&[right, left]);
+        assert_eq!(score.pedal, vec![(0, 480), (960, 1440), (1920, 3840)]);
+    }
+
+    #[test]
+    fn drums_alongside_a_piano_are_left_out() {
+        let piano: &[(u32, u8, MidiMessage)] = &[(0, 0, on(60)), (480, 0, off(60))];
+        let drums: &[(u32, u8, MidiMessage)] = &[(0, DRUMS, on(36)), (480, DRUMS, off(36))];
+        let score = file(&[piano, drums]);
+        assert_eq!(score.notes.iter().map(|n| n.midi).collect::<Vec<_>>(), vec![60]);
+
+        let alone = file(&[drums]);
+        assert_eq!(alone.notes.len(), 1, "a file with nothing but channel 10 is kept as it is");
     }
 
     #[test]
