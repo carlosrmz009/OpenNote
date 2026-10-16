@@ -84,10 +84,11 @@ The full dependency tree and its licences: `cargo tree` and `cargo about`.
 
 ## The hand model
 
-Not included, and not covered by any of the above — you supply it. Whatever you use,
-record it in `assets/hands/PROVENANCE.md` and honour its terms. The recommended
-source, MakeHuman via MPFB2, releases its assets under **CC0**, which asks nothing of
-you. Some alternatives are CC-BY and need visible attribution.
+`assets/hands/hand-left.glb` and `hand-right.glb` are generated from MakeHuman's base
+mesh, rig and skin through MPFB2, which MakeHuman releases under **CC0**: no attribution
+is required and any use is fine. `assets/hands/PROVENANCE.md` records how they were made.
+If you replace them, record the new ones there and honour their terms; some alternatives
+are CC-BY and need visible attribution.
 
 Do not use MANO, SMPL-X or NIMBLE unless your use really is non-commercial academic
 research; their licences are limited to that.

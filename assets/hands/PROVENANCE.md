@@ -10,7 +10,7 @@ redistributing the app knows what they are redistributing.
 | Author | The MakeHuman project |
 | Licence | **CC0** — MakeHuman releases its meshes, rigs and skins into the public domain, so no attribution is required and commercial use is fine |
 | Retrieved | Generated September 2026, from MPFB2 as installed from the Blender extensions platform |
-| Changes made | Body reduced to one arm and hand; MakeHuman's helper geometry (the second skin it carries for fitting garments) removed by applying the mask modifier rather than exporting it hidden; skin and relief baked to a single 4096px texture; exported as glTF binary |
+| Changes made | Body reduced to one arm and hand; MakeHuman's helper geometry (the second skin it carries for fitting garments) removed by applying the mask modifier rather than exporting it hidden; exported as glTF binary with a single untextured skin material (the viewer colours the skin itself, in `crates/on-viz/src/hands.rs`) |
 
 No third-party hand dataset is involved. `LICENSES.md` at the repository root
 notes that MANO, SMPL-X and NIMBLE carry research-only terms and must not be used
@@ -20,6 +20,5 @@ result carries MakeHuman's terms and nothing else.
 
 ## If you replace them
 
-Record the same fields again. A CC-BY model — most of the alternatives in
-`README.md` are CC-BY — puts the attribution obligation on whoever publishes
-something made with it, which is you rather than this repository.
+Record the same fields again. A CC-BY model puts the attribution obligation on
+whoever publishes something made with it, which is you rather than this repository.

@@ -11,7 +11,7 @@ It covers the Rust dependency tree only. Three things it cannot cover are record
 
 - **Verovio** (LGPL-3.0), compiled into `on-engrave` by `verovioxide-sys`'s build
   script. It is a C++ library, so it is absent from cargo metadata and from this file.
-- **The hand model**, which you supply. See `assets/hands/PROVENANCE.md`.
+- **The hand model**, MakeHuman's CC0 hand. See `assets/hands/PROVENANCE.md`.
 - **A SoundFont**, if you supply one. See `assets/soundfont/README.md`.
 
 ## Ported source — pydactyl (MIT)
