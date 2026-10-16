@@ -2,6 +2,7 @@
 name = "on-score"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Score intermediate representation with MusicXML and MIDI import/export."
 

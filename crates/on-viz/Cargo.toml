@@ -2,6 +2,8 @@
 name = "on-viz"
 version.workspace = true
 edition.workspace = true
+# Bevy 0.19 and egui need 1.95; the engine crates keep the workspace minimum.
+rust-version = "1.95"
 license.workspace = true
 description = "Overhead orthographic visualizer: flat Synthesia keyboard and falling notes with 3D articulated hands."
 

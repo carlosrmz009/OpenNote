@@ -2,6 +2,7 @@
 name = "on-train"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Corpus ingestion, training and evaluation for the statistical fingering prior."
 

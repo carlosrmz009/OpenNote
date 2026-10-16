@@ -2,6 +2,7 @@
 name = "on-fingering"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Piano fingering solver: ergonomic rules, biomechanical cost, Viterbi search and a trainable prior."
 

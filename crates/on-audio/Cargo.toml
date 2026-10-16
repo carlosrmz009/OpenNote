@@ -2,6 +2,7 @@
 name = "on-audio"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "A small physically-informed piano synthesiser, shared by the live view and the video export."
 
