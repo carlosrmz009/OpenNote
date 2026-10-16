@@ -214,7 +214,7 @@ impl Agreement {
                     .into_iter()
                     .map(|set| scope.spawn(move || ask(set)))
                     .collect();
-                running.into_iter().filter_map(|thread| thread.join().ok()).collect()
+                running.into_iter().map(|thread| thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
             })
         } else {
             rules::PUBLISHED.into_iter().map(ask).collect()
@@ -355,7 +355,10 @@ fn solve_score(
         std::thread::scope(|scope| {
             let running: Vec<_> =
                 Hand::ALL.into_iter().map(|hand| scope.spawn(move || search(hand))).collect();
-            running.into_iter().map(|thread| thread.join().ok().flatten()).collect()
+            running
+                .into_iter()
+                .map(|thread| thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+                .collect()
         })
     } else {
         Hand::ALL.into_iter().map(search).collect()
@@ -1105,6 +1108,34 @@ mod tests {
         }
         score.finalise();
         score
+    }
+
+    struct FailsForTheLeftHand;
+
+    impl FingeringPrior for FailsForTheLeftHand {
+        fn log_probability(&self, _: Hand, _: Option<Placement>, _: Option<Placement>, _: Placement) -> f32 {
+            0.0
+        }
+
+        fn chord_cost(&self, hand: Hand, _notes: &[u8], _fingers: &[Finger]) -> f32 {
+            assert!(hand == Hand::Right, "the left hand's search failed");
+            0.0
+        }
+    }
+
+    #[test]
+    fn a_hand_whose_search_fails_is_not_quietly_left_out() {
+        let mut score = melody(&[60, 62, 64], Hand::Right, 1.0);
+        score.notes.extend(melody(&[48, 50, 52], Hand::Left, 1.0).notes);
+        score.finalise();
+        let outcome = std::panic::catch_unwind(|| {
+            finger_score_with_prior(&score, &FingeringOptions::default(), Some(&FailsForTheLeftHand))
+        });
+        assert!(
+            outcome.is_err(),
+            "a solution came back with {} fingerings for six notes",
+            outcome.map(|solution| solution.fingerings.len()).unwrap_or_default()
+        );
     }
 
     #[test]

@@ -398,7 +398,7 @@ impl Examples {
                 .collect();
             handles
                 .into_iter()
-                .map(|h| h.join().unwrap_or((0.0, 0.0)))
+                .map(|h| h.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
                 .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1))
         });
         good / of.max(1.0)
@@ -912,7 +912,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                     scope.spawn(move || examples.sample(&weights, 0, draw, batch))
                 })
                 .collect();
-            handles.into_iter().map(|h| h.join().unwrap_or(f64::MIN)).collect()
+            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| crashed())).collect()
         });
         let (here, best_here) = (scored[0], scored[1]);
         let scored = &scored[2..];
@@ -953,7 +953,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                         scope.spawn(move || examples.sample(&weights, 0, again, batch))
                     })
                     .collect();
-                handles.into_iter().map(|h| h.join().unwrap_or(f64::MIN)).collect()
+                handles.into_iter().map(|h| h.join().unwrap_or_else(|_| crashed())).collect()
             });
             state.evaluated += 2;
             confirmed = second[0] > second[1] + MIN_GAIN;
@@ -1180,6 +1180,13 @@ fn gaussian(state: &mut u64) -> f64 {
     let u = uniform(state).max(f64::MIN_POSITIVE);
     let v = uniform(state);
     (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+}
+
+/// A setting whose evaluation panicked scores as badly as possible, so the
+/// search moves on from it, but it is not passed over in silence.
+fn crashed() -> f64 {
+    tracing::warn!("evaluating a setting panicked; scoring it as the worst");
+    f64::MIN
 }
 
 #[cfg(test)]
