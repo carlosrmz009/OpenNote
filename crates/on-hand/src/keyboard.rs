@@ -27,6 +27,8 @@ const SEMITONE_STEP_MM: [f32; 12] = [
 ];
 
 pub const WHITE_KEY_WIDTH: f32 = 23.5;
+/// Seven white keys: how far the same key lies one octave up.
+pub const OCTAVE_WIDTH: f32 = 7.0 * WHITE_KEY_WIDTH;
 pub const BLACK_KEY_WIDTH: f32 = 13.7;
 pub const WHITE_KEY_LENGTH: f32 = 150.0;
 pub const BLACK_KEY_LENGTH: f32 = 95.0;

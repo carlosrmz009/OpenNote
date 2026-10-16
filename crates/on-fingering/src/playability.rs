@@ -8,7 +8,7 @@ use crate::spans::SpanTable;
 
 pub const CHORD_SECONDS: f64 = 0.030;
 
-pub const HAND_SPEED_MM_PER_SECOND: f64 = 2.0 * 164.0 / 0.125;
+pub const HAND_SPEED_MM_PER_SECOND: f64 = 2.0 * on_hand::keyboard::OCTAVE_WIDTH as f64 / 0.125;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Flaw {

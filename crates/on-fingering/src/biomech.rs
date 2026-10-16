@@ -14,7 +14,7 @@ const WRIST_TRAVEL_PER_RADIAN: f32 = 90.0;
 
 const MIN_TRANSITION_SECONDS: f64 = 0.03;
 
-const OCTAVE_MM: f32 = 164.0;
+const OCTAVE_MM: f32 = on_hand::keyboard::OCTAVE_WIDTH;
 
 const IDLE_JOINT_WEIGHT: f32 = 0.15;
 
@@ -378,6 +378,24 @@ mod tests {
         let high = m.grip_cost(&grip(&[(60, 1), (64, 3), (67, 5)]));
         assert!((low - high).abs() < 1e-4, "{low} vs {high}");
         assert_eq!(m.cached_postures(), 1);
+    }
+
+    #[test]
+    fn a_shape_moved_up_an_octave_moves_as_far_as_the_keys_do() {
+        let m = model(Hand::Right);
+        let keyboard = on_hand::Keyboard::new();
+        let home = grip(&[(60, 1), (64, 3), (67, 5)]);
+        let home_tip = m.skeleton().forward(&m.grip_pose(&home)).tip(Finger::Thumb);
+        for octaves in [1u8, 2, 3] {
+            let up = grip(&[(60 + 12 * octaves, 1), (64 + 12 * octaves, 3), (67 + 12 * octaves, 5)]);
+            let tip = m.skeleton().forward(&m.grip_pose(&up)).tip(Finger::Thumb);
+            let keys = keyboard.centre_x(60 + 12 * octaves) - keyboard.centre_x(60);
+            assert!(
+                ((tip.x - home_tip.x) - keys).abs() < 0.05,
+                "{octaves} octaves up the thumb moved {} mm, the keys {keys} mm",
+                tip.x - home_tip.x
+            );
+        }
     }
 
     #[test]
