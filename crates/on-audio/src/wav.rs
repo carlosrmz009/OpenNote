@@ -131,7 +131,8 @@ mod tests {
 
     #[test]
     fn a_written_file_has_a_header_and_the_right_amount_of_audio() {
-        let dir = std::env::temp_dir().join("opennote-wav-test");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("scale.wav");
         let notes = vec![

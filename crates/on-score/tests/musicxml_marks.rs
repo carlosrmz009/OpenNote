@@ -25,7 +25,8 @@ const SCORE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 fn load() -> MusicXmlDocument {
-    let path = std::env::temp_dir().join(format!("opennote-marks-{}.musicxml", std::process::id()));
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("marks.musicxml");
     std::fs::write(&path, SCORE).unwrap();
     MusicXmlDocument::read(&path).expect("the fixture should parse")
 }

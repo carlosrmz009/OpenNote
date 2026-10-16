@@ -1188,8 +1188,8 @@ mod tests {
 
     #[test]
     fn the_hours_spent_harvesting_count_towards_the_total() {
-        let directory = std::env::temp_dir().join("opennote-harvest-hours-test");
-        let _ = std::fs::remove_dir_all(&directory);
+        let scratch = tempfile::tempdir().unwrap();
+        let directory = scratch.path().to_path_buf();
         std::fs::create_dir_all(directory.join("harvest")).unwrap();
         std::fs::write(
             directory.join("harvest").join("hours.json"),
@@ -1202,7 +1202,6 @@ mod tests {
             "{lines:?}"
         );
         assert!(lines.last().unwrap().starts_with("Altogether: 2.50 hours"), "{lines:?}");
-        std::fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
@@ -1213,7 +1212,8 @@ mod tests {
         weights.0.insert("hands.register".into(), 1.5);
         weights.0.insert("not.a.knob".into(), 9.0);
 
-        let path = std::env::temp_dir().join("opennote-weights-test.json");
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("weights.json");
         weights.save(&path).unwrap();
         let back = Weights::load(&path).unwrap();
         assert_eq!(back, weights);

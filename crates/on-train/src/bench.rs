@@ -584,7 +584,8 @@ mod tests {
 
     #[test]
     fn a_changed_file_is_refused() {
-        let dir = std::env::temp_dir().join("opennote-bench-hash");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("data.jsonl");
         std::fs::write(&file, "one").unwrap();
@@ -643,7 +644,8 @@ mod tests {
 
     #[test]
     fn the_hash_is_fnv_1a() {
-        let dir = std::env::temp_dir().join("opennote-bench-fnv");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a.txt");
         std::fs::write(&file, "a").unwrap();

@@ -409,8 +409,8 @@ mod tests {
 
     #[test]
     fn reading_a_dataset_stores_nothing() {
-        let dir = std::env::temp_dir().join("opennote-read-only-test");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("099-1_fingering.txt"),
@@ -465,7 +465,8 @@ mod tests {
 
     #[test]
     fn a_pig_file_is_read_with_its_hands_the_right_way_round() {
-        let dir = std::env::temp_dir().join("opennote-corpus-test");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("042-2_fingering.txt");
         std::fs::write(
@@ -504,8 +505,8 @@ mod tests {
 
     #[test]
     fn a_corpus_round_trips_through_its_directory() {
-        let dir = std::env::temp_dir().join("opennote-corpus-round-trip");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         let source = dir.join("source");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(
@@ -525,16 +526,14 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].notes.len(), 2);
         assert_eq!(loaded[0].piece, "001");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn an_empty_corpus_is_not_an_error() {
-        let dir = std::env::temp_dir().join("opennote-corpus-empty");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         let corpus = Corpus::at(&dir).unwrap();
         assert!(corpus.load().unwrap().is_empty());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -603,7 +602,8 @@ mod tests {
 
     #[test]
     fn a_partly_annotated_source_keeps_the_notes_nobody_fingered() {
-        let dir = std::env::temp_dir().join("opennote-corpus-partial");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("partial_fingering.txt");
         std::fs::write(
@@ -632,7 +632,8 @@ mod tests {
 
     #[test]
     fn an_unannotated_note_takes_its_hand_from_the_channel() {
-        let dir = std::env::temp_dir().join("opennote-corpus-channel");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("channel_fingering.txt");
         std::fs::write(

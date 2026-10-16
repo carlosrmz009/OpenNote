@@ -638,7 +638,8 @@ mod tests {
         prior.observe(Hand::Right, &run(&[(60, 1), (64, 3), (67, 5)]));
         prior.observe(Hand::Left, &run(&[(48, 5), (52, 3), (55, 1)]));
 
-        let dir = std::env::temp_dir().join("opennote-prior-test");
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("prior.json");
         prior.save(&path).unwrap();
