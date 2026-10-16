@@ -45,7 +45,7 @@ impl Context {
 
     fn from_key(key: &str) -> Option<Context> {
         let finger = |n: &str| Finger::from_number(n.parse::<u8>().ok()?);
-        let (tag, rest) = key.split_at(1);
+        let (tag, rest) = key.split_at_checked(1)?;
         let parts: Vec<&str> = rest.split('.').collect();
         match (tag, parts.as_slice()) {
             ("-", _) => Some(Context::Empty),
@@ -671,6 +671,13 @@ mod tests {
         for context in contexts {
             let key = context.key();
             assert_eq!(Context::from_key(&key), Some(context), "key {key}");
+        }
+    }
+
+    #[test]
+    fn a_damaged_context_key_is_skipped_rather_than_a_panic() {
+        for key in ["", "é1", "p", "p9", "i1.x", "t1.2.3"] {
+            assert_eq!(Context::from_key(key), None, "key {key:?}");
         }
     }
 
