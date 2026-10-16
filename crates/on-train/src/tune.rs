@@ -717,11 +717,8 @@ impl Ledger {
         directory.join("hours.json")
     }
 
-    fn load(directory: &Path) -> Self {
-        std::fs::read_to_string(Self::path(directory))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+    fn load(directory: &Path) -> Result<Self> {
+        Ok(read_existing(&Self::path(directory))?.unwrap_or_default())
     }
 
     fn save(&self, directory: &Path) -> Result<()> {
@@ -796,9 +793,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
     let threads = config.threads.max(1);
     let defaults: Vec<f64> = knobs.iter().map(|k| f64::from(k.default).ln()).collect();
-    let resumed = std::fs::read_to_string(&state_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<State>(&text).ok())
+    let resumed = read_existing::<State>(&state_path)?
         .filter(|state| state.target == target && state.names == names);
     let mut state = match resumed {
         Some(mut state) => {
@@ -873,7 +868,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let deadline = config.hours.map(|h| std::time::Duration::from_secs_f64(h * 3600.0));
     let mut last_said = Instant::now();
     let mut since = Instant::now();
-    let mut ledger = Ledger::load(&directory);
+    let mut ledger = Ledger::load(&directory)?;
     loop {
         if deadline.is_some_and(|d| started.elapsed() >= d) {
             say(&format!(
@@ -1017,7 +1012,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                     held_out,
                     test: examples.score(&weights, 2, threads),
                 };
-                let mut file = Weights::load(&config.weights).unwrap_or_default();
+                let mut file = read_existing::<Weights>(&config.weights)?.unwrap_or_default();
                 file.0.extend(weights.0);
                 let name = target.name();
                 file.0.insert(
@@ -1109,7 +1104,7 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
     let mut tried = 0u64;
     for target in Target::ALL {
         let directory = directory.join(target.name());
-        let ledger = Ledger::load(&directory);
+        let ledger = Ledger::load(&directory)?;
         if ledger.searched_seconds <= 0.0 {
             continue;
         }
@@ -1182,6 +1177,19 @@ fn gaussian(state: &mut u64) -> f64 {
     (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
 }
 
+/// A file the search keeps between runs: `None` if it is not there yet, an error if it is
+/// there but cannot be read, so that hours of search are never overwritten by a fresh start.
+fn read_existing<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    serde_json::from_str(&text).map(Some).with_context(|| {
+        format!("{} cannot be read; move it aside to start that part of the search afresh", path.display())
+    })
+}
+
 /// A setting whose evaluation panicked scores as badly as possible, so the
 /// search moves on from it, but it is not passed over in silence.
 fn crashed() -> f64 {
@@ -1192,6 +1200,16 @@ fn crashed() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_damaged_state_file_stops_the_search_rather_than_being_overwritten() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("hours.json");
+        assert!(read_existing::<Ledger>(&path).unwrap().is_none(), "a missing file is a fresh start");
+        std::fs::write(&path, "{\"searched_seconds\": 36").unwrap();
+        assert!(Ledger::load(scratch.path()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"searched_seconds\": 36");
+    }
 
     #[test]
     fn the_hours_spent_harvesting_count_towards_the_total() {
