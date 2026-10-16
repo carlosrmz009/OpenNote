@@ -14,12 +14,13 @@ enum Command {
     Seek(f64),
     Speed(f64),
     Load(Vec<Note>),
-    Instrument(Option<PathBuf>),
+    Instrument(u64, Option<SampledPiano>),
 }
 
 struct Shared {
     position: AtomicU64,
     silent: AtomicBool,
+    instrument: AtomicU64,
 }
 
 pub struct Player {
@@ -34,6 +35,7 @@ impl Player {
         let shared = Arc::new(Shared {
             position: AtomicU64::new(0.0f64.to_bits()),
             silent: AtomicBool::new(false),
+            instrument: AtomicU64::new(0),
         });
 
         let (ready, opened) = mpsc::channel();
@@ -83,8 +85,20 @@ impl Player {
         let _ = self.commands.send(Command::Load(notes));
     }
 
+    /// Reading a SoundFont takes far longer than one audio buffer, so it is read on a
+    /// thread of its own and handed over when ready. If another is asked for meanwhile,
+    /// whichever was asked for last is the one that plays.
     pub fn set_instrument(&self, soundfont: Option<PathBuf>) {
-        let _ = self.commands.send(Command::Instrument(soundfont));
+        let generation = self.shared.instrument.fetch_add(1, Ordering::Relaxed) + 1;
+        let commands = self.commands.clone();
+        let sample_rate = self.sample_rate;
+        let loading = std::thread::Builder::new().name("opennote-soundfont".into()).spawn(move || {
+            let piano = open_soundfont(soundfont.as_deref(), sample_rate);
+            let _ = commands.send(Command::Instrument(generation, piano));
+        });
+        if let Err(error) = loading {
+            tracing::warn!("could not start reading the SoundFont: {error}");
+        }
     }
 }
 
@@ -151,6 +165,7 @@ fn open_stream(
         synth = synth.with_soundfont(piano);
     }
     let mut stereo: Vec<f32> = Vec::new();
+    let instrument = Arc::clone(&shared);
 
     let mut fill = move |frames: usize, mut write: Box<dyn FnMut(usize, usize, f32) + '_>| {
         while let Ok(order) = orders.try_recv() {
@@ -161,8 +176,10 @@ fn open_stream(
                 Command::Load(notes) => {
                     synth.load(notes);
                 }
-                Command::Instrument(path) => {
-                    synth.set_soundfont(open_soundfont(path.as_deref(), sample_rate));
+                Command::Instrument(generation, piano) => {
+                    if generation == instrument.instrument.load(Ordering::Relaxed) {
+                        synth.set_soundfont(piano);
+                    }
                 }
             }
         }
@@ -207,7 +224,7 @@ fn open_stream(
                 fill(
                     frames,
                     Box::new(|frame, channel, sample| {
-                        data[frame * channels + channel] = (sample * 32_767.0) as i16
+                        data[frame * channels + channel] = to_i16(sample)
                     }),
                 );
             },
@@ -221,8 +238,7 @@ fn open_stream(
                 fill(
                     frames,
                     Box::new(|frame, channel, sample| {
-                        data[frame * channels + channel] =
-                            ((sample * 32_767.0) as i32 + 32_768) as u16
+                        data[frame * channels + channel] = to_u16(sample)
                     }),
                 );
             },
@@ -234,4 +250,27 @@ fn open_stream(
     .context("opening the audio output stream")?;
 
     Ok((stream, sample_rate))
+}
+
+fn to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * 32_767.0) as i16
+}
+
+fn to_u16(sample: f32) -> u16 {
+    (i32::from(to_i16(sample)) + 32_768) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sample_past_full_scale_is_clipped_rather_than_wrapped() {
+        assert_eq!(to_u16(0.0), 32_768);
+        assert_eq!(to_u16(1.0), 65_535);
+        assert_eq!(to_u16(1.5), 65_535);
+        assert_eq!(to_u16(-1.5), 1);
+        assert_eq!(to_i16(1.5), 32_767);
+        assert_eq!(to_i16(-1.5), -32_767);
+    }
 }
