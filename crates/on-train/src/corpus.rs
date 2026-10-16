@@ -164,7 +164,7 @@ impl Corpus {
         }
 
         let name = label
-            .map(str::to_owned)
+            .map(sanitise)
             .or_else(|| {
                 path.file_stem()
                     .and_then(|s| s.to_str())
@@ -526,6 +526,17 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].notes.len(), 2);
         assert_eq!(loaded[0].piece, "001");
+    }
+
+    #[test]
+    fn a_name_cannot_put_the_data_outside_the_corpus() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("001-1_fingering.txt"), "0\t0.0\t0.5\tC4\t80\t80\t0\t1\n").unwrap();
+        let corpus = Corpus::at(scratch.path().join("corpus")).unwrap();
+        let added = corpus.add(&source, Some("../../escaped")).unwrap();
+        assert!(added.file.starts_with(corpus.data_dir()), "written to {}", added.file.display());
     }
 
     #[test]
