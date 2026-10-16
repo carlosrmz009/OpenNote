@@ -212,11 +212,18 @@ fn step_semitones(step: &Step) -> i32 {
     }
 }
 
-fn to_ticks(divisions_value: i64, divisions_per_quarter: u32) -> Ticks {
+/// A length in `<divisions>`, as quarter notes. Positions are kept in quarters and
+/// rounded to ticks once, where a note lands, so that a voice of triplets and a voice
+/// of plain beats arrive at the same tick however the divisions divide 960.
+fn quarters(divisions_value: i64, divisions_per_quarter: u32) -> f64 {
     if divisions_per_quarter == 0 {
-        return 0;
+        return 0.0;
     }
-    divisions_value * TICKS_PER_QUARTER as i64 / divisions_per_quarter as i64
+    divisions_value as f64 / f64::from(divisions_per_quarter)
+}
+
+fn to_ticks(position: f64) -> Ticks {
+    (position * f64::from(TICKS_PER_QUARTER)).round() as Ticks
 }
 
 fn extract(document: &ScorePartwise) -> Result<Score> {
@@ -256,8 +263,9 @@ fn read_part(
     let mut divisions: u32 = 1;
     let mut velocity = DEFAULT_VELOCITY;
     let mut pressed: Option<Ticks> = None;
-    let mut measure_start: Ticks = 0;
-    let mut last_onset: Ticks = 0;
+    let mut measure_start = 0.0;
+    let mut last_onset = 0.0;
+    let mut graces: Vec<Vec<usize>> = Vec::new();
     let mut slurs: Vec<Ticks> = Vec::new();
     let mut wedge: Option<(Ticks, i8)> = None;
 
@@ -266,7 +274,7 @@ fn read_part(
             continue;
         };
         if part_index == 0 {
-            score.marks.measures.push(measure_start);
+            score.marks.measures.push(to_ticks(measure_start));
         }
         let mut cursor = measure_start;
         let mut measure_end = measure_start;
@@ -281,16 +289,18 @@ fn read_part(
                     }
                 }
                 MeasureElement::Backup(backup) => {
-                    cursor -= to_ticks(*backup.content.duration.content as i64, divisions);
+                    let back = quarters(*backup.content.duration.content as i64, divisions);
+                    cursor = (cursor - back).max(measure_start);
                 }
                 MeasureElement::Forward(forward) => {
-                    cursor += to_ticks(*forward.content.duration.content as i64, divisions);
-                    measure_end = measure_end.max(cursor);
+                    cursor += quarters(*forward.content.duration.content as i64, divisions);
+                    measure_end = f64::max(measure_end, cursor);
                 }
                 MeasureElement::Sound(sound) => {
-                    read_sound(sound, cursor, score, &mut velocity, &mut pressed);
+                    read_sound(sound, to_ticks(cursor), score, &mut velocity, &mut pressed);
                 }
                 MeasureElement::Direction(direction) => {
+                    let at = to_ticks(cursor);
                     for kind in &direction.content.direction_type {
                         use musicxml::elements::DirectionTypeContents as T;
                         match &kind.content {
@@ -299,7 +309,7 @@ fn read_part(
                                     if let Some((level, _)) = marked_velocity(mark) {
                                         if level > 0 {
                                             velocity = level;
-                                            score.marks.dynamics.push((cursor, level));
+                                            score.marks.dynamics.push((at, level));
                                         }
                                     }
                                 }
@@ -307,12 +317,12 @@ fn read_part(
                             T::Wedge(w) => {
                                 use musicxml::datatypes::WedgeType as W;
                                 match w.attributes.r#type {
-                                    W::Crescendo => wedge = Some((cursor, 1)),
-                                    W::Diminuendo => wedge = Some((cursor, -1)),
+                                    W::Crescendo => wedge = Some((at, 1)),
+                                    W::Diminuendo => wedge = Some((at, -1)),
                                     W::Stop => {
                                         if let Some((from, way)) = wedge.take() {
-                                            if cursor > from {
-                                                score.marks.hairpins.push((from, cursor, way));
+                                            if at > from {
+                                                score.marks.hairpins.push((from, at, way));
                                             }
                                         }
                                     }
@@ -323,7 +333,7 @@ fn read_part(
                         }
                     }
                     if let Some(sound) = &direction.content.sound {
-                        read_sound(sound, cursor, score, &mut velocity, &mut pressed);
+                        read_sound(sound, at, score, &mut velocity, &mut pressed);
                     }
                 }
                 MeasureElement::Note(note) => {
@@ -338,7 +348,7 @@ fn read_part(
                         if parsed.advances {
                             last_onset = cursor;
                             cursor += parsed.consumed;
-                            measure_end = measure_end.max(cursor);
+                            measure_end = f64::max(measure_end, cursor);
                         }
                         if let Some(parsed_note) = parsed.note {
                             let (flags, slur_marks) = note_marks(note);
@@ -356,6 +366,13 @@ fn read_part(
                                     }
                                 }
                             }
+                            let index = score.notes.len();
+                            match (parsed_note.grace, parsed_note.chord) {
+                                (true, true) if !graces.is_empty() => graces.last_mut().unwrap().push(index),
+                                (true, _) => graces.push(vec![index]),
+                                (false, false) => place_graces(&mut score.notes, &mut graces, parsed_note.onset),
+                                (false, true) => {}
+                            }
                             score.notes.push(parsed_note);
                         }
                     }
@@ -364,9 +381,31 @@ fn read_part(
             }
         }
 
-        measure_start = measure_end.max(cursor);
+        measure_start = f64::max(measure_end, cursor);
     }
     Ok(())
+}
+
+/// Grace notes take no time in the notation, but they are played one after another, just
+/// before the note they ornament. They are put there, a short step apart, so that they are
+/// fingered as a run leading into the note rather than as a chord with it. A grace note
+/// marked as a chord with the one before it shares that one's moment.
+fn place_graces(notes: &mut [Note], graces: &mut Vec<Vec<usize>>, principal: Ticks) {
+    let count = graces.len() as Ticks;
+    if count == 0 {
+        return;
+    }
+    let step = GRACE_TICKS.min(principal / count);
+    if step > 0 {
+        for (slot, indices) in graces.iter().enumerate() {
+            let onset = principal - (count - slot as Ticks) * step;
+            for &index in indices {
+                notes[index].onset = onset;
+                notes[index].duration = step;
+            }
+        }
+    }
+    graces.clear();
 }
 
 fn insert_tempo(map: &mut crate::TempoMap, tick: Ticks, bpm: f64) {
@@ -378,7 +417,7 @@ fn insert_tempo(map: &mut crate::TempoMap, tick: Ticks, bpm: f64) {
 struct ParsedNote {
     note: Option<Note>,
     advances: bool,
-    consumed: Ticks,
+    consumed: f64,
 }
 
 fn read_sound(
@@ -417,8 +456,8 @@ fn read_sound(
 fn read_note(
     note: &musicxml::elements::Note,
     divisions: u32,
-    cursor: Ticks,
-    last_onset: Ticks,
+    cursor: f64,
+    last_onset: f64,
     source: SourceRef,
     velocity: u8,
 ) -> Option<ParsedNote> {
@@ -443,12 +482,12 @@ fn read_note(
             return Some(ParsedNote {
                 note: None,
                 advances: !info.chord.is_some(),
-                consumed: to_ticks(*info.duration.content as i64, divisions),
+                consumed: quarters(*info.duration.content as i64, divisions),
             })
         }
     };
 
-    let consumed = to_ticks(duration_divisions, divisions);
+    let consumed = quarters(duration_divisions, divisions);
 
     let pitch = match audible {
         AudibleType::Pitch(pitch) => pitch,
@@ -476,8 +515,9 @@ fn read_note(
         stop: ties.iter().any(|t| t.attributes.r#type == StartStop::Stop),
     };
 
-    let onset = if is_chord { last_onset } else { cursor };
-    let duration = if grace { GRACE_TICKS } else { consumed };
+    let start = if is_chord { last_onset } else { cursor };
+    let onset = to_ticks(start);
+    let duration = if grace { GRACE_TICKS } else { to_ticks(start + consumed) - onset };
 
     Some(ParsedNote {
         note: Some(Note {
