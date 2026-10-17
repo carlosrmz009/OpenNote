@@ -43,6 +43,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Home", "back to the start"),
     ("↑ ↓", "faster / slower"),
     ("L", "loop the piece on / off"),
+    (", .", "pause and step back / on a note"),
     ("[ ]", "practise from here / up to here"),
     ("\\", "play the whole piece again"),
     ("F1  ?", "this list"),

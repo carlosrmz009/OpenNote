@@ -97,6 +97,7 @@ In the viewer:
 | Home | back to the start |
 | ↑ / ↓ | faster / slower |
 | L | loop on / off |
+| , / . | pause and step back / on a note |
 | [ / ] | practise from here / up to here |
 | \\ | play the whole piece again |
 

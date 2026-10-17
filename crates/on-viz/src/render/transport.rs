@@ -48,6 +48,18 @@ impl Transport {
     }
 }
 
+/// The next moment a note starts after `position`, or the last before it, for stepping
+/// through a piece note by note.
+pub(crate) fn next_onset(timeline: &crate::Timeline, position: f64, forward: bool) -> Option<f64> {
+    const SAME: f64 = 1e-3;
+    let onsets = timeline.notes.iter().map(|note| note.start);
+    if forward {
+        onsets.filter(|start| *start > position + SAME).min_by(f64::total_cmp)
+    } else {
+        onsets.filter(|start| *start < position - SAME).max_by(f64::total_cmp)
+    }
+}
+
 /// Where playback goes once it has passed the end of the section, or of the piece, and
 /// whether it keeps playing. A section always repeats; the whole piece only when looping.
 pub(crate) fn past_the_end(
@@ -118,6 +130,7 @@ pub(crate) fn handle_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut transport: ResMut<Transport>,
     audio: Res<Audio>,
+    performance: Res<Performance>,
     menus: Option<Res<bevy_egui::input::EguiWantsInput>>,
 ) {
     if menus.is_some_and(|menus| menus.wants_any_keyboard_input()) {
@@ -157,6 +170,14 @@ pub(crate) fn handle_input(
     }
     if keys.just_pressed(KeyCode::Backslash) {
         transport.section = None;
+    }
+    for (key, forward) in [(KeyCode::Comma, false), (KeyCode::Period, true)] {
+        if keys.just_pressed(key) {
+            transport.playing = false;
+            if let Some(onset) = next_onset(&performance.timeline, transport.position, forward) {
+                jump = Some(onset);
+            }
+        }
     }
 
     if let Some(target) = jump {
@@ -214,6 +235,30 @@ mod clock_tests {
         assert_eq!(past_the_end(61.0, None, 60.0, true), Some((LEAD_IN, true)));
         assert_eq!(past_the_end(61.0, None, 60.0, false), Some((60.0, false)));
         assert_eq!(past_the_end(30.0, None, 60.0, true), None);
+    }
+
+    #[test]
+    fn stepping_goes_from_note_to_note() {
+        use on_score::{Note, NoteId, Score, TICKS_PER_QUARTER};
+        let mut score = Score::default();
+        for (i, midi) in [60u8, 62, 64].into_iter().enumerate() {
+            let onset = i as i64 * TICKS_PER_QUARTER as i64;
+            let id = NoteId(i as u32);
+            score.notes.push(Note {
+                id,
+                midi,
+                onset,
+                hand: Some(on_hand::Hand::Right),
+                ..Default::default()
+            });
+        }
+        score.finalise();
+        let timeline = crate::Timeline::build_for(&score, &[], &on_hand::HandProfile::default());
+        let starts: Vec<f64> = timeline.notes.iter().map(|n| n.start).collect();
+        assert_eq!(super::next_onset(&timeline, -1.0, true), Some(starts[0]));
+        assert_eq!(super::next_onset(&timeline, starts[0], true), Some(starts[1]));
+        assert_eq!(super::next_onset(&timeline, starts[1], false), Some(starts[0]));
+        assert_eq!(super::next_onset(&timeline, starts[2], true), None);
     }
 
     #[test]
