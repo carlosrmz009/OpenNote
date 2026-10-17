@@ -1,7 +1,7 @@
 use on_fingering::scales::scale_fingerings;
 use on_fingering::{finger_score, FingeringOptions, Rule};
 use on_hand::{Finger, Hand, HandProfile};
-use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
+use on_score::{Note, NoteId, Score, SourceRef, TICKS_PER_QUARTER};
 
 const MAJOR: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
 const NAMES: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
@@ -28,17 +28,11 @@ fn melody(pitches: &[u8], hand: Hand, pinned: &[Option<Finger>]) -> Score {
             midi: *midi,
             onset: i as i64 * step,
             duration: step,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
             given_finger: pinned.get(i).copied().flatten(),
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();

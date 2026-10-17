@@ -1,6 +1,6 @@
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_hand::{Finger, Hand, HandProfile};
-use on_score::{Fingering, Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
+use on_score::{Fingering, Note, NoteId, Score, SourceRef, TICKS_PER_QUARTER};
 use on_viz::timeline::{HandAnimator, Timeline};
 
 fn score_of(velocity: u8) -> Score {
@@ -12,17 +12,10 @@ fn score_of(velocity: u8) -> Score {
             midi: 60,
             onset: i as i64 * q,
             duration: q / 2,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(Hand::Right),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i as usize },
+            ..Default::default()
         });
     }
     score.finalise();

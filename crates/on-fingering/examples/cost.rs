@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use on_fingering::{finger_score, FingeringOptions};
 use on_hand::Hand;
-use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
+use on_score::{Note, NoteId, Score, SourceRef, TICKS_PER_QUARTER};
 
 fn melody(count: usize) -> Score {
     let step = i64::from(TICKS_PER_QUARTER) / 2;
@@ -13,17 +13,10 @@ fn melody(count: usize) -> Score {
             midi: 60 + (i as u8 * 5) % 19,
             onset: i as i64 * step,
             duration: step,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(Hand::Right),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();
@@ -36,21 +29,12 @@ fn piece(seed: usize, bars: usize) -> Score {
     let key = (seed * 7 % 12) as u8;
     let push = |score: &mut Score, midi: u8, onset: i64, duration: i64, hand: Hand| {
         score.notes.push(Note {
-            id: NoteId(0),
             midi,
             onset,
             duration,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
-            source: SourceRef::Midi { track: 0, event: 0 },
+            ..Default::default()
         });
     };
     for bar in 0..bars {

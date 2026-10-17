@@ -61,6 +61,30 @@ pub struct Note {
     pub source: SourceRef,
 }
 
+/// A quarter-note middle C, at the start, with nothing else known about it: a base for
+/// building notes field by field, as tests do.
+impl Default for Note {
+    fn default() -> Self {
+        Self {
+            id: NoteId(0),
+            midi: 60,
+            onset: 0,
+            duration: TICKS_PER_QUARTER as Ticks,
+            onset_seconds: 0.0,
+            duration_seconds: 0.0,
+            staff: None,
+            voice: None,
+            hand: None,
+            tie: TieState::default(),
+            grace: false,
+            chord: false,
+            velocity: 64,
+            given_finger: None,
+            source: SourceRef::Midi { track: 0, event: 0 },
+        }
+    }
+}
+
 impl Note {
     pub fn offset(&self) -> Ticks {
         self.onset + self.duration

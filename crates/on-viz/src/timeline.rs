@@ -1332,7 +1332,7 @@ mod tests {
     use super::*;
     use on_fingering::biomech::BiomechWeights;
     use on_hand::HandProfile;
-    use on_score::{Note, SourceRef, TieState, TICKS_PER_QUARTER};
+    use on_score::{Note, SourceRef, TICKS_PER_QUARTER};
 
     fn score_of(entries: &[(u8, i64, i64, Hand)]) -> Score {
         let mut score = Score::default();
@@ -1342,17 +1342,10 @@ mod tests {
                 midi: *midi,
                 onset: *onset,
                 duration: *duration,
-                onset_seconds: 0.0,
-                duration_seconds: 0.0,
-                staff: None,
-                voice: None,
                 hand: Some(*hand),
-                tie: TieState::default(),
-                grace: false,
-                chord: false,
                 velocity: 90,
-                given_finger: None,
                 source: SourceRef::Midi { track: 0, event: i },
+                ..Default::default()
             });
         }
         score.finalise();

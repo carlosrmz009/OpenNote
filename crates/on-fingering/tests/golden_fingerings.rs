@@ -1,6 +1,6 @@
 use on_fingering::{finger_score, FingeringOptions};
 use on_hand::{Finger, Hand, HandProfile, HandSize};
-use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
+use on_score::{Note, NoteId, Score, SourceRef, TICKS_PER_QUARTER};
 
 fn melody(pitches: &[u8], hand: Hand, beats: f64) -> Score {
     let step = (TICKS_PER_QUARTER as f64 * beats) as i64;
@@ -11,17 +11,10 @@ fn melody(pitches: &[u8], hand: Hand, beats: f64) -> Score {
             midi: *midi,
             onset: i as i64 * step,
             duration: step,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();
@@ -37,17 +30,10 @@ fn overlapping(entries: &[(u8, f64, f64)], hand: Hand) -> Score {
             midi: *midi,
             onset: (onset * q) as i64,
             duration: (length * q) as i64,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();
@@ -150,17 +136,11 @@ fn root_position_triads_are_fingered_one_three_five() {
                 midi: root + offset,
                 onset: 0,
                 duration: TICKS_PER_QUARTER as i64 * 2,
-                onset_seconds: 0.0,
-                duration_seconds: 0.0,
-                staff: None,
-                voice: None,
                 hand: Some(hand),
-                tie: TieState::default(),
-                grace: false,
                 chord: i > 0,
                 velocity: 72,
-                given_finger: None,
                 source: SourceRef::Midi { track: 0, event: i },
+                ..Default::default()
             });
         }
         score.finalise();
@@ -181,17 +161,11 @@ fn a_tenth_punishes_a_small_hand_and_not_a_large_one() {
             midi: *midi,
             onset: 0,
             duration: TICKS_PER_QUARTER as i64,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(Hand::Right),
-            tie: TieState::default(),
-            grace: false,
             chord: i > 0,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();

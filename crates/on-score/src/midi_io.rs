@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind};
 
-use crate::{Fingering, Note, NoteId, Score, SourceRef, Ticks, TieState, TICKS_PER_QUARTER};
+use crate::{Fingering, Note, Score, SourceRef, Ticks, TICKS_PER_QUARTER};
 
 pub struct MidiDocument {
     raw: Vec<u8>,
@@ -222,21 +222,12 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
 fn push_note(score: &mut Score, track: usize, key: u8, open: Pending, off_tick: Ticks) {
     let duration = (off_tick - open.tick).max(1);
     score.notes.push(Note {
-        id: NoteId(0),
         midi: key,
         onset: open.tick,
         duration,
-        onset_seconds: 0.0,
-        duration_seconds: 0.0,
-        staff: None,
-        voice: None,
-        hand: None,
-        tie: TieState::default(),
-        grace: false,
-        chord: false,
         velocity: open.velocity.max(1),
-        given_finger: None,
         source: SourceRef::Midi { track, event: open.event },
+        ..Default::default()
     });
 }
 
@@ -285,6 +276,7 @@ pub fn to_smf(score: &Score) -> Smf<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NoteId;
 
     fn round_trip(notes: &[(u8, i64, i64)]) -> Score {
         let mut score = Score::default();
@@ -294,17 +286,9 @@ mod tests {
                 midi: *midi,
                 onset: *onset,
                 duration: *duration,
-                onset_seconds: 0.0,
-                duration_seconds: 0.0,
-                staff: None,
-                voice: None,
-                hand: None,
-                tie: TieState::default(),
-                grace: false,
-                chord: false,
                 velocity: 90,
-                given_finger: None,
                 source: SourceRef::Midi { track: 0, event: i },
+                ..Default::default()
             });
         }
         score.finalise();
@@ -335,23 +319,7 @@ mod tests {
     #[test]
     fn tempo_is_read_back_from_the_file() {
         let mut score = Score { tempo: crate::TempoMap::constant_bpm(144.0), ..Default::default() };
-        score.notes.push(Note {
-            id: NoteId(0),
-            midi: 60,
-            onset: 0,
-            duration: 480,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
-            hand: None,
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
-            velocity: 80,
-            given_finger: None,
-            source: SourceRef::Midi { track: 0, event: 0 },
-        });
+        score.notes.push(Note { midi: 60, onset: 0, duration: 480, velocity: 80, ..Default::default() });
         score.finalise();
 
         let mut bytes = Vec::new();

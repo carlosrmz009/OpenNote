@@ -8,7 +8,7 @@ use on_fingering::scales::scale_fingerings;
 use on_fingering::{finger_score, FingeringOptions, Rule, RuleWeights};
 use on_hand::{Finger, Hand};
 use on_score::hands::HandAssignment;
-use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
+use on_score::{Note, NoteId, Score, SourceRef, TICKS_PER_QUARTER};
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::Piece;
@@ -215,17 +215,10 @@ fn exercise(seed: u64) -> Exercise {
             midi: *midi,
             onset: i as i64 * step,
             duration: step,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();
@@ -526,21 +519,13 @@ fn read_music_render(path: &Path) -> Result<Score> {
                 continue;
             };
             score.notes.push(Note {
-                id: NoteId(0),
                 midi: u8::try_from(midi).unwrap_or(0),
                 onset,
                 duration: duration.max(1),
-                onset_seconds: 0.0,
-                duration_seconds: 0.0,
-                staff: None,
-                voice: None,
-                hand: None,
-                tie: TieState::default(),
                 grace: note["is_grace"].as_bool().unwrap_or(false),
-                chord: false,
                 velocity: 64,
-                given_finger: None,
                 source: SourceRef::Midi { track, event: score.notes.len() },
+                ..Default::default()
             });
         }
     }
@@ -615,17 +600,8 @@ fn holds_what_it_is_holding(weights: &Weights) -> bool {
             midi,
             onset,
             duration,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
-            hand: None,
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 80,
-            source: SourceRef::Midi { track: 0, event: 0 },
-            given_finger: None,
+            ..Default::default()
         });
     };
     push(28, 0, 8 * q);
@@ -650,17 +626,10 @@ fn melody(pitches: &[u8], hand: Hand) -> Score {
             midi: *midi,
             onset: i as i64 * step,
             duration: step,
-            onset_seconds: 0.0,
-            duration_seconds: 0.0,
-            staff: None,
-            voice: None,
             hand: Some(hand),
-            tie: TieState::default(),
-            grace: false,
-            chord: false,
             velocity: 72,
-            given_finger: None,
             source: SourceRef::Midi { track: 0, event: i },
+            ..Default::default()
         });
     }
     score.finalise();
