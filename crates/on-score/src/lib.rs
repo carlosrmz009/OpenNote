@@ -159,13 +159,22 @@ impl Score {
         if !note.tie.start {
             return end;
         }
+        // Notes are kept in order of onset, so the continuation is looked for only among
+        // those starting where this one ends.
+        let sorted = self.notes.is_sorted_by(|a, b| a.onset_seconds <= b.onset_seconds);
         loop {
-            let next = self.notes.iter().find(|other| {
+            let continues = |other: &&Note| {
                 other.tie.is_continuation()
                     && other.midi == note.midi
                     && other.hand == note.hand
                     && (other.onset_seconds - end).abs() < 1e-4
-            });
+            };
+            let next = if sorted {
+                let from = self.notes.partition_point(|n| n.onset_seconds < end - 1e-4);
+                self.notes[from..].iter().take_while(|n| n.onset_seconds < end + 1e-4).find(continues)
+            } else {
+                self.notes.iter().find(continues)
+            };
             match next {
                 Some(next) => {
                     end = next.offset_seconds();
