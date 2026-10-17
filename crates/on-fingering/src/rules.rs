@@ -421,19 +421,8 @@ impl RuleScorer {
         &self.weights
     }
 
-    pub fn set_weights(&mut self, weights: RuleWeights) {
-        self.weights = weights;
-    }
-
     pub fn score(&self, t: &Trigram) -> RuleCosts {
-        let mut costs = RuleCosts::default();
-        for rule in self.set.rules() {
-            let raw = self.raw(*rule, t);
-            if raw != 0.0 {
-                costs.per_rule[rule.index()] = raw * self.weights.get(*rule);
-            }
-        }
-        costs
+        self.score_where(t, |_| true)
     }
 
     pub fn total(&self, t: &Trigram) -> f32 {
@@ -441,43 +430,22 @@ impl RuleScorer {
     }
 
     pub fn score_with(&self, t: &Trigram, only: &[Rule]) -> RuleCosts {
-        let mut costs = RuleCosts::default();
-        for rule in self.set.rules() {
-            if !only.contains(rule) {
-                continue;
-            }
-            let raw = self.raw(*rule, t);
-            if raw != 0.0 {
-                costs.per_rule[rule.index()] = raw * self.weights.get(*rule);
-            }
-        }
-        costs
+        self.score_where(t, |rule| only.contains(&rule))
     }
 
+    /// For a line within a chord: span rules are left out across a leap, where the hand
+    /// moves rather than stretches.
     pub fn score_melodic(&self, t: &Trigram, skip: &[Rule]) -> RuleCosts {
         let leap = self.is_leap(t);
-        let mut costs = RuleCosts::default();
-        for rule in self.set.rules() {
-            if skip.contains(rule) || (leap && SPAN_RULES.contains(rule)) {
-                continue;
-            }
-            let raw = self.raw(*rule, t);
-            if raw != 0.0 {
-                costs.per_rule[rule.index()] = raw * self.weights.get(*rule);
-            }
-        }
-        costs
+        self.score_where(t, |rule| !skip.contains(&rule) && !(leap && SPAN_RULES.contains(&rule)))
     }
 
-    pub fn score_excluding(&self, t: &Trigram, skip: &[Rule]) -> RuleCosts {
+    fn score_where(&self, t: &Trigram, keep: impl Fn(Rule) -> bool) -> RuleCosts {
         let mut costs = RuleCosts::default();
-        for rule in self.set.rules() {
-            if skip.contains(rule) {
-                continue;
-            }
-            let raw = self.raw(*rule, t);
+        for rule in self.set.rules().iter().copied().filter(|rule| keep(*rule)) {
+            let raw = self.raw(rule, t);
             if raw != 0.0 {
-                costs.per_rule[rule.index()] = raw * self.weights.get(*rule);
+                costs.per_rule[rule.index()] = raw * self.weights.get(rule);
             }
         }
         costs
@@ -770,22 +738,10 @@ impl RuleScorer {
         cost
     }
 
+    /// Balliauw's position-comfort rule measures what Parncutt's position-change-size rule
+    /// does; it stays a rule of its own so the two sets can weight it apart.
     fn balliauw_position_comfort(&self, t: &Trigram) -> f32 {
-        let (Some(prev), Some(next)) = (t.prev, t.next) else {
-            return 0.0;
-        };
-        if t.hand_only_travelled() {
-            return 0.0;
-        }
-        let d13 = self.distance(prev.midi, next.midi);
-        let span = self.spans.get(t.hand, prev.finger, next.finger);
-        if d13 > span.max_comf as f32 {
-            d13 - span.max_comf as f32
-        } else if d13 < span.min_comf as f32 {
-            span.min_comf as f32 - d13
-        } else {
-            0.0
-        }
+        self.position_change_size(t)
     }
 
     fn repeat_finger_on_position_change(&self, t: &Trigram) -> f32 {

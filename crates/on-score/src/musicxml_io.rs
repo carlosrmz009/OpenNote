@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -521,14 +520,4 @@ fn existing_fingering(note: &musicxml::elements::Note) -> Option<Finger> {
         }
     }
     None
-}
-
-pub fn staff_histogram(score: &Score) -> HashMap<u8, usize> {
-    let mut counts = HashMap::new();
-    for note in &score.notes {
-        if let Some(staff) = note.staff {
-            *counts.entry(staff).or_insert(0) += 1;
-        }
-    }
-    counts
 }

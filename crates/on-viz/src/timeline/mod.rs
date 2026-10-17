@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use on_fingering::biomech::{BiomechModel, Grip};
-use on_hand::keyboard::{is_black, KEY_DIP, MIDI_HIGHEST, MIDI_LOWEST};
+use on_hand::keyboard::{is_black, MIDI_HIGHEST, MIDI_LOWEST};
 use on_hand::skeleton::{dof, HandPose};
 use on_hand::{Finger, Hand, HandProfile};
 use on_score::{Fingering, NoteId, Score};
@@ -384,10 +384,6 @@ impl KeyStates {
 
     pub fn depth_of(&self, midi: u8) -> f32 {
         self.depth[self.slot(midi)]
-    }
-
-    pub fn travel_of(&self, midi: u8) -> f32 {
-        self.depth_of(midi) * KEY_DIP
     }
 
     pub fn hand_on(&self, midi: u8) -> Option<Hand> {

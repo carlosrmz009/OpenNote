@@ -1,4 +1,4 @@
-use on_hand::keyboard::{Keyboard, BLACK_KEY_LENGTH, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
+use on_hand::keyboard::{Keyboard, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Extent {
@@ -129,10 +129,6 @@ impl Layout {
     pub fn key_rect(&self, midi: u8) -> (f32, f32, f32, f32) {
         let (x0, x1, y0, y1) = self.keyboard.footprint(midi);
         (x0, x1, y0 - WHITE_KEY_LENGTH, y1 - WHITE_KEY_LENGTH)
-    }
-
-    pub fn black_key_depth_mm(&self) -> f32 {
-        BLACK_KEY_LENGTH
     }
 }
 

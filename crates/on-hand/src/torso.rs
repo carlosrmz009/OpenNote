@@ -82,14 +82,6 @@ impl Torso {
         (wrist.x - shoulder.x).clamp(-MAX_LEAN_MM, MAX_LEAN_MM)
     }
 
-    pub fn preference(&self, hand: Hand, x: f32) -> f32 {
-        let other = match hand {
-            Hand::Left => Hand::Right,
-            Hand::Right => Hand::Left,
-        };
-        (self.effort_along(hand, x) - self.effort_along(other, x)).max(0.0)
-    }
-
     pub fn effort_along(&self, hand: Hand, x: f32) -> f32 {
         self.effort(hand, Vec3::new(x, PLAYING_Y_MM, PLAYING_Z_MM))
     }

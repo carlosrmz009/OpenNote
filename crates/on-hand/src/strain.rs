@@ -1,5 +1,4 @@
 use crate::skeleton::{dof, HandPose, Posture, Skeleton, DOF, LIMITS};
-use crate::Finger;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StrainWeights {
@@ -231,27 +230,6 @@ pub fn carriage_residuals(w: &StrainWeights, pose: &HandPose) -> [StrainResidual
             grad: [(dof::WRIST_Y, k), NO_GRAD, NO_GRAD, NO_GRAD],
         },
     ]
-}
-
-pub fn worst_finger(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> Option<Finger> {
-    let _ = (sk, w);
-    let pose = &posture.pose;
-    (0..4)
-        .map(|slot| {
-            let f = Finger::from_index(slot + 1);
-            let b = dof::finger(slot);
-            let cost: f32 = [dof::MCP_FLEX, dof::MCP_SPREAD, dof::PIP_FLEX]
-                .iter()
-                .map(|o| {
-                    let i = b + o;
-                    let d = deviation(i, pose.q[i], 0.0);
-                    d * d + barrier(i, pose.q[i], 0.0)
-                })
-                .sum();
-            (f, cost)
-        })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(f, _)| f)
 }
 
 #[cfg(test)]

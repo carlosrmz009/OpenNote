@@ -1,5 +1,6 @@
 use super::*;
 use on_fingering::biomech::BiomechWeights;
+use on_hand::keyboard::KEY_DIP;
 use on_hand::HandProfile;
 use on_score::{Note, SourceRef, TICKS_PER_QUARTER};
 
