@@ -9,11 +9,8 @@ description = "Score intermediate representation with MusicXML and MIDI import/e
 [dependencies]
 on-hand.workspace = true
 anyhow.workspace = true
-thiserror.workspace = true
-serde.workspace = true
 midly.workspace = true
 musicxml.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

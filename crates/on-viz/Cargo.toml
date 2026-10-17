@@ -16,7 +16,6 @@ on-audio = { workspace = true, default-features = false }
 anyhow.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 glam.workspace = true
-serde.workspace = true
 tracing.workspace = true
 bevy_egui = { version = "0.42", optional = true }
 rfd = { version = "0.17", optional = true }

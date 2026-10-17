@@ -7,11 +7,9 @@ description = "Writes fingerings back into the original score and engraves annot
 
 [dependencies]
 on-score.workspace = true
-on-fingering.workspace = true
 anyhow.workspace = true
 musicxml.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
 verovioxide = { version = "0.3", default-features = false, features = ["bundled-data"] }
 svg2pdf = "0.13"
 pdf-writer = "0.12"
