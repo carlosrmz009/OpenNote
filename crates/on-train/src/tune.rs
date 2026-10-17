@@ -287,10 +287,11 @@ impl Examples {
         for path in paths {
             walk(path, &mut files)?;
         }
-        files.sort_by_key(|p| {
-            let text = p.to_string_lossy().to_string();
-            (fnv(&text), text)
-        });
+        // Ordered and split by file name, not by the path as typed, so that `./scores` and
+        // an absolute path to the same folder give the same split.
+        let file_name =
+            |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        files.sort_by_key(|p| (fnv(&file_name(p)), p.to_string_lossy().into_owned()));
         let limit = if load.limit == 0 { usize::MAX } else { load.limit };
         let mut parts: [Vec<(String, Score)>; 3] = Default::default();
         let mut kept = 0;
@@ -324,7 +325,7 @@ impl Examples {
             }
             trim(&mut score, load.notes);
             let name = file.to_string_lossy().to_string();
-            parts[bucket(&name)].push((name, score));
+            parts[bucket(&file_name(file))].push((name, score));
             kept += 1;
         }
         Ok(Examples::Hands(parts))
@@ -703,6 +704,9 @@ pub struct TuneConfig {
     pub weights: PathBuf,
     pub hours: Option<f64>,
     pub threads: usize,
+    /// How many settings are tried each generation. Fixed apart from the thread count, so a
+    /// search goes the same way on any machine.
+    pub children: usize,
     pub give_up: u64,
     pub batch: usize,
     pub counterpart: Option<Examples>,
@@ -839,7 +843,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
         let draw = state.rng ^ state.generation.wrapping_mul(0x9e37_79b9_7f4a_7c15);
 
-        let children: Vec<Vec<f64>> = (0..threads)
+        let children: Vec<Vec<f64>> = (0..config.children.max(1))
             .map(|_| {
                 let share = (3.0 / names.len() as f64).max(0.15);
                 let mut child = state.current.clone();
@@ -970,13 +974,13 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 file.0.insert(format!("_{name}.examples"), sizes.iter().sum::<usize>() as f32);
                 file.save(&config.weights)?;
                 event = "promoted";
+                // The test third is kept out of sight until the search ends, so that nobody
+                // steering it by eye steers it by the test.
                 say(&format!(
-                    "Generation {}: better. {:.2}% held back, {:.2}% test \
-                     (defaults {:.2}%). Saved to {}.",
+                    "Generation {}: better. {:.2}% held back (defaults {:.2}%). Saved to {}.",
                     state.generation,
                     held_out * 100.0,
-                    state.best_scores.test * 100.0,
-                    state.baseline.test * 100.0,
+                    state.baseline.held_out * 100.0,
                     config.weights.display()
                 ));
             }

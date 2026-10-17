@@ -66,9 +66,15 @@ pub struct TuneArgs {
     #[arg(long)]
     pub hours: Option<f64>,
 
-    /// Settings tried at once. One per core by default.
+    /// Threads to evaluate settings on. One per core by default; the results do not depend
+    /// on it.
     #[arg(long)]
     pub threads: Option<usize>,
+
+    /// How many settings to try each generation. The same on every machine, whatever its
+    /// thread count, so a search can be repeated.
+    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..=256))]
+    pub children: u64,
 
     /// Generations without finding anything worth keeping before this target is called
     /// finished and the command returns. 0 runs on regardless. Counted in generations
@@ -222,6 +228,7 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         hours: args.hours,
         batch: args.batch,
         give_up: args.give_up,
+        children: args.children as usize,
         threads: args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
     };
     run(&examples, &config, |line| println!("{line}"))

@@ -295,6 +295,10 @@ pub fn measure_model(
         .collect()
 }
 
+/// How many examples are fingered between weight updates. Fixed rather than scaled with the
+/// thread count, so training goes the same way on any machine.
+const BATCH: usize = 32;
+
 /// Splits each style's held-back pieces in two by a stable hash of their names: one half to
 /// choose by, the other to report on. A style with too few pieces to split uses the same
 /// pieces for both, as before.
@@ -375,7 +379,7 @@ pub fn train(
         if config.per_epoch > 0 {
             order.truncate(config.per_epoch);
         }
-        for batch in order.chunks(config.threads.max(1) * 4) {
+        for batch in order.chunks(BATCH) {
             let models: Vec<(Style, NgramPrior)> =
                 STYLES.iter().map(|s| (*s, model_of(&weights, used(*s, config.unified)))).collect();
             let unified = config.unified;
