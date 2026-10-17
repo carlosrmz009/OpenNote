@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::Args;
 use on_engrave::{engrave, EngraveOptions};
 use on_hand::Hand;
@@ -36,25 +36,9 @@ pub struct AnnotateArgs {
 }
 
 pub fn run(args: AnnotateArgs) -> Result<()> {
-    if !args.input.exists() {
-        bail!("{} does not exist", args.input.display());
-    }
-    let options = args.model.options()?;
-
-    let mut input =
-        on_score::Document::open(&args.input).with_context(|| format!("reading {}", args.input.display()))?;
-
-    let assignment = args.model.hands(&options)?;
-    on_score::assign_hands(input.score_mut(), &assignment);
-
+    let crate::Fingered { document: input, solution, .. } = args.model.finger(&args.input)?;
     let score = input.score();
     let notes = score.notes.len();
-    let prior = args.model.prior()?;
-    let solution = on_fingering::finger_score_with_prior(
-        score,
-        &options,
-        prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
-    );
 
     let unreachable = solution.explanations.iter().filter(|e| !e.reachable).count();
     let title = score.title.clone().unwrap_or_else(|| "untitled".into());

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::Args;
 use on_hand::Hand;
 
@@ -32,19 +32,8 @@ pub struct ExplainArgs {
 const CLOSE_CALL: f32 = 0.25;
 
 pub fn run(args: ExplainArgs) -> Result<()> {
-    if !args.input.exists() {
-        bail!("{} does not exist", args.input.display());
-    }
-    let options = args.model.options()?;
-    let mut input =
-        on_score::Document::open(&args.input).with_context(|| format!("reading {}", args.input.display()))?;
-    let assignment = args.model.hands(&options)?;
-    on_score::assign_hands(input.score_mut(), &assignment);
-
+    let crate::Fingered { document: input, solution, .. } = args.model.finger(&args.input)?;
     let score = input.score();
-    let prior = args.model.prior()?;
-    let prior_ref = prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior);
-    let solution = on_fingering::finger_score_with_prior(score, &options, prior_ref);
 
     println!(
         "{} — total cost {:.2} over {} notes",

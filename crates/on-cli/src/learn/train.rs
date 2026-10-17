@@ -172,21 +172,8 @@ fn verdict(before: MatchRates, after: MatchRates) -> String {
 }
 
 fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
-    if !path.exists() {
-        bail!("{} does not exist", path.display());
-    }
-    let options = args.weights.options()?;
-    let mut input = on_score::Document::open(path).with_context(|| format!("reading {}", path.display()))?;
-    let assignment = args.weights.hands(&options)?;
-    on_score::assign_hands(input.score_mut(), &assignment);
+    let crate::Fingered { document: input, solution, options } = args.weights.finger(path)?;
     let score = input.score();
-
-    let prior = args.weights.prior()?;
-    let solution = on_fingering::finger_score_with_prior(
-        score,
-        &options,
-        prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
-    );
 
     let spans = options.span_model.table();
     let measured = on_fingering::measure_solution(score, &solution, spans);

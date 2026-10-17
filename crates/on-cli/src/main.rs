@@ -141,6 +141,25 @@ impl ModelArgs {
         self.tuned.as_deref().map(on_train::tune::Weights::load).transpose()
     }
 
+    /// Reads a score, gives each note a hand and fingers it: what every command that
+    /// fingers a score file starts with.
+    pub fn finger(&self, path: &std::path::Path) -> Result<Fingered> {
+        if !path.exists() {
+            bail!("{} does not exist", path.display());
+        }
+        let options = self.options()?;
+        let mut document =
+            on_score::Document::open(path).with_context(|| format!("reading {}", path.display()))?;
+        on_score::assign_hands(document.score_mut(), &self.hands(&options)?);
+        let prior = self.prior()?;
+        let solution = on_fingering::finger_score_with_prior(
+            document.score(),
+            &options,
+            prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior),
+        );
+        Ok(Fingered { document, solution, options })
+    }
+
     pub fn prior(&self) -> Result<Option<std::sync::Arc<on_fingering::NgramPrior>>> {
         let text = match &self.model {
             Some(model) => models::resolve(model)?,
@@ -172,6 +191,13 @@ where
             Err(format!("{value} is outside {low} to {high}"))
         }
     }
+}
+
+/// A score with its hands assigned, the fingering found for it, and the options used.
+pub struct Fingered {
+    pub document: on_score::Document,
+    pub solution: on_fingering::Solution,
+    pub options: FingeringOptions,
 }
 
 fn built_in() -> Result<Option<String>> {
