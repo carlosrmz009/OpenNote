@@ -1,3 +1,28 @@
+//! How far apart each pair of fingers can comfortably, practically and at most reach, in
+//! the tables of Parncutt et al. (1997), Balliauw et al. and Badgerow.
+//!
+//! Ported from pydactyl's reference implementations of those models, by David A. Randolph
+//! (<https://github.com/dvdrndlph/pydactyl>), under the MIT License:
+//!
+//! > Copyright (c) 2014-2018 David A. Randolph
+//! >
+//! > Permission is hereby granted, free of charge, to any person obtaining a copy of this
+//! > software and associated documentation files (the "Software"), to deal in the Software
+//! > without restriction, including without limitation the rights to use, copy, modify,
+//! > merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+//! > permit persons to whom the Software is furnished to do so, subject to the following
+//! > conditions:
+//! >
+//! > The above copyright notice and this permission notice shall be included in all copies
+//! > or substantial portions of the Software.
+//! >
+//! > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+//! > INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+//! > PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+//! > HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+//! > CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+//! > OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 use on_hand::{Finger, Hand};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
