@@ -52,7 +52,15 @@ pub(crate) const FINGERS: usize = 5;
 
 pub(crate) const RELEASE_SECONDS: f64 = crate::playability::CHORD_SECONDS;
 
-pub(crate) fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
+/// Adds to each chord the notes still held from earlier ones. Within a scale or run found
+/// beforehand (`lines`, by event index), a note overlapping the next of the same run is
+/// finger legato, released as the thumb passes, and is not held.
+pub(crate) fn hold_sustained(
+    events: &mut [Event],
+    score: &Score,
+    reach: i32,
+    lines: &std::collections::HashSet<usize>,
+) {
     let mut sounding: Vec<Sounding> = Vec::new();
     for index in 0..events.len() {
         let now = events[index].onset_seconds;
@@ -75,6 +83,7 @@ pub(crate) fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
             .iter()
             .rev()
             .filter(|s| !struck.iter().any(|(other, _)| *other == s.id))
+            .filter(|s| !(lines.contains(&index) && lines.contains(&s.from)))
             .map(|s| (s.id, s.midi))
             .collect();
 
@@ -113,6 +122,7 @@ pub(crate) fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
                 id,
                 midi,
                 until: score.release_seconds(id),
+                from: index,
                 low: struck_low,
                 high: struck_high,
             });
@@ -124,6 +134,7 @@ pub(crate) struct Sounding {
     pub(crate) id: NoteId,
     pub(crate) midi: u8,
     pub(crate) until: f64,
+    pub(crate) from: usize,
     pub(crate) low: u8,
     pub(crate) high: u8,
 }

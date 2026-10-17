@@ -175,7 +175,9 @@ impl<'a> HandSolver<'a> {
         }
         let mut pattern = crate::patterns::chord_bonus(self.hand, &event.notes, &candidate.fingers);
         if let Some(taught) = self.scales.get(&index) {
-            if candidate.fingers.first() == Some(&taught.finger) {
+            // The taught finger is for the note struck, not for any note still held.
+            let struck = event.struck.iter().position(|s| *s).unwrap_or(0);
+            if candidate.fingers.get(struck) == Some(&taught.finger) {
                 pattern += taught.bonus;
             }
         }

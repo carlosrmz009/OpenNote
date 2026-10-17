@@ -331,9 +331,12 @@ fn solve_score(
             return None;
         }
         let reach = options.span_model.table().0[Finger::Thumb.index()][Finger::Little.index()].max_comf;
-        hold_sustained(&mut events, score, reach);
+        // Scales are found before held notes join the chords: in a legato recording each
+        // note of a scale overlaps the next, and held, it no longer looks like a line.
         let mut solver = HandSolver::new(hand, options, prior, agreement);
         solver.find_scales(&events);
+        let lines = solver.scales.keys().copied().collect();
+        hold_sustained(&mut events, score, reach, &lines);
         Some(solver.solve(&events))
     };
     let solved: Vec<Option<Solution>> = if inner_threads() {

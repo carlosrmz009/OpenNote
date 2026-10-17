@@ -68,7 +68,7 @@ fn a_key_struck_again_is_not_also_held() {
     score.notes[0].duration *= 3;
     score.finalise();
     let mut events = build_events(&score, Hand::Right);
-    hold_sustained(&mut events, &score, 14);
+    hold_sustained(&mut events, &score, 14, &Default::default());
     for event in &events {
         let mut keys = event.notes.clone();
         keys.dedup();
@@ -92,7 +92,7 @@ fn a_note_let_go_as_the_next_lands_is_not_held() {
         }
         score.finalise();
         let mut events = build_events(&score, Hand::Right);
-        hold_sustained(&mut events, &score, 14);
+        hold_sustained(&mut events, &score, 14, &Default::default());
         let widest = events.iter().map(Event::len).max().unwrap_or(0);
         assert_eq!(widest > 1, held, "a note running {overlap} s past the next onset");
     }
@@ -425,4 +425,20 @@ fn asking_for_the_default_gets_the_consensus_and_not_a_lookalike() {
         fingers_of(&score, &finger_score(&score, &options)),
         fingers_of(&score, &finger_score_consensus(&score, &options, None))
     );
+}
+
+#[test]
+fn a_scale_played_legato_keeps_its_taught_fingering() {
+    let c_major = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84];
+    let detached = melody(&c_major, Hand::Right, 0.5);
+    let mut legato = detached.clone();
+    let overlap = ticks_for(&legato, 0.100);
+    for note in &mut legato.notes {
+        note.duration += overlap;
+    }
+    legato.finalise();
+    let options = FingeringOptions::default();
+    let plain = fingers_of(&detached, &finger_score(&detached, &options));
+    let joined = fingers_of(&legato, &finger_score(&legato, &options));
+    assert_eq!(plain, joined, "overlapping each note by 100 ms changed the fingering");
 }
