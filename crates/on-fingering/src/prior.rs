@@ -110,6 +110,9 @@ pub struct NgramPrior {
     symmetries: Symmetries,
     pub learned: Option<crate::learned::Learned>,
     pub known: crate::known::Known,
+    /// The share of the corpus training held back, so that measuring the model later
+    /// measures it on the same pieces.
+    pub held_out: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -203,6 +206,7 @@ impl NgramPrior {
             pooled_right: serialize_hand(&self.pooled[Hand::Right as usize]),
             learned: self.learned.clone(),
             known: self.known.clone(),
+            held_out: self.held_out,
         };
         let text = serde_json::to_string_pretty(&stored)?;
         std::fs::write(path, text)?;
@@ -227,6 +231,7 @@ impl NgramPrior {
         prior.symmetries = stored.symmetries;
         prior.learned = stored.learned;
         prior.known = stored.known;
+        prior.held_out = stored.held_out;
         Ok(prior)
     }
 
@@ -390,6 +395,8 @@ struct StoredModel {
     learned: Option<crate::learned::Learned>,
     #[serde(default, skip_serializing_if = "crate::known::Known::is_empty")]
     known: crate::known::Known,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    held_out: Option<f32>,
 }
 
 fn serialize_hand(counts: &HandCounts) -> HashMap<String, Tally> {

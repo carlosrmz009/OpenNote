@@ -63,10 +63,10 @@ pub struct EvalArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// The fraction held back. Has to match what training used, or the pieces
-    /// measured on are not the ones that were held back.
-    #[arg(long, default_value_t = 0.2, value_parser = crate::between(0.0f32, 0.9))]
-    pub held_out: f32,
+    /// The fraction held back. By default, what the model records training held back, or
+    /// 0.2 for a model that does not say; another value measures on other pieces.
+    #[arg(long, value_parser = crate::between(0.0f32, 0.9))]
+    pub held_out: Option<f32>,
 
     #[command(flatten)]
     pub weights: ModelArgs,
@@ -101,7 +101,9 @@ pub fn train(args: TrainArgs) -> Result<()> {
         println!("\nNothing written (--dry-run).");
         return Ok(());
     }
-    report.prior.save(&args.out).with_context(|| format!("writing {}", args.out.display()))?;
+    let mut model = report.prior.clone();
+    model.held_out = Some(args.held_out);
+    model.save(&args.out).with_context(|| format!("writing {}", args.out.display()))?;
     println!("\nModel written to {}.", args.out.display());
     if report.made_things_worse() {
         println!(
@@ -124,10 +126,19 @@ pub fn eval(args: EvalArgs) -> Result<()> {
         bail!("the corpus at {} is empty", args.corpus.display());
     }
 
+    let model_path = args.weights.model.clone().unwrap_or_else(|| PathBuf::from(MODEL_PATH));
+    let model = crate::ModelArgs { model: Some(model_path.clone()), ..args.weights.clone() };
+    let prior = model.prior();
+    let recorded = prior.as_ref().ok().and_then(|p| p.as_ref()).and_then(|p| p.held_out);
+    let held_out = args.held_out.or(recorded).unwrap_or(0.2);
+    if args.held_out.is_none() && recorded.is_some() && !args.all {
+        println!("Measuring on the {:.0}% the model was trained without.", held_out * 100.0);
+    }
+
     let measured = if args.all {
         pieces.clone()
     } else {
-        let split = on_train::split(&pieces, args.held_out);
+        let split = on_train::split(&pieces, held_out);
         if split.test.is_empty() {
             println!("Not enough pieces to hold any back; measuring on all of them.");
             pieces.clone()
@@ -141,9 +152,7 @@ pub fn eval(args: EvalArgs) -> Result<()> {
     let rules_only = on_train::evaluate(&measured, &options, None);
     println!("rules only:  {rules_only}");
 
-    let model_path = args.weights.model.clone().unwrap_or_else(|| PathBuf::from(MODEL_PATH));
-    let model = crate::ModelArgs { model: Some(model_path.clone()), ..args.weights.clone() };
-    match model.prior() {
+    match prior {
         Ok(Some(prior)) => {
             let mut with_model = args.weights.options()?;
             if with_model.prior_scale == 0.0 {
