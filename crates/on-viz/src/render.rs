@@ -196,12 +196,21 @@ pub struct Transport {
     pub playing: bool,
     pub speed: f64,
     pub looping: bool,
+    /// A stretch to practise, from A to B in seconds: playing past B goes back to A.
+    pub section: Option<(f64, f64)>,
     pending_seek: Option<f64>,
 }
 
 impl Default for Transport {
     fn default() -> Self {
-        Self { position: LEAD_IN, playing: true, speed: 1.0, looping: true, pending_seek: None }
+        Self {
+            position: LEAD_IN,
+            playing: true,
+            speed: 1.0,
+            looping: true,
+            section: None,
+            pending_seek: None,
+        }
     }
 }
 
@@ -209,6 +218,31 @@ impl Transport {
     pub fn seek_to(&mut self, seconds: f64) {
         self.position = seconds;
         self.pending_seek = Some(seconds);
+    }
+
+    /// Marks where the practice section starts. A start after the current end clears the end.
+    pub fn mark_start(&mut self, seconds: f64) {
+        self.section = match self.section {
+            Some((_, end)) if end > seconds => Some((seconds, end)),
+            _ => Some((seconds, f64::INFINITY)),
+        };
+    }
+
+    /// Marks where the practice section ends; without a start, it starts at the beginning.
+    pub fn mark_end(&mut self, seconds: f64) {
+        let start = self.section.map_or(LEAD_IN, |(start, _)| start);
+        self.section = (seconds > start).then_some((start, seconds));
+    }
+}
+
+/// Where playback goes once it has passed the end of the section, or of the piece, and
+/// whether it keeps playing. A section always repeats; the whole piece only when looping.
+fn past_the_end(position: f64, section: Option<(f64, f64)>, end: f64, looping: bool) -> Option<(f64, bool)> {
+    match section {
+        Some((start, finish)) if position > finish.min(end) => Some((start, true)),
+        Some(_) => None,
+        None if position > end => Some(if looping { (LEAD_IN, true) } else { (end, false) }),
+        None => None,
     }
 }
 
@@ -1070,14 +1104,14 @@ fn advance_transport(
     }
 
     let end = performance.timeline.duration + 1.5;
-    if transport.position > end {
-        let looping = transport.looping;
-        transport.playing = looping;
-        let target = if looping { LEAD_IN } else { end };
+    if let Some((target, playing)) =
+        past_the_end(transport.position, transport.section, end, transport.looping)
+    {
+        transport.playing = playing;
         transport.seek_to(target);
         if let Some(player) = audio.player() {
             player.seek(target);
-            player.set_playing(looping);
+            player.set_playing(playing);
         }
     }
 }
@@ -1126,6 +1160,17 @@ fn handle_input(
     }
     if keys.just_pressed(KeyCode::KeyL) {
         transport.looping = !transport.looping;
+    }
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        let here = transport.position;
+        transport.mark_start(here);
+    }
+    if keys.just_pressed(KeyCode::BracketRight) {
+        let here = transport.position;
+        transport.mark_end(here);
+    }
+    if keys.just_pressed(KeyCode::Backslash) {
+        transport.section = None;
     }
 
     if let Some(target) = jump {
@@ -1448,6 +1493,31 @@ mod clock_tests {
         let (lo, hi) = steps.iter().fold((f64::MAX, f64::MIN), |(a, b), s| (a.min(*s), b.max(*s)));
         assert!(hi - lo < 0.004, "frame steps vary from {lo} to {hi}");
         assert!((track[599] - 10.0).abs() < 0.012, "{}", track[599]);
+    }
+
+    #[test]
+    fn a_section_repeats_and_the_piece_loops_only_when_asked() {
+        use super::{past_the_end, LEAD_IN};
+        assert_eq!(past_the_end(5.0, Some((2.0, 4.0)), 60.0, false), Some((2.0, true)));
+        assert_eq!(past_the_end(3.0, Some((2.0, 4.0)), 60.0, false), None);
+        assert_eq!(past_the_end(61.0, Some((2.0, f64::INFINITY)), 60.0, false), Some((2.0, true)));
+        assert_eq!(past_the_end(61.0, None, 60.0, true), Some((LEAD_IN, true)));
+        assert_eq!(past_the_end(61.0, None, 60.0, false), Some((60.0, false)));
+        assert_eq!(past_the_end(30.0, None, 60.0, true), None);
+    }
+
+    #[test]
+    fn marking_a_section() {
+        use super::{Transport, LEAD_IN};
+        let mut transport = Transport::default();
+        transport.mark_end(8.0);
+        assert_eq!(transport.section, Some((LEAD_IN, 8.0)), "B alone runs from the start");
+        transport.mark_start(3.0);
+        assert_eq!(transport.section, Some((3.0, 8.0)));
+        transport.mark_start(9.0);
+        assert_eq!(transport.section, Some((9.0, f64::INFINITY)), "A after B lets go of B");
+        transport.mark_end(5.0);
+        assert_eq!(transport.section, None, "B before A is no section");
     }
 
     #[test]

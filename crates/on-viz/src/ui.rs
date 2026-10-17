@@ -263,14 +263,45 @@ fn draw_menus(
 
             let duration = performance.timeline.duration.max(0.001);
             let mut position = transport.position.clamp(0.0, duration);
-            let slider = ui.add_sized(
-                [ui.available_width() - 120.0, 20.0],
-                egui::Slider::new(&mut position, 0.0..=duration).show_value(false),
-            );
+            ui.spacing_mut().slider_width = (ui.available_width() - 340.0).max(80.0);
+            let slider = ui.add(egui::Slider::new(&mut position, 0.0..=duration).show_value(false));
             if slider.changed() {
                 jump = Some(position);
             }
             ui.label(format!("{} / {}", clock(transport.position.max(0.0)), clock(duration)));
+
+            ui.separator();
+            let here = transport.position.max(0.0);
+            if ui.button("A").on_hover_text("Practise from here  [").clicked() {
+                transport.mark_start(here);
+            }
+            if ui.button("B").on_hover_text("Practise up to here  ]").clicked() {
+                transport.mark_end(here);
+            }
+            match transport.section {
+                Some((start, end)) => {
+                    let end = if end.is_finite() { clock(end) } else { "end".to_string() };
+                    ui.label(format!("{}–{end}", clock(start.max(0.0))));
+                    if ui.button("✕").on_hover_text("Play the whole piece  \\").clicked() {
+                        transport.section = None;
+                    }
+                }
+                None => {
+                    ui.weak("whole piece");
+                }
+            }
+
+            ui.separator();
+            let mut speed = transport.speed;
+            let dragged = ui
+                .add(
+                    egui::DragValue::new(&mut speed).range(0.1..=4.0).speed(0.01).max_decimals(2).suffix("×"),
+                )
+                .on_hover_text("Speed  ↑ ↓");
+            if dragged.changed() {
+                transport.speed = speed;
+                speed_changed = true;
+            }
         });
     });
     inset.bottom = bottom.response.rect.height();

@@ -94,9 +94,12 @@ In the viewer:
 | Home | back to the start |
 | ↑ / ↓ | faster / slower |
 | L | loop on / off |
+| [ / ] | practise from here / up to here |
+| \\ | play the whole piece again |
 
-The menus open other scores, change the hand size, the sound and the view, and export
-the video or the fingered score.
+The transport bar marks a section to practise (A and B) and sets the speed. The menus
+open other scores, change the hand size, the sound and the view, and export the video or
+the fingered score.
 
 ### Measuring the fingering
 
