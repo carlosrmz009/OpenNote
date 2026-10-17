@@ -321,12 +321,15 @@ impl<'a> HandSolver<'a> {
             let (ca, cb, cc) = (all[i - 2].len(), all[i - 1].len(), all[i].len());
             let mut row = vec![f32::INFINITY; cb * cc];
             let mut back = vec![0usize; cb * cc];
+            let here: Vec<f32> = all[i]
+                .iter()
+                .map(|candidate| self.event_cost(i, &events[i], candidate, baselines[i]))
+                .collect();
             for b in 0..cb {
                 let pb = (&events[i - 1], &all[i - 1][b]);
                 for c in 0..cc {
                     let pc = (&events[i], &all[i][c]);
-                    let step =
-                        self.event_cost(i, &events[i], &all[i][c], baselines[i]) + self.move_cost(pb, pc);
+                    let step = here[c] + self.move_cost(pb, pc);
                     for a in 0..ca {
                         let previous = best[i - 1][a * cb + b];
                         if !previous.is_finite() {
