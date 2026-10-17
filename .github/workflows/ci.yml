@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # With Bevy, debug info makes each test and example binary 2 GB or more, which is
+  # more than a runner's disk holds.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # The engine crates need no system libraries, so they are tested on every
+  # platform and at the minimum supported Rust version.
+  engine:
+    name: Engine tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p on-hand -p on-score -p on-fingering -p on-train -p on-audio --no-default-features
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p on-hand -p on-score -p on-fingering -p on-train -p on-audio --no-default-features
+
+  # Everything, including the viewer, the engraver (which compiles Verovio from
+  # source on first build) and every example.
+  workspace:
+    name: Workspace (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache the compiled Verovio library
+        uses: actions/cache@v4
+        with:
+          # verovioxide-sys keeps the library it compiles next to the registry sources.
+          path: ~/.cargo/registry/src/target/verovio-cache
+          key: verovio-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo test --locked --workspace
+      - name: Examples compile
+        run: cargo check --locked --workspace --examples
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
