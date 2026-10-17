@@ -139,9 +139,10 @@ pub fn build(input: &Path, settings: &SessionSettings) -> Result<Performance> {
     }
     if !session::hands_available(&settings.assets_root) {
         eprintln!(
-            "No rigged hand model found, so this will play without hands.\n\
-             The hands are a premade, openly licensed model you supply — see\n\
-             assets/hands/README.md for where to get one and how to convert it."
+            "No rigged hand model found under {}, so this will play without hands.\n\
+             The hands ship in the repository's assets/hands folder; run from the repository, \
+             or pass --assets.",
+            settings.assets_root.join("hands").display()
         );
     }
     let performance = session::open(input, settings)?;

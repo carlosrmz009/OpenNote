@@ -54,18 +54,24 @@ pub fn open(name: &str) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
+    unseal(&path).map(Some)
+}
+
+fn unseal(path: &Path) -> Result<String> {
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     ensure!(bytes.starts_with(MAGIC), "{} is not an opennote model", path.display());
     let Some(key) = RELEASE_KEY else {
         bail!("this copy of opennote was not built to open published models; use an official build");
     };
-    String::from_utf8(crate::seal::seal(&bytes[MAGIC.len()..], key))
-        .map(Some)
-        .with_context(|| format!("{} is damaged, or was sealed for another build", path.display()))
+    String::from_utf8(crate::seal::seal(&bytes[MAGIC.len()..], key)).with_context(|| format!("{} is damaged, or was sealed for another build", path.display()))
 }
 
 fn curl(args: &[&str]) -> Result<Vec<u8>> {
-    let out = Command::new("curl").args(["-fsSL", "--retry", "2"]).args(args).output().context("running curl")?;
+    let out = Command::new("curl")
+        .args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "--max-time", "600"])
+        .args(args)
+        .output()
+        .context("running curl")?;
     ensure!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr).trim());
     Ok(out.stdout)
 }
@@ -94,7 +100,9 @@ pub fn run(args: ModelsArgs) -> Result<()> {
                 .into_iter()
                 .flatten()
                 .flatten()
-                .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .map(|e| e.path())
+                .filter(|path| path.extension().is_some_and(|e| e == "onm"))
+                .filter_map(|path| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
                 .collect();
             match published() {
                 Ok(names) if !names.is_empty() => {
@@ -114,9 +122,18 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             ensure!(name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)), "not a model name: {name}");
             std::fs::create_dir_all(dir())?;
             let path = dir().join(format!("{name}.onm"));
+            let partial = dir().join(format!("{name}.onm.part"));
             let url = format!("https://github.com/{REPO}/releases/download/{TAG}/{name}.onm");
-            curl(&["-o", &path.to_string_lossy(), &url]).with_context(|| format!("downloading {name}"))?;
-            ensure!(open(&name).is_ok(), "{name} downloaded, but this build cannot open it");
+            let fetched = curl(&["-o", &partial.to_string_lossy(), &url])
+                .with_context(|| format!("downloading {name}"))
+                .and_then(|_| {
+                    unseal(&partial).with_context(|| format!("{name} downloaded, but this build cannot open it"))
+                });
+            if let Err(error) = fetched {
+                let _ = std::fs::remove_file(&partial);
+                return Err(error);
+            }
+            std::fs::rename(&partial, &path).with_context(|| format!("moving the download to {}", path.display()))?;
             println!("{name} -> {}\nuse it with: opennote <command> --model {name}", path.display());
         }
         ModelsCommand::Seal { model, out } => {

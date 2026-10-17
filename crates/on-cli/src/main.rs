@@ -44,8 +44,7 @@ enum Command {
     Train(learn::TrainArgs),
     /// Measure the fingering against expert annotations.
     Eval(learn::EvalArgs),
-    /// Search the engine's weights for as long as it is left running. See
-    /// docs/TUNING.md.
+    /// Search the engine's weights for as long as it is left running.
     Tune(learn::TuneArgs),
     /// Measure against a dataset without learning anything from it.
     Bench(learn::BenchArgs),

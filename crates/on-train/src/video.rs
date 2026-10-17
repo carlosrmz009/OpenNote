@@ -124,8 +124,8 @@ impl Corners {
             .with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&text).with_context(|| {
             format!(
-                "{} is not a corners file — `python tools/watch_pianist.py calibrate` \
-                 writes one",
+                "{} is not a corners file, as the hand-tracking tool writes when the \
+                 keyboard's corners are clicked",
                 path.display()
             )
         })

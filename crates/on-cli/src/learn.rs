@@ -35,7 +35,7 @@ pub enum CorpusCommand {
     },
     /// Work out where the keyboard is in a video frame.
     ///
-    /// Takes the four corners clicked by `tools/watch_pianist.py calibrate` and fits
+    /// Takes the four corners clicked in the hand-tracking tool and fits
     /// the projective map from pixels to millimetres of piano. Only needed once per
     /// camera position, which in practice is once per channel.
     Calibrate {
@@ -48,7 +48,7 @@ pub enum CorpusCommand {
     },
     /// Read fingerings out of an overhead video of somebody playing.
     ///
-    /// Needs three things: the hand landmarks, which `tools/watch_pianist.py` writes
+    /// Needs three things: the hand landmarks, which the hand-tracking tool writes
     /// from the video; a calibration saying where the keyboard is in the frame, which
     /// the same tool writes once per camera position; and a MIDI or MusicXML file of
     /// the same performance, which says which keys went down and when.
@@ -60,7 +60,7 @@ pub enum CorpusCommand {
         #[arg(long)]
         score: PathBuf,
 
-        /// The calibration written by `watch_pianist.py --calibrate`.
+        /// The calibration written by `opennote corpus calibrate`.
         #[arg(long)]
         calibration: PathBuf,
 
@@ -670,8 +670,8 @@ pub fn corpus(args: CorpusArgs) -> Result<()> {
                      {:.0}% this needs, so nothing was added.\n\
                      The usual cause is a keyboard that is not the size the calibration \
                      assumed — every note then lands keys away from the finger that played it. \
-                     Pass --lowest and --highest to `watch_pianist.py calibrate`, or let \
-                     `tools/harvest.py` try the standard sizes. If the calibration is right \
+                     Calibrate again with the keyboard's lowest and highest keys, or try \
+                     the standard keyboard sizes. If the calibration is right \
                      and the hands really do leave the frame, lower --min-coverage.",
                     share * 100.0,
                     min_coverage * 100.0
@@ -701,8 +701,8 @@ pub fn corpus(args: CorpusArgs) -> Result<()> {
             if pieces.is_empty() {
                 println!(
                     "The corpus at {} is empty.\n\
-                     Add some expert fingerings with `opennote corpus add <path>` — \
-                     see docs/TRAINING.md for where to find them.",
+                     Add some expert fingerings with `opennote corpus add <path>`: \
+                     PIG `_fingering.txt` files, or MusicXML with fingerings written in.",
                     args.corpus.display()
                 );
                 return Ok(());
@@ -810,16 +810,18 @@ pub fn eval(args: EvalArgs) -> Result<()> {
         .model
         .clone()
         .unwrap_or_else(|| PathBuf::from(MODEL_PATH));
-    match NgramPrior::load(&model_path) {
-        Ok(prior) => {
+    let model = crate::ModelArgs { model: Some(model_path.clone()), ..args.weights.clone() };
+    match model.prior() {
+        Ok(Some(prior)) => {
             let mut with_model = args.weights.options()?;
             if with_model.prior_scale == 0.0 {
                 with_model.prior_scale = 1.0;
             }
-            let rates = on_train::evaluate(&measured, &with_model, Some(&prior));
+            let rates = on_train::evaluate(&measured, &with_model, Some(&*prior));
             println!("with model:  {rates}");
             println!("{}", verdict(rules_only, rates));
         }
+        Ok(None) => {}
         Err(error) => {
             println!(
                 "\nNo model to compare against at {} ({error}).\n\
@@ -1114,7 +1116,8 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         }
         TuneTarget::Taught => {
             println!(
-                "No --scores, so nothing is watching what these fingerings cost a hand.                  Pass the PDMX folder to gate on that too."
+                "No --scores, so nothing is watching what these fingerings cost a hand. \
+                 Pass the PDMX folder to gate on that too."
             );
             None
         }
