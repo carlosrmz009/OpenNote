@@ -62,6 +62,13 @@ enum Command {
     /// Teach the search to finger like the pianists in the corpus: the rules propose,
     /// what is learned decides between them.
     Rerank(learn::RerankArgs),
+    /// Print a shell completion script, e.g. `opennote completions bash > ~/.local/share/bash-completion/completions/opennote`.
+    Completions {
+        /// The shell to complete for.
+        shell: clap_complete::Shell,
+    },
+    /// Print the manual page, e.g. `opennote manual > opennote.1`.
+    Manual,
 }
 
 /// How big the pianist's hand is, and which rule set to score with.
@@ -322,6 +329,16 @@ fn main() -> Result<()> {
         Command::Benchmark(args) => learn::benchmark(args),
         Command::Models(args) => models::run(args),
         Command::Rerank(args) => learn::rerank(args),
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(shell, &mut Cli::command(), "opennote", &mut std::io::stdout());
+            Ok(())
+        }
+        Command::Manual => {
+            use clap::CommandFactory;
+            clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
+            Ok(())
+        }
     }
 }
 

@@ -5,7 +5,7 @@ edition.workspace = true
 # Bevy 0.19 and egui need 1.95; the engine crates keep the workspace minimum.
 rust-version = "1.95"
 license.workspace = true
-description = "The `opennote` command line application."
+description = "Works out piano fingerings, writes them onto the score, and plays them with 3D hands."
 
 [[bin]]
 name = "opennote"
@@ -21,6 +21,8 @@ on-engrave.workspace = true
 on-viz = { workspace = true, features = ["render"] }
 anyhow.workspace = true
 clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 tracing-subscriber.workspace = true
 
 [lints]
