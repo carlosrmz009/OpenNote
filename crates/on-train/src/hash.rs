@@ -1,10 +1,23 @@
 pub fn fnv(text: &str) -> u64 {
+    fnv_bytes(text.as_bytes())
+}
+
+/// 64-bit FNV-1a: fast and stable from release to release, which is all a split or a
+/// file check here needs. Not a cryptographic hash.
+pub fn fnv_bytes(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
+    for &byte in bytes {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     hash
+}
+
+/// One step of the linear congruential generator the resampling uses, returning its
+/// top 31 bits. Seeded by the caller, so a run is the same every time.
+pub fn lcg(state: &mut u64) -> u64 {
+    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *state >> 33
 }
 
 pub fn share(name: &str) -> f64 {

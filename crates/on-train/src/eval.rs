@@ -309,8 +309,7 @@ pub fn paired_by(
     for _ in 0..rounds.max(1) {
         let mut chosen = Vec::with_capacity(pairs.len());
         for _ in 0..units.len() {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            chosen.extend_from_slice(&units[(rng >> 33) as usize % units.len().max(1)]);
+            chosen.extend_from_slice(&units[crate::hash::lcg(&mut rng) as usize % units.len().max(1)]);
         }
         draws.push(gap(&chosen));
     }
@@ -325,10 +324,7 @@ pub fn confidence(pieces: &[PieceRates], rounds: usize) -> Confidence {
     let mut rng: u64 = 0x2545_f491_4f6c_dd1d;
     for _ in 0..rounds.max(1) {
         let drawn: Vec<PieceRates> = (0..pieces.len())
-            .map(|_| {
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                pieces[(rng >> 33) as usize % pieces.len().max(1)].clone()
-            })
+            .map(|_| pieces[crate::hash::lcg(&mut rng) as usize % pieces.len().max(1)].clone())
             .collect();
         draws.push(combine(&drawn));
     }

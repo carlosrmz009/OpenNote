@@ -249,8 +249,7 @@ pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn Fi
         let mut offset = 0.0;
         for n in &mut wobbled.notes {
             if (n.onset - last_onset).abs() > on_fingering::playability::CHORD_SECONDS {
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                offset = ((rng >> 33) as f64 / f64::from(u32::MAX) - 0.5) * 0.020;
+                offset = (crate::hash::lcg(&mut rng) as f64 / f64::from(u32::MAX) - 0.5) * 0.020;
                 last_onset = n.onset;
             }
             n.onset = (n.onset + offset).max(0.0);
@@ -270,16 +269,7 @@ pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn Fi
 
 pub fn hash_file(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(format!("{:016x}", fnv(&bytes)))
-}
-
-fn fnv(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
+    Ok(format!("{:016x}", crate::hash::fnv_bytes(&bytes)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,7 +305,7 @@ pub fn excerpts(
             pieces = pieces.iter().map(|p| p.trusted(floor)).collect();
         }
         let mut order: Vec<Vec<&Piece>> = by_piece(&pieces).into_values().collect();
-        order.sort_by_key(|a| fnv(a[0].piece.as_bytes()));
+        order.sort_by_key(|a| crate::hash::fnv_bytes(a[0].piece.as_bytes()));
         let (mut against_rules, mut against_people) = (0, 0);
         for annotations in order {
             if against_rules >= count && against_people >= count {
