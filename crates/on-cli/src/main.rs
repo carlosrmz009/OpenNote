@@ -24,8 +24,12 @@ struct Cli {
     command: Command,
 
     /// Print more about what is happening.
-    #[arg(long, short, global = true)]
+    #[arg(long, short, global = true, conflicts_with = "quiet")]
     verbose: bool,
+
+    /// Print only errors.
+    #[arg(long, short, global = true)]
+    quiet: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -261,7 +265,13 @@ impl From<RuleSetArg> for RuleSet {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let filter = if cli.verbose { "debug" } else { "warn" };
+    // Debug output from OpenNote's own crates; a dependency's debug output, Bevy's above all,
+    // drowns it. RUST_LOG still overrides this.
+    let filter = match (cli.verbose, cli.quiet) {
+        (true, _) => "warn,opennote=debug,on_score=debug,on_hand=debug,on_fingering=debug,on_train=debug,on_engrave=debug,on_audio=debug,on_viz=debug",
+        (_, true) => "error",
+        _ => "warn",
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
