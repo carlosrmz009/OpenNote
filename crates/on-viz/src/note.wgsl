@@ -32,9 +32,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let core = pow(tube, 2.5);
     let lead = exp(-from_bottom / 9.0);
 
-    let slant = in.world_position.y + p.x * 0.85;
+    let slant = p.y + p.x * 0.85;
     let facet = 0.5 + 0.5 * sin(slant * 0.105 + 0.6 * sin(slant * 0.031));
-    let glint = pow(0.5 + 0.5 * sin(in.world_position.y * 0.021 + p.x * 0.05), 18.0);
+    let glint = pow(0.5 + 0.5 * sin(p.y * 0.021 + p.x * 0.05), 18.0);
 
     let colour = tint.rgb;
     let glow = tint.w;
