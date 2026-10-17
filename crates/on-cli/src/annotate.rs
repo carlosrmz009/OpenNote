@@ -13,18 +13,23 @@ use crate::ModelArgs;
 /// Add fingerings to a score.
 #[derive(Debug, Args)]
 pub struct AnnotateArgs {
-    /// The score to read: `.musicxml`, `.mxl`, `.xml`, `.mid` or `.midi`.
-    pub input: PathBuf,
+    /// The scores to read: `.musicxml`, `.mxl`, `.xml`, `.mid` or `.midi`. Each is written
+    /// beside itself with `-fingered` added to its name.
+    #[arg(required = true, num_args = 1..)]
+    pub inputs: Vec<PathBuf>,
 
-    /// Where to write the annotated score. Defaults to the input name with
-    /// `-fingered` appended.
+    /// Where to write the annotated score, instead of beside it. Only with one score.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 
-    /// Also engrave the annotated score. The extension picks the format:
-    /// `.pdf`, `.svg` or `.png`.
+    /// Also engrave the annotated score. The extension picks the format: `.pdf`, `.svg` or
+    /// `.png`. Only with one score.
     #[arg(long)]
     pub engrave: Option<PathBuf>,
+
+    /// Write over an annotated score that is already there.
+    #[arg(long)]
+    pub force: bool,
 
     /// Lay the engraved music out as one continuous system rather than pages.
     #[arg(long)]
@@ -39,7 +44,31 @@ pub struct AnnotateArgs {
 }
 
 pub fn run(args: AnnotateArgs) -> Result<()> {
-    let crate::Fingered { document: input, solution, .. } = args.model.finger(&args.input)?;
+    if args.inputs.len() > 1 && (args.output.is_some() || args.engrave.is_some()) {
+        bail!("--output and --engrave name one file, so they go with one score at a time");
+    }
+    let mut failed = 0;
+    for input in &args.inputs {
+        let output = args.output.clone().unwrap_or_else(|| default_output(input));
+        if let Err(error) = annotate(input, &output, &args) {
+            if args.inputs.len() == 1 {
+                return Err(error);
+            }
+            eprintln!("{}: {error:#}", input.display());
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        bail!("{failed} of {} scores could not be annotated", args.inputs.len());
+    }
+    Ok(())
+}
+
+fn annotate(path: &Path, output: &Path, args: &AnnotateArgs) -> Result<()> {
+    if output.exists() && !args.force {
+        bail!("{} is already there; pass --force to write over it", output.display());
+    }
+    let crate::Fingered { document: input, solution, .. } = args.model.finger(path)?;
     let score = input.score();
     let notes = score.notes.len();
 
@@ -63,8 +92,6 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
         print_fingering(score, &solution);
     }
 
-    let output = args.output.unwrap_or_else(|| default_output(&args.input));
-
     if matches!(input, on_score::Document::Midi(_)) {
         let asked_for_notation = output
             .extension()
@@ -75,7 +102,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
                 "{} is a MIDI file, which carries no notation, so it cannot be written \
                  out as MusicXML. Give the output a `.mid` name, or convert the input \
                  to MusicXML first.",
-                args.input.display()
+                path.display()
             );
         }
         if args.engrave.is_some() {
@@ -88,19 +115,19 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
 
     match input {
         on_score::Document::MusicXml(mut document) => {
-            let written = on_engrave::annotate_and_save(&mut document, &solution.fingerings, &output)?;
+            let written = on_engrave::annotate_and_save(&mut document, &solution.fingerings, output)?;
             println!("  wrote {} ({written} fingerings)", output.display());
 
             if let Some(target) = &args.engrave {
                 let engrave_options = EngraveOptions { paginate: !args.continuous, ..Default::default() };
-                let files = engrave(&output, target, &engrave_options)?;
+                let files = engrave(output, target, &engrave_options)?;
                 for file in files {
                     println!("  engraved {}", file.display());
                 }
             }
         }
         on_score::Document::Midi(document) => {
-            document.write_annotated(&output, &solution.fingerings)?;
+            document.write_annotated(output, &solution.fingerings)?;
             println!("  wrote {}", output.display());
         }
     }

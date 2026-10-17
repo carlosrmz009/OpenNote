@@ -459,6 +459,10 @@ fn annotate_score(session: &mut Session) {
 /// rules for both, and for a video the same look and sound as well.
 fn command_line(subcommand: &str, settings: &SessionSettings) -> Vec<String> {
     let mut arguments = vec![subcommand.to_string()];
+    if subcommand == "annotate" {
+        // The save dialog has already asked before replacing a file.
+        arguments.push("--force".into());
+    }
     let fingering = &settings.fingering;
     let mut flag = |name: &str, value: String| arguments.extend([format!("--{name}"), value]);
     flag("hand-length", format!("{}", fingering.profile.hand_length));

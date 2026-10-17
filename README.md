@@ -68,8 +68,11 @@ whose licence is in that folder, works well.
 
 ```sh
 # Write the fingering into a copy of the score (samples/fur-elise-fingered.musicxml),
-# and engrave it.
+# and engrave it. Run again with --force to replace the copy.
 opennote annotate samples/fur-elise.musicxml --engrave fur-elise.pdf
+
+# Several scores at once, each written beside itself.
+opennote annotate scores/*.musicxml
 
 # Why each note got its finger; only the close calls.
 opennote explain samples/fur-elise.musicxml --close-calls
