@@ -28,6 +28,49 @@ Work is grouped into phases. Each phase is a series of small PRs on `claude/focu
 
 ---
 
+## Progress
+
+Done on `claude/focused-gates-bj62je`, each with tests where a test can show it:
+
+- **Phase 0.**
+  - Every test has its own temporary directory, which fixes the flaky test.
+  - `Cargo.lock` lists `mimalloc`, so `--locked` builds work.
+  - Minimum Rust versions are declared where they apply: 1.85 for the engine crates, 1.95 for the viewer and CLI, because of Bevy.
+  - The workspace is formatted with `rustfmt.toml`, and `.git-blame-ignore-revs` skips that commit.
+  - Clippy is clean, with `[workspace.lints]`.
+  - Ten unused dependencies are gone.
+  - CI runs formatting, clippy `-D warnings`, the engine tests on Linux, Windows and macOS, the minimum Rust version, and the whole workspace on Linux with its examples checked.
+- **Phase 1:** bugs 1–9, 11, 13–22 are fixed.
+  - #10 (lock poisoning) and #12 (the `paired` mismatch) have no realistic path, so nothing was built for them.
+  - Found along the way: "Save fingered score" in the viewer never worked. It passed `annotate` flags that `annotate` doesn't take.
+- **Phase 2:**
+  - `Note` has a `Default`, so 22 fifteen-field literals keep only the fields they set;
+  - the duplicate chord window and black-key test are gone;
+  - the Verovio spike is removed.
+- **Phase 4:**
+  - an A–B practice section, a speed control and a full-width seek bar in the transport bar;
+  - a keyboard-shortcuts window (F1 or ?);
+  - CLI numbers out of range are refused rather than clamped;
+  - `-q`, and a `-v` limited to OpenNote's own crates.
+- **Phase 5:**
+  - The ten note lights now reach the hands. They were set as if the scene were in metres, which gave about 0.2 lux beside 4,650 lux of key light.
+  - The pattern on the falling notes moves with the note.
+  - **Tonemapping was tried and set aside.** TonyMcMapface turns the neon notes pastel. Reinhard keeps them saturated, but greys the keys unless exposure is raised, and then the keyboard haloes. A tonemapper needs every glow constant retuned with an eye on the result.
+  - The lacquer's fixed eye in `key.wgsl` is deliberate. Under the orthographic camera, a true view vector would give every key the same reflection.
+- **Phase 6:**
+  - the README is rewritten;
+  - help text no longer names missing docs or private tools;
+  - the licence and provenance docs match what ships;
+  - `assets/soundfont/README.md` is written;
+  - the seal key is derived from the model, so builds are reproducible;
+  - `on-cli` no longer relinks on every build: `build.rs` watched a file that does not exist;
+  - a missing model and a malformed release key are now build warnings.
+
+**Building in a restricted container:**
+- Verovio's build script downloads its source. Set `VEROVIO_SOURCE_DIR` to a checkout of Verovio 5.7.0 when that download is blocked.
+- With Bevy, `CARGO_PROFILE_DEV_DEBUG=0` keeps each test binary from reaching 2.5 GB.
+- For viewer screenshots without a GPU, use `xvfb-run` with `VK_ICD_FILENAMES` pointing at lavapipe and `opennote play <score> --screenshot out.png --at <seconds>`.
+
 ## Phase 0: Safety net (CI, formatting, flaky test)
 
 1. **Fix the flaky test.** In `crates/on-score/tests/musicxml_marks.rs:28`, give each test its own path. Add `tempfile` as a dev-dependency and use `tempfile::NamedTempFile`. Apply the same fix to the other fixed temp paths:
