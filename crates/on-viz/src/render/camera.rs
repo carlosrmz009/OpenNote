@@ -19,7 +19,7 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
         camera_projection(layout),
         camera_placement(layout),
         bevy::post_process::bloom::Bloom {
-            intensity: 0.30,
+            intensity: BLOOM_INTENSITY,
             prefilter: bevy::post_process::bloom::BloomPrefilter { threshold: 1.0, threshold_softness: 0.35 },
             composite_mode: bevy::post_process::bloom::BloomCompositeMode::Additive,
             low_frequency_boost: BLOOM_HAZE,
@@ -33,6 +33,7 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
 
     commands.spawn((
         DirectionalLight { illuminance: 4_650.0, shadow_maps_enabled: true, ..default() },
+        KeyLight,
         Transform::from_xyz(cx + 380.0, cy - 300.0, 1_050.0).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Z),
         bevy::light::CascadeShadowConfigBuilder {
             num_cascades: 2,
@@ -127,5 +128,53 @@ pub(crate) fn fit_camera_viewport(
         if !unchanged {
             camera.viewport = Some(wanted.clone());
         }
+    }
+}
+
+/// The light that casts the hands' shadows.
+#[derive(Component)]
+pub(crate) struct KeyLight;
+
+/// How much the viewer draws. Effects are the sparks, flashes and bloom, which some find
+/// too busy; low quality drops the screen-space ambient occlusion, temporal anti-aliasing
+/// and shadows that a modest graphics card struggles with.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visuals {
+    pub effects: bool,
+    pub high_quality: bool,
+}
+
+impl Default for Visuals {
+    fn default() -> Self {
+        Self { effects: true, high_quality: true }
+    }
+}
+
+pub(crate) fn apply_visuals(
+    mut commands: Commands,
+    visuals: Res<Visuals>,
+    cameras: Query<(Entity, &mut bevy::post_process::bloom::Bloom), With<Camera3d>>,
+    mut lights: Query<&mut DirectionalLight, With<KeyLight>>,
+) {
+    if !visuals.is_changed() {
+        return;
+    }
+    for (camera, mut bloom) in cameras {
+        bloom.intensity = if visuals.effects { BLOOM_INTENSITY } else { 0.0 };
+        let mut camera = commands.entity(camera);
+        if visuals.high_quality {
+            camera.insert((
+                bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
+                bevy::anti_alias::taa::TemporalAntiAliasing::default(),
+                Msaa::Off,
+            ));
+        } else {
+            camera
+                .remove::<(bevy::pbr::ScreenSpaceAmbientOcclusion, bevy::anti_alias::taa::TemporalAntiAliasing)>()
+                .insert(Msaa::Sample4);
+        }
+    }
+    for mut light in &mut lights {
+        light.shadow_maps_enabled = visuals.high_quality;
     }
 }

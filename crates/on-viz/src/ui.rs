@@ -79,6 +79,7 @@ fn draw_menus(
     mut reload: ResMut<Reload>,
     performance: Res<Performance>,
     audio: Res<Audio>,
+    mut visuals: ResMut<crate::render::Visuals>,
     diagnostics: Res<DiagnosticsStore>,
     capture: Option<Res<Capture>>,
     mut exit: MessageWriter<AppExit>,
@@ -226,6 +227,13 @@ fn draw_menus(
                         session.settings.lookahead = f64::from(lookahead);
                         reload.relayout = true;
                     }
+                    ui.separator();
+                    // Edited as a copy: taking the resource mutably every frame would mark it
+                    // changed every frame, and the camera would be rebuilt every frame.
+                    let mut wanted = *visuals;
+                    ui.checkbox(&mut wanted.effects, "Sparks, flashes and glow");
+                    ui.checkbox(&mut wanted.high_quality, "Shadows and smooth edges (slower)");
+                    visuals.set_if_neq(wanted);
                     ui.separator();
                     ui.label("Hand colours");
                     for (colours, label) in [

@@ -134,8 +134,17 @@ pub(crate) fn raise_flashes(
     transport: Res<Transport>,
     performance: Res<Performance>,
     colours: Res<FlashColours>,
+    visuals: Res<Visuals>,
     flashes: Query<(&Flash, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
+    if !visuals.effects {
+        if visuals.is_changed() {
+            for (_, _, mut visibility, _) in flashes {
+                *visibility = Visibility::Hidden;
+            }
+        }
+        return;
+    }
     let states = performance.timeline.key_depression(transport.position);
     for (flash, mut transform, mut visibility, mut material) in flashes {
         let depth = states.depth_of(flash.midi);
@@ -220,8 +229,17 @@ pub(crate) fn update_sparks(
     transport: Res<Transport>,
     performance: Res<Performance>,
     colours: Res<SparkColours>,
+    visuals: Res<Visuals>,
     sparks: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), With<Spark>>,
 ) {
+    if !visuals.effects {
+        if visuals.is_changed() {
+            for (_, mut visibility, _) in sparks {
+                *visibility = Visibility::Hidden;
+            }
+        }
+        return;
+    }
     let layout = &performance.layout;
     let now = transport.position;
     let mut slots = sparks.into_iter();

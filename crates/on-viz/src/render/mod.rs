@@ -34,6 +34,8 @@ const BLOOM_HAZE: f32 = 0.22;
 
 const VIGNETTE: f32 = 0.40;
 
+const BLOOM_INTENSITY: f32 = 0.30;
+
 const VIEW_MARGIN: f32 = 1.06;
 
 const LANE_Z: f32 = BLACK_KEY_HEIGHT + 4.0;
@@ -285,6 +287,7 @@ impl Plugin for VisualizerPlugin {
         app.init_resource::<Transport>()
             .init_resource::<ViewportInset>()
             .init_resource::<NoteColours>()
+            .init_resource::<Visuals>()
             .add_plugins(crate::hands::HandsPlugin)
             .add_plugins(MaterialPlugin::<NoteMaterial>::default())
             .add_plugins(MaterialPlugin::<Lacquered>::default())
@@ -298,6 +301,7 @@ impl Plugin for VisualizerPlugin {
                     advance_transport,
                     handle_input,
                     recolour_sparks,
+                    apply_visuals,
                     (
                         fit_camera_viewport,
                         move_notes,
