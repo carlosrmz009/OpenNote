@@ -36,12 +36,7 @@ impl SampledPiano {
             .map_err(|error| anyhow::anyhow!("{error}"))
             .context("starting the soundfont player")?;
 
-        Ok(Self {
-            synthesizer,
-            left: Vec::new(),
-            right: Vec::new(),
-            name,
-        })
+        Ok(Self { synthesizer, left: Vec::new(), right: Vec::new(), name })
     }
 
     pub fn name(&self) -> &str {
@@ -49,8 +44,7 @@ impl SampledPiano {
     }
 
     pub fn strike(&mut self, midi: u8, velocity: u8) {
-        self.synthesizer
-            .note_on(CHANNEL, i32::from(midi), i32::from(velocity));
+        self.synthesizer.note_on(CHANNEL, i32::from(midi), i32::from(velocity));
     }
 
     pub fn release(&mut self, midi: u8) {
@@ -84,10 +78,7 @@ pub fn available(assets: &Path) -> Vec<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = match std::fs::read_dir(directory) {
         Ok(entries) => entries
             .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("sf2"))
-            })
+            .filter(|path| path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sf2")))
             .collect(),
         Err(_) => Vec::new(),
     };

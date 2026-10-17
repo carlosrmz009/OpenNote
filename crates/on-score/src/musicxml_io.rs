@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use on_hand::{Finger, Hand};
 use musicxml::datatypes::{AboveBelow, StartStop, Step};
 use musicxml::elements::{
-    Fingering as XmlFingering, FingeringAttributes, GraceType, MeasureElement,
-    NotationContentTypes, Notations, NotationsContents, NoteType, PartElement, ScorePartwise,
-    Technical, TechnicalContents,
+    Fingering as XmlFingering, FingeringAttributes, GraceType, MeasureElement, NotationContentTypes,
+    Notations, NotationsContents, NoteType, PartElement, ScorePartwise, Technical, TechnicalContents,
 };
+use on_hand::{Finger, Hand};
 
 use crate::{Fingering, Note, NoteId, Score, SourceRef, Ticks, TieState, TICKS_PER_QUARTER};
 
@@ -83,9 +82,7 @@ pub struct MusicXmlDocument {
 impl MusicXmlDocument {
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = path
-            .to_str()
-            .ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
+        let text = path.to_str().ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
         let document = musicxml::read_score_partwise(text)
             .map_err(|e| anyhow!("{e}"))
             .with_context(|| format!("reading {}", path.display()))?;
@@ -134,9 +131,7 @@ impl MusicXmlDocument {
 
     pub fn write(&self, path: impl AsRef<Path>, compressed: bool) -> Result<()> {
         let path = path.as_ref();
-        let text = path
-            .to_str()
-            .ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
+        let text = path.to_str().ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
         musicxml::write_partwise_score(text, &self.document, compressed, false)
             .map_err(|e| anyhow!("{e}"))
             .with_context(|| format!("writing {}", path.display()))
@@ -161,32 +156,24 @@ fn annotate_note(
         return Ok(false);
     };
 
-    let attributes =
-        FingeringAttributes { placement: Some(placement), ..Default::default() };
+    let attributes = FingeringAttributes { placement: Some(placement), ..Default::default() };
     let xml = XmlFingering { attributes, content: fingering.notation() };
 
     for notations in note.content.notations.iter_mut() {
         for entry in notations.content.notations.iter_mut() {
             if let NotationContentTypes::Technical(technical) = entry {
-                technical
-                    .content
-                    .retain(|t| !matches!(t, TechnicalContents::Fingering(_)));
+                technical.content.retain(|t| !matches!(t, TechnicalContents::Fingering(_)));
                 technical.content.push(TechnicalContents::Fingering(xml));
                 return Ok(true);
             }
         }
     }
 
-    let technical = Technical {
-        attributes: Default::default(),
-        content: vec![TechnicalContents::Fingering(xml)],
-    };
+    let technical =
+        Technical { attributes: Default::default(), content: vec![TechnicalContents::Fingering(xml)] };
 
     if let Some(notations) = note.content.notations.first_mut() {
-        notations
-            .content
-            .notations
-            .push(NotationContentTypes::Technical(technical));
+        notations.content.notations.push(NotationContentTypes::Technical(technical));
     } else {
         note.content.notations.push(Notations {
             attributes: Default::default(),
@@ -234,13 +221,7 @@ fn extract(document: &ScorePartwise) -> Result<Score> {
             .as_ref()
             .and_then(|w| w.content.work_title.as_ref())
             .map(|t| t.content.clone())
-            .or_else(|| {
-                document
-                    .content
-                    .movement_title
-                    .as_ref()
-                    .map(|t| t.content.clone())
-            }),
+            .or_else(|| document.content.movement_title.as_ref().map(|t| t.content.clone())),
         ..Default::default()
     };
 
@@ -255,11 +236,7 @@ fn extract(document: &ScorePartwise) -> Result<Score> {
     Ok(score)
 }
 
-fn read_part(
-    part_index: usize,
-    part: &musicxml::elements::Part,
-    score: &mut Score,
-) -> Result<()> {
+fn read_part(part_index: usize, part: &musicxml::elements::Part, score: &mut Score) -> Result<()> {
     let mut divisions: u32 = 1;
     let mut velocity = DEFAULT_VELOCITY;
     let mut pressed: Option<Ticks> = None;
@@ -342,9 +319,7 @@ fn read_part(
                         measure: measure_index,
                         element: element_index,
                     };
-                    if let Some(parsed) =
-                        read_note(note, divisions, cursor, last_onset, source, velocity)
-                    {
+                    if let Some(parsed) = read_note(note, divisions, cursor, last_onset, source, velocity) {
                         if parsed.advances {
                             last_onset = cursor;
                             cursor += parsed.consumed;
@@ -370,7 +345,9 @@ fn read_part(
                             match (parsed_note.grace, parsed_note.chord) {
                                 (true, true) if !graces.is_empty() => graces.last_mut().unwrap().push(index),
                                 (true, _) => graces.push(vec![index]),
-                                (false, false) => place_graces(&mut score.notes, &mut graces, parsed_note.onset),
+                                (false, false) => {
+                                    place_graces(&mut score.notes, &mut graces, parsed_note.onset)
+                                }
                                 (false, true) => {}
                             }
                             score.notes.push(parsed_note);
@@ -464,13 +441,9 @@ fn read_note(
     use musicxml::elements::AudibleType;
 
     let (audible, duration_divisions, ties, is_chord, grace) = match &note.content.info {
-        NoteType::Normal(info) => (
-            &info.audible,
-            *info.duration.content as i64,
-            info.tie.as_slice(),
-            info.chord.is_some(),
-            false,
-        ),
+        NoteType::Normal(info) => {
+            (&info.audible, *info.duration.content as i64, info.tie.as_slice(), info.chord.is_some(), false)
+        }
         NoteType::Grace(info) => {
             let (audible, ties, is_chord) = match &info.info {
                 GraceType::Normal(n) => (&n.audible, n.tie.as_slice(), n.chord.is_some()),
@@ -491,22 +464,11 @@ fn read_note(
 
     let pitch = match audible {
         AudibleType::Pitch(pitch) => pitch,
-        _ => {
-            return Some(ParsedNote {
-                note: None,
-                advances: !is_chord && !grace,
-                consumed,
-            })
-        }
+        _ => return Some(ParsedNote { note: None, advances: !is_chord && !grace, consumed }),
     };
 
     let octave = *pitch.content.octave.content as i32;
-    let alter = pitch
-        .content
-        .alter
-        .as_ref()
-        .map(|a| *a.content as i32)
-        .unwrap_or(0);
+    let alter = pitch.content.alter.as_ref().map(|a| *a.content as i32).unwrap_or(0);
     let midi = (octave + 1) * 12 + step_semitones(&pitch.content.step.content) + alter;
     let midi = u8::try_from(midi.clamp(0, 127)).ok()?;
 
@@ -528,11 +490,7 @@ fn read_note(
             onset_seconds: 0.0,
             duration_seconds: 0.0,
             staff: note.content.staff.as_ref().map(|s| *s.content as u8),
-            voice: note
-                .content
-                .voice
-                .as_ref()
-                .and_then(|v| v.content.trim().parse::<u16>().ok()),
+            voice: note.content.voice.as_ref().and_then(|v| v.content.trim().parse::<u16>().ok()),
             hand: None,
             tie,
             grace,

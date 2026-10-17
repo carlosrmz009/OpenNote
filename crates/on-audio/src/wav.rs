@@ -36,8 +36,7 @@ pub fn render_to_wav(
     normalise(&mut samples);
 
     let mut file = std::io::BufWriter::new(
-        std::fs::File::create(path)
-            .with_context(|| format!("creating {}", path.display()))?,
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     write_header(&mut file, sample_rate, samples.len())?;
     for sample in &samples {
@@ -93,16 +92,11 @@ mod tests {
 
     #[test]
     fn the_export_is_brought_up_to_just_under_full_scale() {
-        let mut quiet: Vec<f32> = (0..2048)
-            .map(|i| 0.02 * (i as f32 * 0.05).sin())
-            .collect();
+        let mut quiet: Vec<f32> = (0..2048).map(|i| 0.02 * (i as f32 * 0.05).sin()).collect();
         normalise(&mut quiet);
         let peak = quiet.iter().fold(0.0f32, |a, s| a.max(s.abs()));
         let target = 10.0f32.powf(-HEADROOM_DB / 20.0);
-        assert!(
-            (peak - target).abs() < 1e-3,
-            "peaked at {peak}, wanted {target}"
-        );
+        assert!((peak - target).abs() < 1e-3, "peaked at {peak}, wanted {target}");
         assert!(peak < 1.0, "no headroom left for the encoder");
     }
 
@@ -115,17 +109,13 @@ mod tests {
 
     #[test]
     fn normalising_does_not_change_the_shape_of_the_music() {
-        let original: Vec<f32> = (0..512)
-            .map(|i| 0.3 * (i as f32 * 0.1).sin() * (1.0 - i as f32 / 512.0))
-            .collect();
+        let original: Vec<f32> =
+            (0..512).map(|i| 0.3 * (i as f32 * 0.1).sin() * (1.0 - i as f32 / 512.0)).collect();
         let mut scaled = original.clone();
         normalise(&mut scaled);
         let gain = scaled[7] / original[7];
         for (before, after) in original.iter().zip(&scaled) {
-            assert!(
-                (after - before * gain).abs() < 1e-5,
-                "the waveform changed shape"
-            );
+            assert!((after - before * gain).abs() < 1e-5, "the waveform changed shape");
         }
     }
 

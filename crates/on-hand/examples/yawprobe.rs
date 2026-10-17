@@ -13,8 +13,7 @@ fn main() {
             let wrist = posture.wrist;
             let d = tip - wrist;
             let axis = d.x.atan2(d.y).to_degrees();
-            println!("   q[dev]={deg:>6.1}°  tip-wrist=({:>7.1},{:>7.1})  hand axis {axis:>7.2}°",
-                d.x, d.y);
+            println!("   q[dev]={deg:>6.1}°  tip-wrist=({:>7.1},{:>7.1})  hand axis {axis:>7.2}°", d.x, d.y);
         }
     }
 }

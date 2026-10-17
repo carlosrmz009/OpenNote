@@ -75,11 +75,8 @@ fn sounding_shapes(score: &Score, options: &FingeringOptions) -> Vec<Vec<(u8, u8
 
 fn fingering(score: &Score, options: &FingeringOptions) -> Vec<u8> {
     let solution = finger_score(score, options);
-    let mut pairs: Vec<_> = score
-        .notes
-        .iter()
-        .filter_map(|n| solution.finger_of(n.id).map(|f| (n.onset, f.number())))
-        .collect();
+    let mut pairs: Vec<_> =
+        score.notes.iter().filter_map(|n| solution.finger_of(n.id).map(|f| (n.onset, f.number()))).collect();
     pairs.sort_by_key(|(t, _)| *t);
     pairs.into_iter().map(|(_, f)| f).collect()
 }
@@ -101,16 +98,10 @@ fn two_octaves_of_c_major_are_fingered_as_every_method_book_prints_them() {
     let options = FingeringOptions::default();
 
     let right = melody(&major_scale(60, 2), Hand::Right, 0.25);
-    assert_eq!(
-        fingering(&right, &options),
-        vec![1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5]
-    );
+    assert_eq!(fingering(&right, &options), vec![1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5]);
 
     let left = melody(&major_scale(48, 2), Hand::Left, 0.25);
-    assert_eq!(
-        fingering(&left, &options),
-        vec![5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1]
-    );
+    assert_eq!(fingering(&left, &options), vec![5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1]);
 }
 
 #[test]
@@ -127,10 +118,7 @@ fn one_octave_of_c_major_is_fingered_the_same_way() {
 fn f_major_crosses_after_the_fourth_finger_in_the_right_hand() {
     let options = FingeringOptions::default();
     let score = melody(&major_scale(65, 2), Hand::Right, 0.25);
-    assert_eq!(
-        fingering(&score, &options),
-        vec![1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4]
-    );
+    assert_eq!(fingering(&score, &options), vec![1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4]);
 }
 
 #[test]
@@ -214,12 +202,8 @@ fn a_tenth_punishes_a_small_hand_and_not_a_large_one() {
     let small_solution = finger_score(&score, &small);
     let large_solution = finger_score(&score, &large);
 
-    let strain_of = |s: &on_fingering::Solution| {
-        s.explanations
-            .iter()
-            .map(|e| e.posture_strain)
-            .fold(0.0f32, f32::max)
-    };
+    let strain_of =
+        |s: &on_fingering::Solution| s.explanations.iter().map(|e| e.posture_strain).fold(0.0f32, f32::max);
     let small_strain = strain_of(&small_solution);
     let large_strain = strain_of(&large_solution);
     assert!(
@@ -231,11 +215,7 @@ fn a_tenth_punishes_a_small_hand_and_not_a_large_one() {
         "an extra large hand should manage a tenth comfortably"
     );
     assert_eq!(
-        large_solution
-            .fingerings
-            .iter()
-            .map(|f| f.finger)
-            .collect::<Vec<_>>(),
+        large_solution.fingerings.iter().map(|f| f.finger).collect::<Vec<_>>(),
         vec![Finger::Thumb, Finger::Little]
     );
 }
@@ -256,20 +236,12 @@ fn the_same_passage_costs_more_when_there_is_less_time_for_it() {
     let leaps = [60u8, 84, 60, 84, 60, 84];
     let slow = finger_score(&melody(&leaps, Hand::Right, 2.0), &options);
     let fast = finger_score(&melody(&leaps, Hand::Right, 0.05), &options);
-    assert!(
-        fast.cost > slow.cost,
-        "slow {} should cost less than fast {}",
-        slow.cost,
-        fast.cost
-    );
+    assert!(fast.cost > slow.cost, "slow {} should cost less than fast {}", slow.cost, fast.cost);
 }
 
 #[test]
 fn a_held_arpeggio_keeps_its_fingers_in_order() {
-    let score = overlapping(
-        &[(43, 0.0, 4.0), (50, 0.5, 3.5), (57, 1.0, 3.0), (58, 1.5, 2.5)],
-        Hand::Left,
-    );
+    let score = overlapping(&[(43, 0.0, 4.0), (50, 0.5, 3.5), (57, 1.0, 3.0), (58, 1.5, 2.5)], Hand::Left);
     for shape in sounding_shapes(&score, &FingeringOptions::default()) {
         let fingers: Vec<u8> = shape.iter().map(|(_, f)| *f).collect();
         assert!(
@@ -286,10 +258,7 @@ fn a_held_arpeggio_keeps_its_fingers_in_order() {
 #[test]
 fn fingers_do_not_cross_over_notes_the_hand_is_still_holding() {
     for hand in Hand::ALL {
-        let score = overlapping(
-            &[(48, 0.0, 4.0), (52, 1.0, 3.0), (55, 2.0, 2.0)],
-            hand,
-        );
+        let score = overlapping(&[(48, 0.0, 4.0), (52, 1.0, 3.0), (55, 2.0, 2.0)], hand);
         let options = FingeringOptions::default();
         for shape in sounding_shapes(&score, &options) {
             let fingers: Vec<u8> = shape.iter().map(|(_, f)| *f).collect();
@@ -305,10 +274,7 @@ fn fingers_do_not_cross_over_notes_the_hand_is_still_holding() {
 #[test]
 fn one_finger_never_holds_two_sounding_notes() {
     for hand in Hand::ALL {
-        let score = overlapping(
-            &[(60, 0.0, 4.0), (64, 1.0, 3.0), (67, 2.0, 2.0), (71, 3.0, 1.0)],
-            hand,
-        );
+        let score = overlapping(&[(60, 0.0, 4.0), (64, 1.0, 3.0), (67, 2.0, 2.0), (71, 3.0, 1.0)], hand);
         for shape in sounding_shapes(&score, &FingeringOptions::default()) {
             let mut fingers: Vec<u8> = shape.iter().map(|(_, f)| *f).collect();
             let before = fingers.len();
@@ -378,11 +344,8 @@ fn d_flat_major_puts_the_thumb_on_its_two_white_notes() {
 #[test]
 fn no_finger_plays_two_different_notes_in_a_row() {
     let chromatic: Vec<u8> = (60..=84).collect();
-    let cases: [(&str, Vec<u8>); 3] = [
-        ("chromatic", chromatic),
-        ("c major", major_scale(60, 2)),
-        ("d flat major", major_scale(61, 2)),
-    ];
+    let cases: [(&str, Vec<u8>); 3] =
+        [("chromatic", chromatic), ("c major", major_scale(60, 2)), ("d flat major", major_scale(61, 2))];
     for (name, pitches) in cases {
         for hand in Hand::ALL {
             let score = melody(&pitches, hand, 0.25);
@@ -419,9 +382,8 @@ fn a_minor_scale_is_not_fingered_as_its_relative_major() {
 fn two_octaves_of_e_harmonic_minor_are_fingered_like_e_major_both_ways() {
     const HARMONIC_MINOR: [u8; 7] = [0, 2, 3, 5, 7, 8, 11];
     let up_and_down = |tonic: u8| {
-        let mut up: Vec<u8> = (0..2)
-            .flat_map(|octave| HARMONIC_MINOR.map(|step| tonic + step + 12 * octave))
-            .collect();
+        let mut up: Vec<u8> =
+            (0..2).flat_map(|octave| HARMONIC_MINOR.map(|step| tonic + step + 12 * octave)).collect();
         up.push(tonic + 24);
         let mut both = up.clone();
         both.extend(up.iter().rev().skip(1));
@@ -435,26 +397,25 @@ fn two_octaves_of_e_harmonic_minor_are_fingered_like_e_major_both_ways() {
     let options = FingeringOptions::default();
 
     let right = melody(&up_and_down(64), Hand::Right, 0.25);
-    assert_eq!(
-        fingering(&right, &options),
-        both_ways([1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5])
-    );
+    assert_eq!(fingering(&right, &options), both_ways([1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 5]));
 
     let left = melody(&up_and_down(52), Hand::Left, 0.25);
-    assert_eq!(
-        fingering(&left, &options),
-        both_ways([5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1])
-    );
+    assert_eq!(fingering(&left, &options), both_ways([5, 4, 3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1]));
 }
 
 #[test]
 fn two_octave_arpeggios_are_fingered_as_the_method_books_print_them() {
     let options = FingeringOptions::default();
     let mut wrong = Vec::new();
-    for (name, root, third) in [("C", 0u8, 4u8), ("F", 5, 4), ("G", 7, 4), ("A minor", 9, 3), ("D minor", 2, 3), ("E minor", 4, 3)] {
-        for (hand, base, up) in [(Hand::Right, 60u8, [1u8, 2, 3, 1, 2, 3, 5]), (Hand::Left, 48, [5, 4, 2, 1, 4, 2, 1])] {
+    for (name, root, third) in
+        [("C", 0u8, 4u8), ("F", 5, 4), ("G", 7, 4), ("A minor", 9, 3), ("D minor", 2, 3), ("E minor", 4, 3)]
+    {
+        for (hand, base, up) in
+            [(Hand::Right, 60u8, [1u8, 2, 3, 1, 2, 3, 5]), (Hand::Left, 48, [5, 4, 2, 1, 4, 2, 1])]
+        {
             let tonic = base + root;
-            let mut pitches: Vec<u8> = (0..2).flat_map(|o| [0, third, 7].map(|s| tonic + 12 * o + s)).collect();
+            let mut pitches: Vec<u8> =
+                (0..2).flat_map(|o| [0, third, 7].map(|s| tonic + 12 * o + s)).collect();
             pitches.push(tonic + 24);
             let mut both = pitches.clone();
             both.extend(pitches.iter().rev().skip(1));

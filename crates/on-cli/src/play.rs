@@ -38,11 +38,7 @@ pub fn run(args: PlayArgs) -> Result<()> {
     match args.screenshot {
         Some(path) => on_viz::capture(
             performance,
-            on_viz::Capture {
-                at: args.at,
-                path,
-                warmup: args.warmup,
-            },
+            on_viz::Capture { at: args.at, path, warmup: args.warmup },
             settings,
             Some(args.input),
         ),

@@ -21,22 +21,14 @@ pub struct TempoMap {
 
 impl Default for TempoMap {
     fn default() -> Self {
-        Self {
-            changes: vec![TempoChange {
-                tick: 0,
-                micros_per_quarter: DEFAULT_MICROS_PER_QUARTER,
-            }],
-        }
+        Self { changes: vec![TempoChange { tick: 0, micros_per_quarter: DEFAULT_MICROS_PER_QUARTER }] }
     }
 }
 
 impl TempoMap {
     pub fn constant_bpm(bpm: f64) -> Self {
         Self {
-            changes: vec![TempoChange {
-                tick: 0,
-                micros_per_quarter: (60_000_000.0 / bpm.max(1.0)) as u32,
-            }],
+            changes: vec![TempoChange { tick: 0, micros_per_quarter: (60_000_000.0 / bpm.max(1.0)) as u32 }],
         }
     }
 
@@ -78,11 +70,7 @@ impl TempoMap {
             if change.tick >= tick {
                 break;
             }
-            let span_end = self
-                .changes
-                .get(i + 1)
-                .map(|c| c.tick.min(tick))
-                .unwrap_or(tick);
+            let span_end = self.changes.get(i + 1).map(|c| c.tick.min(tick)).unwrap_or(tick);
             let span = (span_end - change.tick) as f64;
             seconds += span / ppq * change.micros_per_quarter as f64 / 1e6;
         }

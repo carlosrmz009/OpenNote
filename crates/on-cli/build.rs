@@ -29,10 +29,13 @@ fn main() {
         .and_then(|k| k.trim().parse::<u64>().ok());
     println!("cargo:rerun-if-env-changed=OPENNOTE_RELEASE_KEY");
     println!("cargo:rerun-if-changed={}", manifest.join("../../models/release-key.txt").display());
-    std::fs::write(out.join("release_key.rs"), match release {
-        Some(k) => format!("Some({k}u64)"),
-        None => "None".to_string(),
-    })
+    std::fs::write(
+        out.join("release_key.rs"),
+        match release {
+            Some(k) => format!("Some({k}u64)"),
+            None => "None".to_string(),
+        },
+    )
     .unwrap();
     let name = model.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     println!("cargo:rustc-env=OPENNOTE_MODEL_NAME={}", if bytes.is_empty() { String::new() } else { name });

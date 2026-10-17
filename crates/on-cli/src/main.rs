@@ -125,10 +125,8 @@ impl ModelArgs {
     }
 
     pub fn hands(&self, options: &FingeringOptions) -> Result<on_score::hands::HandAssignment> {
-        let mut assignment = on_score::hands::HandAssignment {
-            profile: options.profile.clone(),
-            ..Default::default()
-        };
+        let mut assignment =
+            on_score::hands::HandAssignment { profile: options.profile.clone(), ..Default::default() };
         if let Some(weights) = self.weights()? {
             weights.apply_to_hands(&mut assignment);
         }
@@ -136,10 +134,7 @@ impl ModelArgs {
     }
 
     fn weights(&self) -> Result<Option<on_train::tune::Weights>> {
-        self.tuned
-            .as_deref()
-            .map(on_train::tune::Weights::load)
-            .transpose()
+        self.tuned.as_deref().map(on_train::tune::Weights::load).transpose()
     }
 
     pub fn prior(&self) -> Result<Option<std::sync::Arc<on_fingering::NgramPrior>>> {
@@ -250,8 +245,7 @@ fn main() -> Result<()> {
     let filter = if cli.verbose { "debug" } else { "warn" };
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| filter.into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
         )
         .with_target(false)
         .without_time()

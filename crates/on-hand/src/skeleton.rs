@@ -65,11 +65,7 @@ pub struct Limit {
 
 impl Limit {
     const fn new(min_deg: f32, max_deg: f32, neutral_deg: f32) -> Self {
-        Self {
-            min: min_deg * PI / 180.0,
-            max: max_deg * PI / 180.0,
-            neutral: neutral_deg * PI / 180.0,
-        }
+        Self { min: min_deg * PI / 180.0, max: max_deg * PI / 180.0, neutral: neutral_deg * PI / 180.0 }
     }
 
     pub fn range(&self) -> f32 {
@@ -188,9 +184,7 @@ impl Posture {
 
 fn keyboard_centre_x() -> f32 {
     let keyboard = crate::keyboard::Keyboard::new();
-    (keyboard.centre_x(crate::keyboard::MIDI_LOWEST)
-        + keyboard.centre_x(crate::keyboard::MIDI_HIGHEST))
-        / 2.0
+    (keyboard.centre_x(crate::keyboard::MIDI_LOWEST) + keyboard.centre_x(crate::keyboard::MIDI_HIGHEST)) / 2.0
 }
 
 #[derive(Debug, Clone)]
@@ -306,19 +300,13 @@ impl Skeleton {
             let p_ip = p_mcp + r_mcp * (Vec3::Y * d.proximal);
             let p_tip = p_ip + r_ip * (Vec3::Y * (d.distal + d.pulp));
 
-            chain[Finger::Thumb.index()] = [
-                to_world(p_cmc),
-                to_world(p_mcp),
-                to_world(p_ip),
-                to_world(p_tip),
-            ];
+            chain[Finger::Thumb.index()] =
+                [to_world(p_cmc), to_world(p_mcp), to_world(p_ip), to_world(p_tip)];
 
             let w = |r: Quat, v: Vec3| wrist_rot * (r * v);
             axes[dof::THUMB_CMC_ABD] = (w(frame, -Vec3::Z), to_world(p_cmc));
-            axes[dof::THUMB_CMC_FLEX] = (
-                w(frame * Quat::from_rotation_z(-pose.q[dof::THUMB_CMC_ABD]), Vec3::X * s),
-                to_world(p_cmc),
-            );
+            axes[dof::THUMB_CMC_FLEX] =
+                (w(frame * Quat::from_rotation_z(-pose.q[dof::THUMB_CMC_ABD]), Vec3::X * s), to_world(p_cmc));
             axes[dof::THUMB_MCP_FLEX] = (w(r_cmc, Vec3::X * s), to_world(p_mcp));
             axes[dof::THUMB_IP_FLEX] = (w(r_mcp, Vec3::X * s), to_world(p_ip));
         }
@@ -345,12 +333,7 @@ impl Skeleton {
             let p_dip = p_pip + r_pip * (Vec3::Y * d.medial);
             let p_tip = p_dip + r_dip * (Vec3::Y * (d.distal + d.pulp));
 
-            chain[finger.index()] = [
-                to_world(p_mcp),
-                to_world(p_pip),
-                to_world(p_dip),
-                to_world(p_tip),
-            ];
+            chain[finger.index()] = [to_world(p_mcp), to_world(p_pip), to_world(p_dip), to_world(p_tip)];
 
             let w = |r: Quat, v: Vec3| wrist_rot * (r * v);
             axes[b + dof::MCP_SPREAD] = (w(Quat::IDENTITY, -Vec3::Z), to_world(p_mcp));

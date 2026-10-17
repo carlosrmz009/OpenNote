@@ -233,8 +233,7 @@ fn rig_loaded_hands(
     mut rigs: Query<&mut HandRig>,
 ) {
     for (root, needs) in &pending {
-        let Some(survey) = survey_scene(root, needs.hand, &children, &names, &parents, &globals)
-        else {
+        let Some(survey) = survey_scene(root, needs.hand, &children, &names, &parents, &globals) else {
             continue;
         };
         let Some(wrist) = survey.roles.get(&BoneRole::Wrist).copied() else {
@@ -247,12 +246,8 @@ fn rig_loaded_hands(
             continue;
         };
         let inverse = root_global.affine().inverse();
-        let local = |entity: Entity| {
-            survey
-                .nodes
-                .get(&entity)
-                .map(|node| inverse.transform_point3(node.world))
-        };
+        let local =
+            |entity: Entity| survey.nodes.get(&entity).map(|node| inverse.transform_point3(node.world));
 
         let Some(fit) = measure_fit(needs.hand, &survey, &local, &performance) else {
             commands.entity(root).remove::<NeedsRigging>();
@@ -294,11 +289,8 @@ fn survey_scene(
     parents: &Query<&ChildOf>,
     globals: &Query<&GlobalTransform>,
 ) -> Option<Survey> {
-    let mut survey = Survey {
-        nodes: HashMap::new(),
-        roles: HashMap::new(),
-        arms: std::collections::HashSet::new(),
-    };
+    let mut survey =
+        Survey { nodes: HashMap::new(), roles: HashMap::new(), arms: std::collections::HashSet::new() };
     let mut stack = vec![root];
     while let Some(entity) = stack.pop() {
         if let Ok(kids) = children.get(entity) {
@@ -357,10 +349,7 @@ fn build_digits(survey: &Survey, wrist: Entity) -> Vec<Digit> {
         }
 
         let mut bones = Vec::with_capacity(4);
-        for entity in metacarpal
-            .into_iter()
-            .chain([proximal, intermediate, distal])
-        {
+        for entity in metacarpal.into_iter().chain([proximal, intermediate, distal]) {
             let Some(node) = survey.nodes.get(&entity) else {
                 continue;
             };
@@ -438,13 +427,7 @@ fn measure_fit(
         walker = node.parent;
     }
 
-    Some(RigFit {
-        correction,
-        wrist_offset,
-        wrist_rotation,
-        scale,
-        palm: measured,
-    })
+    Some(RigFit { correction, wrist_offset, wrist_rotation, scale, palm: measured })
 }
 
 fn prepare_hand_meshes(
@@ -477,15 +460,12 @@ fn prepare_hand_meshes(
                 .map(|colours| mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours))
                 .is_some()
         });
-        commands
-            .entity(entity)
-            .remove::<MeshMaterial3d<StandardMaterial>>()
-            .insert((
-                HandMesh,
-                NoFrustumCulling,
-                bevy::light::NotShadowReceiver,
-                MeshMaterial3d(materials.add(bare_hand(tinted))),
-            ));
+        commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>().insert((
+            HandMesh,
+            NoFrustumCulling,
+            bevy::light::NotShadowReceiver,
+            MeshMaterial3d(materials.add(bare_hand(tinted))),
+        ));
     }
 }
 
@@ -512,15 +492,13 @@ fn bare_hand(tinted: bool) -> Skin {
 }
 
 fn complexion(mesh: &Mesh, bones: &[(String, Vec3)]) -> Option<Vec<[f32; 4]>> {
-    let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-    else {
+    let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
         return None;
     };
     let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
         return None;
     };
-    let Some(VertexAttributeValues::Float32x4(weights)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
-    else {
+    let Some(VertexAttributeValues::Float32x4(weights)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT) else {
         return None;
     };
     let joints: Vec<[u16; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)? {
@@ -645,9 +623,7 @@ fn hand_frame(
         joints
             .iter()
             .find(|joint| {
-                names
-                    .get(**joint)
-                    .is_ok_and(|name| name.as_str().to_ascii_lowercase().contains(wanted))
+                names.get(**joint).is_ok_and(|name| name.as_str().to_ascii_lowercase().contains(wanted))
             })
             .and_then(|joint| places.get(*joint).ok())
             .map(|place| place.translation())
@@ -724,15 +700,7 @@ pub fn pose_hands(
         let wrist_rotation = root_rotation * rig.wrist_rotation;
 
         for digit in &rig.digits {
-            pose_digit(
-                digit,
-                &posture,
-                offset,
-                wrist_world,
-                wrist_rotation,
-                rig.scale,
-                &mut transforms,
-            );
+            pose_digit(digit, &posture, offset, wrist_world, wrist_rotation, rig.scale, &mut transforms);
         }
     }
 }
@@ -809,7 +777,10 @@ mod tests {
         let turn = Quat::from_rotation_z(0.4) * Quat::from_rotation_x(-0.2);
         let (top, wrist) = arm.turned(turn, wrist_in_model);
         let forearm = top_parent * top;
-        assert!(forearm.angle_between(turn * top_parent * top_rest) < 2e-3, "the forearm turns by exactly the turn");
+        assert!(
+            forearm.angle_between(turn * top_parent * top_rest) < 2e-3,
+            "the forearm turns by exactly the turn"
+        );
         let hand = top_parent * top * between * wrist;
         assert!(hand.angle_between(wrist_in_model) < 2e-3, "the hand keeps the orientation it was given");
     }

@@ -38,15 +38,8 @@ impl TieState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceRef {
-    MusicXml {
-        part: usize,
-        measure: usize,
-        element: usize,
-    },
-    Midi {
-        track: usize,
-        event: usize,
-    },
+    MusicXml { part: usize, measure: usize, element: usize },
+    Midi { track: usize, event: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,12 +173,8 @@ impl Score {
 
     pub fn finalise(&mut self) {
         self.drop_unplayable();
-        self.notes.sort_by(|a, b| {
-            a.onset
-                .cmp(&b.onset)
-                .then(a.midi.cmp(&b.midi))
-                .then(a.staff.cmp(&b.staff))
-        });
+        self.notes
+            .sort_by(|a, b| a.onset.cmp(&b.onset).then(a.midi.cmp(&b.midi)).then(a.staff.cmp(&b.staff)));
         for (i, note) in self.notes.iter_mut().enumerate() {
             note.id = NoteId(i as u32);
         }
@@ -200,8 +189,7 @@ impl Score {
     pub fn recompute_seconds(&mut self) {
         for note in &mut self.notes {
             note.onset_seconds = self.tempo.seconds_at(note.onset);
-            note.duration_seconds =
-                self.tempo.seconds_at(note.offset()) - note.onset_seconds;
+            note.duration_seconds = self.tempo.seconds_at(note.offset()) - note.onset_seconds;
         }
     }
 
@@ -267,15 +255,9 @@ impl Document {
     pub const EXTENSIONS: [&'static str; 5] = ["musicxml", "mxl", "xml", "mid", "midi"];
 
     pub fn open(path: &std::path::Path) -> anyhow::Result<Self> {
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
-            "musicxml" | "xml" | "mxl" => {
-                Ok(Document::MusicXml(Box::new(MusicXmlDocument::read(path)?)))
-            }
+            "musicxml" | "xml" | "mxl" => Ok(Document::MusicXml(Box::new(MusicXmlDocument::read(path)?))),
             "mid" | "midi" => Ok(Document::Midi(Box::new(MidiDocument::read(path)?))),
             other => anyhow::bail!(
                 "do not know how to read {other:?} files; \
@@ -319,10 +301,7 @@ mod tests {
 
         let written = score.note(NoteId(0)).offset_seconds();
         let sounding = score.release_seconds(NoteId(0));
-        assert!(
-            sounding > written + 1e-6,
-            "the tie should carry the note past {written}, got {sounding}"
-        );
+        assert!(sounding > written + 1e-6, "the tie should carry the note past {written}, got {sounding}");
         assert!((sounding - score.note(NoteId(2)).offset_seconds()).abs() < 1e-6);
     }
 
@@ -331,10 +310,7 @@ mod tests {
         let mut score = Score::default();
         score.notes.push(note(0, 60, 0, Hand::Right));
         score.finalise();
-        assert_eq!(
-            score.release_seconds(NoteId(0)),
-            score.note(NoteId(0)).offset_seconds()
-        );
+        assert_eq!(score.release_seconds(NoteId(0)), score.note(NoteId(0)).offset_seconds());
     }
 
     fn note(id: u32, midi: u8, onset: Ticks, hand: Hand) -> Note {
@@ -368,10 +344,7 @@ mod tests {
             ..Default::default()
         };
         s.finalise();
-        assert_eq!(
-            s.notes.iter().map(|n| n.midi).collect::<Vec<_>>(),
-            vec![60, 64, 67]
-        );
+        assert_eq!(s.notes.iter().map(|n| n.midi).collect::<Vec<_>>(), vec![60, 64, 67]);
         for (i, n) in s.notes.iter().enumerate() {
             assert_eq!(n.id, NoteId(i as u32));
         }
@@ -401,11 +374,7 @@ mod tests {
     fn fingering_notation_covers_substitutions() {
         let plain = Fingering::new(NoteId(0), Finger::Middle);
         assert_eq!(plain.notation(), "3");
-        let sub = Fingering {
-            note: NoteId(0),
-            finger: Finger::Middle,
-            substitute: Some(Finger::Index),
-        };
+        let sub = Fingering { note: NoteId(0), finger: Finger::Middle, substitute: Some(Finger::Index) };
         assert_eq!(sub.notation(), "3-2");
     }
 }

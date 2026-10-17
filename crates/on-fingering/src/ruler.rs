@@ -15,9 +15,7 @@ impl Ruler {
     pub fn distance(self, from: u8, to: u8) -> f32 {
         match self {
             Ruler::Chromatic => to as f32 - from as f32,
-            Ruler::Physical => {
-                keyboard().interval_mm(from, to) / SEMITONE_MM
-            }
+            Ruler::Physical => keyboard().interval_mm(from, to) / SEMITONE_MM,
         }
     }
 }

@@ -1,6 +1,4 @@
-use on_hand::keyboard::{
-    Keyboard, BLACK_KEY_LENGTH, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH,
-};
+use on_hand::keyboard::{Keyboard, BLACK_KEY_LENGTH, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Extent {
@@ -97,10 +95,7 @@ impl Layout {
 
     pub fn centre_mm(&self) -> (f32, f32) {
         let bottom = -WHITE_KEY_LENGTH - BOTTOM_MARGIN_MM;
-        (
-            (self.left_mm() + self.right_mm()) / 2.0,
-            (self.lane_height + bottom) / 2.0,
-        )
+        ((self.left_mm() + self.right_mm()) / 2.0, (self.lane_height + bottom) / 2.0)
     }
 
     pub fn shows(&self, midi: u8) -> bool {
@@ -162,11 +157,7 @@ mod tests {
         let layout = Layout::for_pitches([60u8, 62, 64, 65, 67], Extent::MusicRange);
         assert!(layout.lowest < 60 && layout.highest > 67);
         assert!(layout.shows(60) && layout.shows(67));
-        assert!(
-            layout.width_mm() < Layout::default().width_mm() * 0.75,
-            "{}",
-            layout.width_mm()
-        );
+        assert!(layout.width_mm() < Layout::default().width_mm() * 0.75, "{}", layout.width_mm());
     }
 
     #[test]
@@ -255,11 +246,7 @@ mod tests {
             Layout::for_pitches([21u8, 108], Extent::MusicRange),
             Layout::for_pitches([60u8], Extent::FullKeyboard),
         ] {
-            assert!(
-                layout.lane_height > WHITE_KEY_LENGTH,
-                "the lane is only {} mm",
-                layout.lane_height
-            );
+            assert!(layout.lane_height > WHITE_KEY_LENGTH, "the lane is only {} mm", layout.lane_height);
         }
     }
 
@@ -267,21 +254,13 @@ mod tests {
     fn a_full_keyboard_fills_a_widescreen_frame() {
         let layout = Layout::default();
         let aspect = layout.width_mm() / layout.height_mm();
-        assert!(
-            (aspect - 16.0 / 9.0).abs() < 0.08,
-            "a full keyboard frames at {aspect}"
-        );
+        assert!((aspect - 16.0 / 9.0).abs() < 0.08, "a full keyboard frames at {aspect}");
     }
 
     #[test]
     fn a_tiny_piece_still_gets_a_reasonable_range() {
         let layout = Layout::for_pitches([60u8, 62], Extent::MusicRange);
-        assert!(
-            layout.highest - layout.lowest >= MIN_VISIBLE_SPAN,
-            "{}..{}",
-            layout.lowest,
-            layout.highest
-        );
+        assert!(layout.highest - layout.lowest >= MIN_VISIBLE_SPAN, "{}..{}", layout.lowest, layout.highest);
     }
 
     #[test]

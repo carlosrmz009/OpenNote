@@ -63,59 +63,35 @@ mod tests {
     use super::*;
 
     fn fingers(numbers: &[u8]) -> Vec<Finger> {
-        numbers
-            .iter()
-            .map(|n| Finger::from_number(*n).unwrap())
-            .collect()
+        numbers.iter().map(|n| Finger::from_number(*n).unwrap()).collect()
     }
 
     #[test]
     fn a_root_position_triad_is_one_three_five() {
         let notes = [60u8, 64, 67];
-        assert_eq!(
-            chord_bonus(Hand::Right, &notes, &fingers(&[1, 3, 5])),
-            CANONICAL_BONUS
-        );
-        assert_eq!(
-            chord_bonus(Hand::Right, &notes, &fingers(&[1, 2, 4])),
-            SECONDARY_BONUS
-        );
+        assert_eq!(chord_bonus(Hand::Right, &notes, &fingers(&[1, 3, 5])), CANONICAL_BONUS);
+        assert_eq!(chord_bonus(Hand::Right, &notes, &fingers(&[1, 2, 4])), SECONDARY_BONUS);
         assert_eq!(chord_bonus(Hand::Right, &notes, &fingers(&[2, 3, 4])), 0.0);
     }
 
     #[test]
     fn the_left_hand_plays_the_mirror_of_the_same_shape() {
         let notes = [48u8, 52, 55];
-        assert_eq!(
-            chord_bonus(Hand::Left, &notes, &fingers(&[5, 3, 1])),
-            CANONICAL_BONUS
-        );
+        assert_eq!(chord_bonus(Hand::Left, &notes, &fingers(&[5, 3, 1])), CANONICAL_BONUS);
         assert_eq!(chord_bonus(Hand::Left, &notes, &fingers(&[1, 3, 5])), 0.0);
     }
 
     #[test]
     fn a_seventh_chord_is_one_two_three_five() {
         let notes = [60u8, 64, 67, 70];
-        assert_eq!(
-            chord_bonus(Hand::Right, &notes, &fingers(&[1, 2, 3, 5])),
-            CANONICAL_BONUS
-        );
-        assert_eq!(
-            chord_bonus(Hand::Left, &notes, &fingers(&[5, 3, 2, 1])),
-            CANONICAL_BONUS
-        );
+        assert_eq!(chord_bonus(Hand::Right, &notes, &fingers(&[1, 2, 3, 5])), CANONICAL_BONUS);
+        assert_eq!(chord_bonus(Hand::Left, &notes, &fingers(&[5, 3, 2, 1])), CANONICAL_BONUS);
     }
 
     #[test]
     fn an_octave_is_thumb_and_little_finger() {
-        assert_eq!(
-            chord_bonus(Hand::Right, &[60, 72], &fingers(&[1, 5])),
-            CANONICAL_BONUS
-        );
-        assert_eq!(
-            chord_bonus(Hand::Right, &[60, 72], &fingers(&[1, 4])),
-            SECONDARY_BONUS
-        );
+        assert_eq!(chord_bonus(Hand::Right, &[60, 72], &fingers(&[1, 5])), CANONICAL_BONUS);
+        assert_eq!(chord_bonus(Hand::Right, &[60, 72], &fingers(&[1, 4])), SECONDARY_BONUS);
     }
 
     #[test]

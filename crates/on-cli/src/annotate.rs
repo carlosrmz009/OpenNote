@@ -41,8 +41,8 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
     }
     let options = args.model.options()?;
 
-    let mut input = on_score::Document::open(&args.input)
-        .with_context(|| format!("reading {}", args.input.display()))?;
+    let mut input =
+        on_score::Document::open(&args.input).with_context(|| format!("reading {}", args.input.display()))?;
 
     let assignment = args.model.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
@@ -82,9 +82,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
         let asked_for_notation = output
             .extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| {
-                matches!(e.to_ascii_lowercase().as_str(), "musicxml" | "mxl" | "xml")
-            });
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "musicxml" | "mxl" | "xml"));
         if asked_for_notation {
             bail!(
                 "{} is a MIDI file, which carries no notation, so it cannot be written \
@@ -107,8 +105,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
             println!("  wrote {} ({written} fingerings)", output.display());
 
             if let Some(target) = &args.engrave {
-                let engrave_options =
-                    EngraveOptions { paginate: !args.continuous, ..Default::default() };
+                let engrave_options = EngraveOptions { paginate: !args.continuous, ..Default::default() };
                 let files = engrave(&output, target, &engrave_options)?;
                 for file in files {
                     println!("  engraved {}", file.display());
@@ -126,10 +123,7 @@ pub fn run(args: AnnotateArgs) -> Result<()> {
 
 fn default_output(input: &Path) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("score");
-    let extension = input
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("musicxml");
+    let extension = input.extension().and_then(|s| s.to_str()).unwrap_or("musicxml");
     input.with_file_name(format!("{stem}-fingered.{extension}"))
 }
 
@@ -146,11 +140,7 @@ fn print_fingering(score: &on_score::Score, solution: &on_fingering::Solution) {
     }
 }
 
-fn fingering_line(
-    score: &on_score::Score,
-    solution: &on_fingering::Solution,
-    hand: Hand,
-) -> Option<String> {
+fn fingering_line(score: &on_score::Score, solution: &on_fingering::Solution, hand: Hand) -> Option<String> {
     let mut line = String::new();
     let mut last_onset = None;
     let mut already_struck: Vec<u8> = Vec::new();
@@ -224,10 +214,7 @@ mod tests {
             path: Vec::new(),
         };
 
-        assert_eq!(
-            fingering_line(&score, &solution, Hand::Right).as_deref(),
-            Some("1/3/5")
-        );
+        assert_eq!(fingering_line(&score, &solution, Hand::Right).as_deref(), Some("1/3/5"));
     }
 
     #[test]

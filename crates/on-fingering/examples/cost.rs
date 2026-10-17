@@ -61,13 +61,7 @@ fn piece(seed: usize, bars: usize) -> Score {
         }
         for i in 0..8u8 {
             let shape = [0, 4, 7, 11, 12, 9, 5, 2][(i as usize + seed) % 8];
-            push(
-                &mut score,
-                60 + key + shape + (bar % 3) as u8 * 2,
-                at + i as i64 * step,
-                step,
-                Hand::Right,
-            );
+            push(&mut score, 60 + key + shape + (bar % 3) as u8 * 2, at + i as i64 * step, step, Hand::Right);
         }
     }
     score.finalise();
@@ -84,11 +78,17 @@ fn main() {
             std::hint::black_box(finger_score(&score, &options));
         }
         let each = started.elapsed().as_secs_f64() / runs as f64;
-        println!("{count:4} notes: {:8.2} ms  ({:6.3} ms a note)", each * 1000.0, each * 1000.0 / count as f64);
+        println!(
+            "{count:4} notes: {:8.2} ms  ({:6.3} ms a note)",
+            each * 1000.0,
+            each * 1000.0 / count as f64
+        );
     }
 
-    println!("
-thirty different scores in a row, as a tuner generation does:");
+    println!(
+        "
+thirty different scores in a row, as a tuner generation does:"
+    );
     let scores: Vec<Score> = (0..30).map(|seed| piece(seed, 16)).collect();
     let mut total = 0.0;
     for (i, score) in scores.iter().enumerate() {

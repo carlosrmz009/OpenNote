@@ -12,12 +12,7 @@ pub enum PageFormat {
 
 impl PageFormat {
     pub fn from_path(path: &Path) -> Option<Self> {
-        match path
-            .extension()
-            .and_then(|e| e.to_str())?
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        match path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase().as_str() {
             "pdf" => Some(PageFormat::Pdf),
             "svg" => Some(PageFormat::Svg),
             "png" => Some(PageFormat::Png),
@@ -44,12 +39,7 @@ pub struct EngraveOptions {
 
 impl Default for EngraveOptions {
     fn default() -> Self {
-        Self {
-            page_width: 2100,
-            page_height: 2970,
-            scale: 40,
-            paginate: true,
-        }
+        Self { page_width: 2100, page_height: 2970, scale: 40, paginate: true }
     }
 }
 
@@ -59,19 +49,13 @@ pub fn annotate_and_save(
     output: &Path,
 ) -> Result<usize> {
     let written = document.annotate(fingerings)?;
-    let compressed = output
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("mxl"));
+    let compressed =
+        output.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mxl"));
     document.write(output, compressed)?;
     Ok(written)
 }
 
-pub fn engrave(
-    musicxml: &Path,
-    output: &Path,
-    options: &EngraveOptions,
-) -> Result<Vec<PathBuf>> {
+pub fn engrave(musicxml: &Path, output: &Path, options: &EngraveOptions) -> Result<Vec<PathBuf>> {
     let format = PageFormat::from_path(output).ok_or_else(|| {
         anyhow!(
             "cannot tell what to engrave from the extension of {}; use .pdf, .svg or .png",
@@ -92,8 +76,7 @@ pub fn engrave(
         PageFormat::Svg => {
             let paths = page_paths(output, pages.len(), format);
             for (svg, path) in pages.iter().zip(&paths) {
-                std::fs::write(path, svg)
-                    .with_context(|| format!("writing {}", path.display()))?;
+                std::fs::write(path, svg).with_context(|| format!("writing {}", path.display()))?;
             }
             Ok(paths)
         }
@@ -105,8 +88,7 @@ pub fn engrave(
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 
 pub fn render_pages(musicxml: &Path, options: &EngraveOptions) -> Result<Vec<String>> {
-    let mut toolkit = verovioxide::Toolkit::new()
-        .map_err(|e| anyhow!("starting Verovio: {e}"))?;
+    let mut toolkit = verovioxide::Toolkit::new().map_err(|e| anyhow!("starting Verovio: {e}"))?;
 
     let settings = format!(
         r#"{{"pageWidth":{},"pageHeight":{},"scale":{},"breaks":"{}","adjustPageHeight":{},"footer":"none","header":"none"}}"#,
@@ -118,33 +100,27 @@ pub fn render_pages(musicxml: &Path, options: &EngraveOptions) -> Result<Vec<Str
     );
     let parsed: verovioxide::Options = serde_json::from_str(&settings)
         .with_context(|| format!("building Verovio options from {settings}"))?;
-    toolkit
-        .set_options(&parsed)
-        .map_err(|e| anyhow!("configuring Verovio: {e}"))?;
+    toolkit.set_options(&parsed).map_err(|e| anyhow!("configuring Verovio: {e}"))?;
 
     let data = std::fs::read(musicxml).with_context(|| format!("reading {}", musicxml.display()))?;
     let loaded = if data.starts_with(ZIP_MAGIC) {
         toolkit.load_zip_data_buffer(&data)
     } else {
-        let text = String::from_utf8(data)
-            .with_context(|| format!("{} is neither MusicXML text nor a compressed .mxl", musicxml.display()))?;
+        let text = String::from_utf8(data).with_context(|| {
+            format!("{} is neither MusicXML text nor a compressed .mxl", musicxml.display())
+        })?;
         toolkit.load_data(&text)
     };
     loaded.map_err(|e| anyhow!("Verovio could not read {}: {e}", musicxml.display()))?;
 
-    toolkit
-        .render_all_pages()
-        .map_err(|e| anyhow!("engraving {}: {e}", musicxml.display()))
+    toolkit.render_all_pages().map_err(|e| anyhow!("engraving {}: {e}", musicxml.display()))
 }
 
 fn page_paths(output: &Path, count: usize, format: PageFormat) -> Vec<PathBuf> {
     if count <= 1 {
         return vec![output.to_path_buf()];
     }
-    let stem = output
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("score");
+    let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("score");
     let parent = output.parent().unwrap_or(Path::new("."));
     (1..=count)
         .map(|i| {
@@ -165,10 +141,8 @@ fn write_pdf(pages: &[String], output: &Path) -> Result<()> {
     let svg_name = Name(b"S1");
     let conversion = svg2pdf::ConversionOptions::default();
 
-    let mut options = svg2pdf::usvg::Options {
-        font_family: "Times New Roman".to_string(),
-        ..Default::default()
-    };
+    let mut options =
+        svg2pdf::usvg::Options { font_family: "Times New Roman".to_string(), ..Default::default() };
     options.fontdb_mut().load_system_fonts();
 
     let mut alloc = Ref::new(1);
@@ -189,9 +163,7 @@ fn write_pdf(pages: &[String], output: &Path) -> Result<()> {
 
         let mut map: HashMap<Ref, Ref> = HashMap::new();
         let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
-        let svg_id = *map
-            .get(&svg_id)
-            .ok_or_else(|| anyhow!("page {} lost its root object", index + 1))?;
+        let svg_id = *map.get(&svg_id).ok_or_else(|| anyhow!("page {} lost its root object", index + 1))?;
 
         let page_id = alloc.bump();
         let content_id = alloc.bump();
@@ -200,9 +172,7 @@ fn write_pdf(pages: &[String], output: &Path) -> Result<()> {
     }
 
     pdf.catalog(catalog_id).pages(page_tree_id);
-    pdf.pages(page_tree_id)
-        .kids(page_ids.iter().copied())
-        .count(page_ids.len() as i32);
+    pdf.pages(page_tree_id).kids(page_ids.iter().copied()).count(page_ids.len() as i32);
 
     for (chunk, svg_id, page_id, content_id, size) in deferred {
         let width = size.width() * 72.0 / 96.0;
@@ -218,32 +188,29 @@ fn write_pdf(pages: &[String], output: &Path) -> Result<()> {
         page.finish();
 
         let mut content = Content::new();
-        content
-            .transform([width, 0.0, 0.0, height, 0.0, 0.0])
-            .x_object(svg_name);
+        content.transform([width, 0.0, 0.0, height, 0.0, 0.0]).x_object(svg_name);
         pdf.stream(content_id, &content.finish());
         pdf.extend(&chunk);
     }
 
-    std::fs::write(output, pdf.finish())
-        .with_context(|| format!("writing {}", output.display()))?;
+    std::fs::write(output, pdf.finish()).with_context(|| format!("writing {}", output.display()))?;
     Ok(())
 }
 
 fn write_pngs(pages: &[String], output: &Path) -> Result<Vec<PathBuf>> {
-    let mut options = resvg::usvg::Options {
-        font_family: "Times New Roman".to_string(),
-        ..Default::default()
-    };
+    let mut options =
+        resvg::usvg::Options { font_family: "Times New Roman".to_string(), ..Default::default() };
     options.fontdb_mut().load_system_fonts();
 
     let paths = page_paths(output, pages.len(), PageFormat::Png);
     for (index, (svg, path)) in pages.iter().zip(&paths).enumerate() {
         let tree = resvg::usvg::Tree::from_str(svg, &options)
             .with_context(|| format!("parsing engraved page {}", index + 1))?;
-        let size = tree.size().to_int_size().scale_by(PNG_SCALE).ok_or_else(|| {
-            anyhow!("page {} has no usable size", index + 1)
-        })?;
+        let size = tree
+            .size()
+            .to_int_size()
+            .scale_by(PNG_SCALE)
+            .ok_or_else(|| anyhow!("page {} has no usable size", index + 1))?;
         let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
             .ok_or_else(|| anyhow!("could not allocate a {size:?} image"))?;
         pixmap.fill(resvg::tiny_skia::Color::WHITE);
@@ -252,9 +219,7 @@ fn write_pngs(pages: &[String], output: &Path) -> Result<Vec<PathBuf>> {
             resvg::tiny_skia::Transform::from_scale(PNG_SCALE, PNG_SCALE),
             &mut pixmap.as_mut(),
         );
-        pixmap
-            .save_png(path)
-            .with_context(|| format!("writing {}", path.display()))?;
+        pixmap.save_png(path).with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(paths)
 }

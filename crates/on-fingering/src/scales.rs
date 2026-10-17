@@ -19,9 +19,7 @@ pub const ARPEGGIO_BONUS: f32 = SCALE_BONUS;
 pub const MIN_ARPEGGIO_RUN: usize = 7;
 
 fn split_on_gaps(start: usize, end: usize, onsets: &[f64]) -> Vec<(usize, usize)> {
-    let gaps: Vec<f64> = (start + 1..end)
-        .filter_map(|i| Some(onsets.get(i)? - onsets.get(i - 1)?))
-        .collect();
+    let gaps: Vec<f64> = (start + 1..end).filter_map(|i| Some(onsets.get(i)? - onsets.get(i - 1)?)).collect();
     if gaps.len() != end - start - 1 || gaps.len() < 2 {
         return vec![(start, end)];
     }
@@ -168,15 +166,13 @@ pub fn find_arpeggio_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize,
         let step = next as i32 - root as i32;
         let third = match step {
             4 | 3 => step as u8,
-            -5 => {
-                match pitches.get(index + 2).copied().flatten().map(|p| next as i32 - p as i32) {
-                    Some(t @ 3) | Some(t @ 4) => 7 - t as u8,
-                    _ => {
-                        index += 1;
-                        continue;
-                    }
+            -5 => match pitches.get(index + 2).copied().flatten().map(|p| next as i32 - p as i32) {
+                Some(t @ 3) | Some(t @ 4) => 7 - t as u8,
+                _ => {
+                    index += 1;
+                    continue;
                 }
-            }
+            },
             _ => {
                 index += 1;
                 continue;
@@ -200,7 +196,8 @@ pub fn find_arpeggio_runs(pitches: &[Option<u8>], onsets: &[f64]) -> Vec<(usize,
             end -= 1;
         }
         for (from, to) in split_on_gaps(index, end, onsets) {
-            let ends_on_roots = [from, to - 1].iter().all(|&i| pitches[i].is_some_and(|p| (p + 12 - root % 12) % 12 == 0));
+            let ends_on_roots =
+                [from, to - 1].iter().all(|&i| pitches[i].is_some_and(|p| (p + 12 - root % 12) % 12 == 0));
             if to - from >= MIN_ARPEGGIO_RUN && ends_on_roots {
                 runs.push((from, to, root % 12, third));
             }
@@ -282,16 +279,11 @@ fn harmonic_minor_of(pitches: &[u8]) -> Option<u8> {
         tonic = Some(named);
     }
     let tonic = tonic?;
-    pitches
-        .iter()
-        .all(|p| HARMONIC_MINOR_DEGREES.contains(&((p + 12 - tonic) % 12)))
-        .then_some(tonic)
+    pitches.iter().all(|p| HARMONIC_MINOR_DEGREES.contains(&((p + 12 - tonic) % 12))).then_some(tonic)
 }
 
 fn read_key(notes: &[u8]) -> Option<(u8, Mode)> {
-    let leaps = notes
-        .windows(2)
-        .any(|pair| (pair[1] as i32 - pair[0] as i32).abs() == AUGMENTED_SECOND);
+    let leaps = notes.windows(2).any(|pair| (pair[1] as i32 - pair[0] as i32).abs() == AUGMENTED_SECOND);
     if leaps {
         harmonic_minor_of(notes).map(|tonic| (tonic, Mode::HarmonicMinor))
     } else {
@@ -336,10 +328,7 @@ fn stepwise_stretches(pitches: &[Option<u8>]) -> Vec<(usize, usize, i32)> {
     out
 }
 
-fn join_augmented_seconds(
-    pitches: &[Option<u8>],
-    stretches: &[(usize, usize, i32)],
-) -> Vec<(usize, usize)> {
+fn join_augmented_seconds(pitches: &[Option<u8>], stretches: &[(usize, usize, i32)]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < stretches.len() {
@@ -420,11 +409,7 @@ fn teach_turns(hand: Hand, pitches: &[Option<u8>], runs: &[ScaleRun], out: &mut 
     }
 }
 
-pub fn scale_fingerings(
-    hand: Hand,
-    pitches: &[Option<u8>],
-    onsets: &[f64],
-) -> HashMap<usize, Taught> {
+pub fn scale_fingerings(hand: Hand, pitches: &[Option<u8>], onsets: &[f64]) -> HashMap<usize, Taught> {
     let mut out = HashMap::new();
     let runs = find_scale_runs(pitches, onsets);
     for run in &runs {
@@ -534,7 +519,10 @@ mod tests {
         let down = seq(&[81, 76, 72, 69, 64, 60, 57]);
         assert_eq!(find_arpeggio_runs(&down, &even(7)), vec![(0, 7, 9, 3)], "A minor, coming down");
         let inversion = seq(&[52, 55, 60, 64, 67, 72, 76]);
-        assert!(find_arpeggio_runs(&inversion, &even(7)).is_empty(), "starting on the third is another fingering");
+        assert!(
+            find_arpeggio_runs(&inversion, &even(7)).is_empty(),
+            "starting on the third is another fingering"
+        );
         let one_octave = seq(&[48, 52, 55, 60]);
         assert!(find_arpeggio_runs(&one_octave, &even(4)).is_empty(), "books differ within one octave");
     }

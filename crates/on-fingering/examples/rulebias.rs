@@ -74,12 +74,7 @@ fn main() {
     options.pattern_scale = 0.0;
     let set = RuleSet::Consensus;
     options.rule_set = set;
-    let scorer = RuleScorer::new(
-        set,
-        RuleWeights::default(),
-        options.span_model.table(),
-        options.ruler,
-    );
+    let scorer = RuleScorer::new(set, RuleWeights::default(), options.span_model.table(), options.ruler);
 
     let mut taught_total = vec![0.0f32; 32];
     let mut model_total = vec![0.0f32; 32];
@@ -113,10 +108,8 @@ fn main() {
 
             let covered = |i: usize| want.contains_key(&i);
             for rule in set.rules() {
-                taught_total[rule.index()] +=
-                    charge(&scorer, hand, &pitches, &taught, *rule, &covered);
-                model_total[rule.index()] +=
-                    charge(&scorer, hand, &pitches, &model, *rule, &covered);
+                taught_total[rule.index()] += charge(&scorer, hand, &pitches, &taught, *rule, &covered);
+                model_total[rule.index()] += charge(&scorer, hand, &pitches, &model, *rule, &covered);
             }
         }
     }
@@ -125,15 +118,9 @@ fn main() {
         "Across {graded} scales where the engine and the books disagree.\n\
          A rule charging the taught answer more than its own is pushing away from it.\n"
     );
-    println!(
-        "  {:<32} {:>9} {:>9} {:>9}",
-        "rule", "taught", "model", "bias"
-    );
-    let mut rows: Vec<(f32, Rule)> = set
-        .rules()
-        .iter()
-        .map(|r| (taught_total[r.index()] - model_total[r.index()], *r))
-        .collect();
+    println!("  {:<32} {:>9} {:>9} {:>9}", "rule", "taught", "model", "bias");
+    let mut rows: Vec<(f32, Rule)> =
+        set.rules().iter().map(|r| (taught_total[r.index()] - model_total[r.index()], *r)).collect();
     rows.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (bias, rule) in rows {
         let mark = if bias > 1.0 {

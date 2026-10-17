@@ -1,7 +1,7 @@
 pub mod bench;
 pub mod corpus;
-pub mod hash;
 pub mod eval;
+pub mod hash;
 pub mod rerank;
 pub mod train;
 pub mod tune;

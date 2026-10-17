@@ -76,13 +76,8 @@ impl HandSize {
     }
 }
 
-const REFERENCE_MCP_XY: [(f32, f32); 5] = [
-    (30.0, 12.0),
-    (28.65, 87.28),
-    (8.25, 84.56),
-    (-13.07, 77.57),
-    (-33.70, 71.35),
-];
+const REFERENCE_MCP_XY: [(f32, f32); 5] =
+    [(30.0, 12.0), (28.65, 87.28), (8.25, 84.56), (-13.07, 77.57), (-33.70, 71.35)];
 
 const REFERENCE_MCP_Z: [f32; 5] = [10.0, 0.0, 0.0, 0.0, 0.0];
 
@@ -167,11 +162,9 @@ mod tests {
     #[test]
     fn knuckles_are_about_twenty_millimetres_apart() {
         let p = HandProfile::default();
-        for (a, b) in [
-            (Finger::Index, Finger::Middle),
-            (Finger::Middle, Finger::Ring),
-            (Finger::Ring, Finger::Little),
-        ] {
+        for (a, b) in
+            [(Finger::Index, Finger::Middle), (Finger::Middle, Finger::Ring), (Finger::Ring, Finger::Little)]
+        {
             let d = p.knuckle_distance(a, b);
             assert!((18.0..24.0).contains(&d), "{a:?}-{b:?} knuckles {d} mm apart");
         }
@@ -193,11 +186,7 @@ mod tests {
     fn hand_length_is_carpus_plus_middle_ray() {
         let p = HandProfile::default();
         let modelled = REFERENCE_CARPAL_LENGTH + p.digit(Finger::Middle).ray_length();
-        assert!(
-            (modelled - p.hand_length).abs() < 0.05,
-            "modelled {modelled} vs stated {}",
-            p.hand_length
-        );
+        assert!((modelled - p.hand_length).abs() < 0.05, "modelled {modelled} vs stated {}", p.hand_length);
     }
 
     #[test]
@@ -212,13 +201,8 @@ mod tests {
 
     #[test]
     fn size_buckets_are_ordered_and_stable() {
-        let sizes = [
-            HandSize::ExtraSmall,
-            HandSize::Small,
-            HandSize::Medium,
-            HandSize::Large,
-            HandSize::ExtraLarge,
-        ];
+        let sizes =
+            [HandSize::ExtraSmall, HandSize::Small, HandSize::Medium, HandSize::Large, HandSize::ExtraLarge];
         for w in sizes.windows(2) {
             assert!(w[0].hand_length() < w[1].hand_length());
         }

@@ -1,7 +1,7 @@
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::FingeringOptions;
-use on_hand::skeleton::{HandPose, DOF, LIMITS};
 use on_hand::keyboard::KEY_DIP;
+use on_hand::skeleton::{HandPose, DOF, LIMITS};
 use on_hand::Hand;
 use on_score::hands::HandAssignment;
 use on_score::MidiDocument;
@@ -80,15 +80,11 @@ fn main() -> anyhow::Result<()> {
                         "  {:.2}s {hand:?} misses by {:.1} mm: {}",
                         event.time,
                         outcome.shortfall_mm,
-                        keys.iter()
-                            .map(|(m, f)| format!("{m}={}", f.number()))
-                            .collect::<Vec<_>>()
-                            .join(" ")
+                        keys.iter().map(|(m, f)| format!("{m}={}", f.number())).collect::<Vec<_>>().join(" ")
                     ));
                     let ways = reachable_fingerings(&model, hand, &keys);
                     let last = examples.len() - 1;
-                    examples[last]
-                        .push_str(&format!("   ({ways} reachable fingerings of these notes)"));
+                    examples[last].push_str(&format!("   ({ways} reachable fingerings of these notes)"));
                 }
             }
 
@@ -112,9 +108,10 @@ fn main() -> anyhow::Result<()> {
                         Hand::Left => Hand::Right,
                         Hand::Right => Hand::Left,
                     };
-                    let busy = timeline.notes.iter().any(|n| {
-                        n.hand == other && n.start <= event.time + 1e-6 && n.end > event.time
-                    });
+                    let busy = timeline
+                        .notes
+                        .iter()
+                        .any(|n| n.hand == other && n.start <= event.time + 1e-6 && n.end > event.time);
                     if busy {
                         other_hand_busy += 1;
                     }
@@ -147,7 +144,10 @@ fn main() -> anyhow::Result<()> {
                 if buried.len() < 5 {
                     buried.push(format!(
                         "  {:.2}s {hand:?} {:.0} mm into the keys, reached={}: {:?}",
-                        event.time, below, outcome.reachable, shape(&event.grip)
+                        event.time,
+                        below,
+                        outcome.reachable,
+                        shape(&event.grip)
                     ));
                 }
             }
@@ -189,15 +189,8 @@ fn main() -> anyhow::Result<()> {
         let posed = on_viz::timeline::pose_both(&animators, at);
 
         for hand in Hand::ALL {
-            let posture = animators[hand as usize]
-                .skeleton()
-                .forward(&posed[hand as usize]);
-            let below = posture
-                .chain
-                .iter()
-                .flatten()
-                .map(|joint| -joint.z)
-                .fold(-posture.wrist.z, f32::max);
+            let posture = animators[hand as usize].skeleton().forward(&posed[hand as usize]);
+            let below = posture.chain.iter().flatten().map(|joint| -joint.z).fold(-posture.wrist.z, f32::max);
             if below > KEY_DIP {
                 sunk += 1;
                 deepest_moving = deepest_moving.max(below - KEY_DIP);
@@ -206,10 +199,7 @@ fn main() -> anyhow::Result<()> {
         let left = animators[Hand::Left as usize].joints(&posed[0]);
         let right = animators[Hand::Right as usize].joints(&posed[1]);
         let overlap = on_viz::timeline::overlap_depth(&left, &right);
-        let bare = [
-            animators[Hand::Left as usize].pose_at(at),
-            animators[Hand::Right as usize].pose_at(at),
-        ];
+        let bare = [animators[Hand::Left as usize].pose_at(at), animators[Hand::Right as usize].pose_at(at)];
         if on_viz::timeline::overlap_depth(
             &animators[Hand::Left as usize].joints(&bare[0]),
             &animators[Hand::Right as usize].joints(&bare[1]),
@@ -217,9 +207,8 @@ fn main() -> anyhow::Result<()> {
         {
             unhandled += 1;
         }
-        let span = |j: &[glam::Vec3]| {
-            j.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)))
-        };
+        let span =
+            |j: &[glam::Vec3]| j.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
         let ((left_low, left_high), (right_low, right_high)) = (span(&left), span(&right));
         if overlap > 0.0 {
             colliding += 1;
@@ -235,9 +224,11 @@ fn main() -> anyhow::Result<()> {
             worst_depth_overlap =
                 worst_depth_overlap.max(left_high.min(right_high) - left_low.max(right_low));
             worst_overlap = worst_overlap.max(overlap);
-            if collisions.len() < 6 && collisions.last().is_none_or(|last: &String| {
-                !last.starts_with(&format!("  {:.1}", at.floor()))
-            }) {
+            if collisions.len() < 6
+                && collisions
+                    .last()
+                    .is_none_or(|last: &String| !last.starts_with(&format!("  {:.1}", at.floor())))
+            {
                 collisions.push(format!(
                     "  {at:.2}s the hands overlap by {overlap:.0} mm  \
                      (left {left_low:.0}..{left_high:.0}, right {right_low:.0}..{right_high:.0})"
@@ -258,8 +249,7 @@ fn main() -> anyhow::Result<()> {
             let alone = animator.skeleton().forward(&animator.pose_at(event.time));
             for (midi, finger) in &event.grip.keys {
                 let want = keys_geom.centre_x(*midi);
-                worst_off_key =
-                    worst_off_key.max((posture.chain[finger.index()][3].x - want).abs());
+                worst_off_key = worst_off_key.max((posture.chain[finger.index()][3].x - want).abs());
                 worst_off_key_alone =
                     worst_off_key_alone.max((alone.chain[finger.index()][3].x - want).abs());
             }
@@ -316,10 +306,7 @@ fn main() -> anyhow::Result<()> {
 fn shape_of(grip: &Grip) -> String {
     let mut keys = grip.keys.clone();
     keys.sort_by_key(|(midi, _)| *midi);
-    keys.iter()
-        .map(|(m, f)| format!("{m}={}", f.number()))
-        .collect::<Vec<_>>()
-        .join(" ")
+    keys.iter().map(|(m, f)| format!("{m}={}", f.number())).collect::<Vec<_>>().join(" ")
 }
 
 fn shape(grip: &Grip) -> Vec<u8> {
@@ -332,11 +319,8 @@ fn worst_joint(skeleton: &on_hand::Skeleton, pose: &HandPose) -> f32 {
     let neutral = skeleton.wrist_neutral(pose);
     (0..DOF)
         .map(|i| {
-            let q = if i == on_hand::skeleton::dof::WRIST_DEVIATION {
-                pose.q[i] - neutral
-            } else {
-                pose.q[i]
-            };
+            let q =
+                if i == on_hand::skeleton::dof::WRIST_DEVIATION { pose.q[i] - neutral } else { pose.q[i] };
             LIMITS[i].violation(q).to_degrees()
         })
         .fold(0.0, f32::max)
@@ -344,12 +328,7 @@ fn worst_joint(skeleton: &on_hand::Skeleton, pose: &HandPose) -> f32 {
 
 fn deepest_point(model: &BiomechModel, pose: &HandPose) -> f32 {
     let posture = model.skeleton().forward(pose);
-    posture
-        .chain
-        .iter()
-        .flatten()
-        .map(|point| -point.z)
-        .fold(-posture.wrist.z, f32::max)
+    posture.chain.iter().flatten().map(|point| -point.z).fold(-posture.wrist.z, f32::max)
 }
 
 fn reachable_fingerings(model: &BiomechModel, hand: Hand, keys: &[(u8, on_hand::Finger)]) -> usize {
@@ -367,9 +346,7 @@ fn reachable_fingerings(model: &BiomechModel, hand: Hand, keys: &[(u8, on_hand::
     ) {
         use on_hand::Finger;
         if at == keys.len() {
-            let grip = Grip::new(
-                keys.iter().zip(chosen.iter()).map(|((m, _), f)| (*m, *f)).collect(),
-            );
+            let grip = Grip::new(keys.iter().zip(chosen.iter()).map(|((m, _), f)| (*m, *f)).collect());
             if model.grip_outcome(&grip).reachable {
                 *found += 1;
             }

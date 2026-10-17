@@ -61,7 +61,11 @@ pub fn comfort(
                             options,
                             model.map(|m| m as &dyn on_fingering::FingeringPrior),
                         );
-                        total.add(on_fingering::measure_solution(&score, &solution, options.span_model.table()));
+                        total.add(on_fingering::measure_solution(
+                            &score,
+                            &solution,
+                            options.span_model.table(),
+                        ));
                     }
                     total
                 })
@@ -110,7 +114,11 @@ fn example(piece: &Piece, floor: f32) -> Option<Example> {
         chord.dedup_by_key(|(midi, _, _)| *midi);
         let ordered = chord.windows(2).all(|pair| {
             let (a, b) = (pair[0].1.index(), pair[1].1.index());
-            if right { b > a } else { b < a }
+            if right {
+                b > a
+            } else {
+                b < a
+            }
         });
         if !ordered {
             continue;
@@ -182,10 +190,19 @@ fn overall(rates: &[(Style, MatchRates)]) -> f32 {
 }
 
 fn describe_rates(rates: &[(Style, MatchRates)]) -> String {
-    rates.iter().map(|(style, r)| format!("{style:?} {:.1}%", r.general * 100.0)).collect::<Vec<_>>().join(", ")
+    rates
+        .iter()
+        .map(|(style, r)| format!("{style:?} {:.1}%", r.general * 100.0))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-fn measure(pieces: &[Piece], options: &FingeringOptions, model: Option<&NgramPrior>, threads: usize) -> MatchRates {
+fn measure(
+    pieces: &[Piece],
+    options: &FingeringOptions,
+    model: Option<&NgramPrior>,
+    threads: usize,
+) -> MatchRates {
     combine(&measure_pieces(pieces, options, model, threads))
 }
 
@@ -275,7 +292,12 @@ pub fn measure_model(
         .collect()
 }
 
-pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut say: impl FnMut(&str)) -> Report {
+pub fn train(
+    pieces: &[Piece],
+    options: &FingeringOptions,
+    config: &Config,
+    mut say: impl FnMut(&str),
+) -> Report {
     on_fingering::set_inner_threads(false);
     let mut options = options.clone();
     options.prior_scale = 0.0;
@@ -338,7 +360,11 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
                             let mut delta: HashMap<u64, f32> = HashMap::new();
                             for &i in part {
                                 let example = &examples[i];
-                                let model = &models.iter().find(|(s, _)| *s == example.style).expect("every style has a model").1;
+                                let model = &models
+                                    .iter()
+                                    .find(|(s, _)| *s == example.style)
+                                    .expect("every style has a model")
+                                    .1;
                                 let free = finger_score_with_prior(&example.free, options, Some(model));
                                 let gold = finger_score_with_prior(&example.pinned, options, Some(model));
                                 if gold.explanations.iter().any(|e| !e.reachable) {
@@ -351,7 +377,8 @@ pub fn train(pieces: &[Piece], options: &FingeringOptions, config: &Config, mut 
                                 let mut share = 1.0 / wrong as f32;
                                 if comfort > 0.0 {
                                     let spans = options.span_model.table();
-                                    let theirs = on_fingering::measure_solution(&example.pinned, &gold, spans);
+                                    let theirs =
+                                        on_fingering::measure_solution(&example.pinned, &gold, spans);
                                     let ours = on_fingering::measure_solution(&example.free, &free, spans);
                                     let excess = (theirs.change_rate() - ours.change_rate()).max(0.0)
                                         + (theirs.stretched_rate() - ours.stretched_rate()).max(0.0);
@@ -464,14 +491,22 @@ mod tests {
     fn training_teaches_the_search_a_pianists_habit() {
         let pieces: Vec<Piece> = (0..12).map(|i| quirky(&format!("piece {i}"))).collect();
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
-        let config = Config { epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false, comfort: 0.0 };
+        let config = Config {
+            epochs: 6,
+            rate: 1.0,
+            floor: 0.4,
+            held_out: 0.3,
+            per_epoch: 0,
+            threads: 2,
+            groups: HashMap::new(),
+            test_groups: Vec::new(),
+            unified: false,
+            comfort: 0.0,
+        };
         let report = train(&pieces, &options, &config, |_| {});
         let learned = report.passes.iter().map(|r| overall(r)).fold(0.0, f32::max);
         let before = overall(&report.before);
-        assert!(
-            learned > before + 0.2 && learned > 0.95,
-            "rules alone {before:.3}, best pass {learned:.3}"
-        );
+        assert!(learned > before + 0.2 && learned > 0.95, "rules alone {before:.3}, best pass {learned:.3}");
     }
 
     #[test]
@@ -480,18 +515,40 @@ mod tests {
             let mut piece = quirky(&name);
             piece.annotator = annotator.into();
             for note in &mut piece.notes {
-                note.finger = Some(if note.midi == 60 { fingers[0] } else if note.midi == 64 { fingers[1] } else { note.finger.unwrap_or(1) });
+                note.finger = Some(if note.midi == 60 {
+                    fingers[0]
+                } else if note.midi == 64 {
+                    fingers[1]
+                } else {
+                    note.finger.unwrap_or(1)
+                });
             }
             piece
         };
         let mut pieces: Vec<Piece> = (0..12).map(|i| habit(format!("seen {i}"), "video", [2, 4])).collect();
         pieces.extend((0..12).map(|i| habit(format!("written {i}"), "edition", [1, 3])));
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
-        let config = Config { epochs: 8, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2, groups: HashMap::new(), test_groups: Vec::new(), unified: false, comfort: 0.0 };
+        let config = Config {
+            epochs: 8,
+            rate: 1.0,
+            floor: 0.4,
+            held_out: 0.3,
+            per_epoch: 0,
+            threads: 2,
+            groups: HashMap::new(),
+            test_groups: Vec::new(),
+            unified: false,
+            comfort: 0.0,
+        };
         let report = train(&pieces, &options, &config, |_| {});
         let best = &report.passes[report.best.max(1) - 1];
         for (style, rates) in best {
-            assert!(rates.general > 0.9, "{style:?} only reached {:.3}: {}", rates.general, describe_rates(best));
+            assert!(
+                rates.general > 0.9,
+                "{style:?} only reached {:.3}: {}",
+                rates.general,
+                describe_rates(best)
+            );
         }
     }
 
@@ -517,8 +574,16 @@ mod tests {
         let options = FingeringOptions { rule_set: on_fingering::RuleSet::Parncutt, ..Default::default() };
         let learned = |comfort: f32| {
             let config = Config {
-                epochs: 6, rate: 1.0, floor: 0.4, held_out: 0.3, per_epoch: 0, threads: 2,
-                groups: HashMap::new(), test_groups: Vec::new(), unified: true, comfort,
+                epochs: 6,
+                rate: 1.0,
+                floor: 0.4,
+                held_out: 0.3,
+                per_epoch: 0,
+                threads: 2,
+                groups: HashMap::new(),
+                test_groups: Vec::new(),
+                unified: true,
+                comfort,
             };
             let report = train(&pieces, &options, &config, |_| {});
             let before = overall(&report.before);

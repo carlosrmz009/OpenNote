@@ -304,9 +304,7 @@ pub fn rerank(args: RerankArgs) -> Result<()> {
         floor: args.min_confidence,
         held_out: args.held_out,
         per_epoch: args.per_pass,
-        threads: args
-            .threads
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
+        threads: args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
         groups,
         test_groups: args.test_groups.clone(),
         unified: args.unified,
@@ -404,10 +402,14 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
     let prior = args.weights.prior()?;
     let threads = args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
     on_fingering::set_inner_threads(false);
-    let name = args.weights.model.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+    let name =
+        args.weights.model.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
     if let Some(path) = &args.excerpts {
-        let Some(prior) = prior.as_deref() else { anyhow::bail!("--excerpts compares a model with the rules: give --model") };
-        let excerpts = on_train::bench::excerpts(&manifest, &options, prior as &dyn on_fingering::FingeringPrior, 30)?;
+        let Some(prior) = prior.as_deref() else {
+            anyhow::bail!("--excerpts compares a model with the rules: give --model")
+        };
+        let excerpts =
+            on_train::bench::excerpts(&manifest, &options, prior as &dyn on_fingering::FingeringPrior, 30)?;
         std::fs::write(path, on_train::bench::excerpts_json(name, &excerpts)?)?;
         println!("{} passages to judge -> {}", excerpts.len(), path.display());
         return Ok(());
@@ -423,17 +425,36 @@ pub fn benchmark(args: BenchmarkArgs) -> Result<()> {
         |line| eprintln!("{line}"),
     )?;
     for tier in &card.tiers {
-        println!("{} - {}: {} pieces from {} groups, {} notes", tier.id, tier.title, tier.pieces, tier.groups, tier.notes);
-        println!("  rules alone  general {:.1}%  recombined {:.1}%  4-gram {:.1}%", tier.rules.general, tier.rules.recombined, tier.rules.ngram);
+        println!(
+            "{} - {}: {} pieces from {} groups, {} notes",
+            tier.id, tier.title, tier.pieces, tier.groups, tier.notes
+        );
+        println!(
+            "  rules alone  general {:.1}%  recombined {:.1}%  4-gram {:.1}%",
+            tier.rules.general, tier.rules.recombined, tier.rules.ngram
+        );
         if let (Some(model), Some(gain)) = (&tier.model, &tier.gain) {
-            println!("  with model   general {:.1}%  recombined {:.1}%  4-gram {:.1}%", model.general, model.recombined, model.ngram);
-            for (label, span) in [("general", gain.general), ("4-gram", gain.ngram), ("recombined", gain.recombined)] {
-                println!("    {label:<10} {:+.1} points ({:+.1} to {:+.1}){}", span.point, span.low, span.high,
-                         if span.real { ", real" } else { "" });
+            println!(
+                "  with model   general {:.1}%  recombined {:.1}%  4-gram {:.1}%",
+                model.general, model.recombined, model.ngram
+            );
+            for (label, span) in
+                [("general", gain.general), ("4-gram", gain.ngram), ("recombined", gain.recombined)]
+            {
+                println!(
+                    "    {label:<10} {:+.1} points ({:+.1} to {:+.1}){}",
+                    span.point,
+                    span.low,
+                    span.high,
+                    if span.real { ", real" } else { "" }
+                );
             }
         }
         if let Some(human) = &tier.human {
-            println!("  pianists against one another: general {:.1}%  recombined {:.1}%  4-gram {:.1}%", human.general, human.recombined, human.ngram);
+            println!(
+                "  pianists against one another: general {:.1}%  recombined {:.1}%  4-gram {:.1}%",
+                human.general, human.recombined, human.ngram
+            );
         }
         let weakest: Vec<String> = tier.weakest.iter().take(5).map(|(n, r)| format!("{n} {r:.0}%")).collect();
         println!("  weakest: {}", weakest.join(", "));
@@ -510,11 +531,8 @@ pub fn bench(args: BenchArgs) -> Result<()> {
     if let Some(list) = &args.pieces {
         let text = std::fs::read_to_string(list)
             .with_context(|| format!("reading the piece list at {}", list.display()))?;
-        let wanted: std::collections::BTreeSet<&str> = text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect();
+        let wanted: std::collections::BTreeSet<&str> =
+            text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).collect();
         let before = pieces.len();
         pieces.retain(|piece| wanted.contains(piece.piece.as_str()));
         if pieces.is_empty() {
@@ -564,7 +582,13 @@ pub fn bench(args: BenchArgs) -> Result<()> {
             gap.point * 100.0,
             gap.low * 100.0,
             gap.high * 100.0,
-            if gap.low > 0.0 { ", a real improvement" } else if gap.high < 0.0 { ", a real loss" } else { ", not distinguishable from no change" }
+            if gap.low > 0.0 {
+                ", a real improvement"
+            } else if gap.high < 0.0 {
+                ", a real loss"
+            } else {
+                ", not distinguishable from no change"
+            }
         );
     }
     println!(
@@ -638,14 +662,9 @@ pub fn corpus(args: CorpusArgs) -> Result<()> {
 
             let onsets = on_train::video::onsets_of(&score)?;
             let title = piece.unwrap_or_else(|| {
-                score
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("untitled")
-                    .to_string()
+                score.file_stem().and_then(|s| s.to_str()).unwrap_or("untitled").to_string()
             });
-            let extracted =
-                on_train::video::extract(&watched, &onsets, &homography, &title, &annotator);
+            let extracted = on_train::video::extract(&watched, &onsets, &homography, &title, &annotator);
             let (found, total) = on_train::video::coverage(&extracted, &onsets);
             let share = found as f64 / total.max(1) as f64;
             let read: Vec<f32> = extracted.notes.iter().filter_map(|n| n.confidence).collect();
@@ -718,8 +737,7 @@ pub fn corpus(args: CorpusArgs) -> Result<()> {
                 notes
             );
             for (name, annotations) in grouped.iter().take(40) {
-                let people: Vec<&str> =
-                    annotations.iter().map(|p| p.annotator.as_str()).collect();
+                let people: Vec<&str> = annotations.iter().map(|p| p.annotator.as_str()).collect();
                 println!("  {name}  ({})", people.join(", "));
             }
             if grouped.len() > 40 {
@@ -759,10 +777,7 @@ pub fn train(args: TrainArgs) -> Result<()> {
         println!("\nNothing written (--dry-run).");
         return Ok(());
     }
-    report
-        .prior
-        .save(&args.out)
-        .with_context(|| format!("writing {}", args.out.display()))?;
+    report.prior.save(&args.out).with_context(|| format!("writing {}", args.out.display()))?;
     println!("\nModel written to {}.", args.out.display());
     if report.made_things_worse() {
         println!(
@@ -770,10 +785,7 @@ pub fn train(args: TrainArgs) -> Result<()> {
              but not worth using yet. Add more data and train again."
         );
     } else {
-        println!(
-            "Use it with:  opennote play <score> --model {}",
-            args.out.display()
-        );
+        println!("Use it with:  opennote play <score> --model {}", args.out.display());
     }
     Ok(())
 }
@@ -805,11 +817,7 @@ pub fn eval(args: EvalArgs) -> Result<()> {
     let rules_only = on_train::evaluate(&measured, &options, None);
     println!("rules only:  {rules_only}");
 
-    let model_path = args
-        .weights
-        .model
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(MODEL_PATH));
+    let model_path = args.weights.model.clone().unwrap_or_else(|| PathBuf::from(MODEL_PATH));
     let model = crate::ModelArgs { model: Some(model_path.clone()), ..args.weights.clone() };
     match model.prior() {
         Ok(Some(prior)) => {
@@ -837,10 +845,7 @@ fn verdict(before: MatchRates, after: MatchRates) -> String {
     let change = (after.general - before.general) * 100.0;
     match change {
         c if c > 0.5 => format!("The model is worth {c:.1} points of agreement."),
-        c if c < -0.5 => format!(
-            "The model costs {:.1} points. Do not use it yet — it needs more data.",
-            -c
-        ),
+        c if c < -0.5 => format!("The model costs {:.1} points. Do not use it yet — it needs more data.", -c),
         _ => "The model makes almost no difference on this set.".to_string(),
     }
 }
@@ -876,8 +881,7 @@ fn eval_score(path: &Path, args: &EvalArgs) -> Result<()> {
         bail!("{} does not exist", path.display());
     }
     let options = args.weights.options()?;
-    let mut input = on_score::Document::open(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let mut input = on_score::Document::open(path).with_context(|| format!("reading {}", path.display()))?;
     let assignment = args.weights.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
     let score = input.score();
@@ -1058,7 +1062,11 @@ pub fn tune(args: TuneArgs) -> Result<()> {
                     println!("  {tried} files read, {kept} usable");
                 }
             })?;
-            if playing { read.playing() } else { read }
+            if playing {
+                read.playing()
+            } else {
+                read
+            }
         }
         TuneTarget::Taught => {
             println!("Generating {} exercises...", args.exercises);
@@ -1131,9 +1139,7 @@ pub fn tune(args: TuneArgs) -> Result<()> {
         hours: args.hours,
         batch: args.batch,
         give_up: args.give_up,
-        threads: args.threads.unwrap_or_else(|| {
-            std::thread::available_parallelism().map_or(4, |n| n.get())
-        }),
+        threads: args.threads.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())),
     };
     run(&examples, &config, |line| println!("{line}"))
 }

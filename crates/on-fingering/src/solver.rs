@@ -2,8 +2,8 @@ use on_hand::{Finger, Hand, HandProfile};
 use on_score::{Fingering, NoteId, Score};
 
 use crate::biomech::{BiomechModel, BiomechWeights, Grip};
-use crate::rules::{self, Placement, Rule, RuleScorer, RuleSet, RuleWeights, Trigram};
 use crate::ruler::Ruler;
+use crate::rules::{self, Placement, Rule, RuleScorer, RuleSet, RuleWeights, Trigram};
 use crate::spans::SpanModel;
 
 const WITHIN_CHORD_RULES: &[Rule] = &[
@@ -17,8 +17,7 @@ const WITHIN_CHORD_RULES: &[Rule] = &[
 
 const PER_NOTE_RULES: &[Rule] = &[Rule::WeakFinger];
 
-const SHIFTED_VOICE_RULES: &[Rule] =
-    &[Rule::WeakFinger, Rule::Impractical, Rule::RepeatedFinger];
+const SHIFTED_VOICE_RULES: &[Rule] = &[Rule::WeakFinger, Rule::Impractical, Rule::RepeatedFinger];
 
 #[derive(Debug, Clone)]
 pub struct FingeringOptions {
@@ -52,11 +51,7 @@ impl Default for FingeringOptions {
 
 impl FingeringOptions {
     pub fn for_hand(profile: HandProfile) -> Self {
-        Self {
-            span_model: SpanModel::for_hand_size(profile.size()),
-            profile,
-            ..Default::default()
-        }
+        Self { span_model: SpanModel::for_hand_size(profile.size()), profile, ..Default::default() }
     }
 }
 
@@ -147,13 +142,7 @@ pub struct CostBreakdown {
 
 impl CostBreakdown {
     pub fn total(&self) -> f32 {
-        self.rules
-            + self.posture
-            + self.pattern
-            + self.motion
-            + self.agreement
-            + self.prior
-            + self.learned
+        self.rules + self.posture + self.pattern + self.motion + self.agreement + self.prior + self.learned
     }
 }
 
@@ -179,10 +168,7 @@ pub struct Solution {
 
 impl Solution {
     pub fn finger_of(&self, note: NoteId) -> Option<Finger> {
-        self.fingerings
-            .iter()
-            .find(|f| f.note == note)
-            .map(|f| f.finger)
+        self.fingerings.iter().find(|f| f.note == note).map(|f| f.finger)
     }
 }
 
@@ -210,18 +196,18 @@ impl Agreement {
         };
         let answers: Vec<Solution> = if inner_threads() {
             std::thread::scope(|scope| {
-                let running: Vec<_> = rules::PUBLISHED
+                let running: Vec<_> =
+                    rules::PUBLISHED.into_iter().map(|set| scope.spawn(move || ask(set))).collect();
+                running
                     .into_iter()
-                    .map(|set| scope.spawn(move || ask(set)))
-                    .collect();
-                running.into_iter().map(|thread| thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+                    .map(|thread| thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+                    .collect()
             })
         } else {
             rules::PUBLISHED.into_iter().map(ask).collect()
         };
 
-        let mut votes: std::collections::HashMap<NoteId, [u8; 5]> =
-            std::collections::HashMap::new();
+        let mut votes: std::collections::HashMap<NoteId, [u8; 5]> = std::collections::HashMap::new();
         for answer in &answers {
             for fingering in &answer.fingerings {
                 votes.entry(fingering.note).or_default()[fingering.finger.index()] += 1;
@@ -239,19 +225,13 @@ impl Agreement {
             return 0.0;
         }
         match self.votes.get(&note) {
-            Some(counts) => {
-                AGREEMENT_WEIGHT * counts[finger.index()] as f32 / self.voters as f32
-            }
+            Some(counts) => AGREEMENT_WEIGHT * counts[finger.index()] as f32 / self.voters as f32,
             None => 0.0,
         }
     }
 
     pub fn tally(&self) -> (usize, usize) {
-        let unanimous = self
-            .votes
-            .values()
-            .filter(|c| c.contains(&self.voters))
-            .count();
+        let unanimous = self.votes.values().filter(|c| c.contains(&self.voters)).count();
         (unanimous, self.votes.len() - unanimous)
     }
 }
@@ -304,7 +284,11 @@ pub fn finger_score_with_prior(
     let score = if pins.is_empty() {
         score
     } else {
-        tracing::info!("{} of {} notes fingered as documented in a known piece", pins.len(), score.notes.len());
+        tracing::info!(
+            "{} of {} notes fingered as documented in a known piece",
+            pins.len(),
+            score.notes.len()
+        );
         let mut pinned = score.clone();
         for (id, finger) in pins {
             let note = &mut pinned.notes[id.index()];
@@ -316,7 +300,11 @@ pub fn finger_score_with_prior(
     let mut passages = prior.map(|p| p.suggest(score)).unwrap_or_default();
     passages.retain(|id, _| score.note(*id).given_finger.is_none());
     if !passages.is_empty() {
-        tracing::info!("{} of {} notes have a passage pianists commonly finger alike", passages.len(), score.notes.len());
+        tracing::info!(
+            "{} of {} notes have a passage pianists commonly finger alike",
+            passages.len(),
+            score.notes.len()
+        );
     }
     if options.rule_set == RuleSet::Consensus {
         return consensus_with(score, options, prior, passages);
@@ -325,7 +313,11 @@ pub fn finger_score_with_prior(
     solve_score(score, options, prior, Some(&agreement))
 }
 
-fn finger_as_given(score: &Score, options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Solution {
+fn finger_as_given(
+    score: &Score,
+    options: &FingeringOptions,
+    prior: Option<&dyn FingeringPrior>,
+) -> Solution {
     if options.rule_set == RuleSet::Consensus {
         return finger_score_consensus(score, options, prior);
     }
@@ -343,9 +335,7 @@ fn solve_score(
         if events.is_empty() {
             return None;
         }
-        let reach = options.span_model.table().0[Finger::Thumb.index()]
-            [Finger::Little.index()]
-        .max_comf;
+        let reach = options.span_model.table().0[Finger::Thumb.index()][Finger::Little.index()].max_comf;
         hold_sustained(&mut events, score, reach);
         let mut solver = HandSolver::new(hand, options, prior, agreement);
         solver.find_scales(&events);
@@ -424,13 +414,7 @@ pub fn build_events(score: &Score, hand: Hand) -> Vec<Event> {
             continue;
         }
         let struck = vec![true; notes.len()];
-        events.push(Event {
-            notes,
-            ids,
-            struck,
-            onset_seconds: chord.onset_seconds,
-            pinned,
-        });
+        events.push(Event { notes, ids, struck, onset_seconds: chord.onset_seconds, pinned });
     }
     events
 }
@@ -449,15 +433,10 @@ fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
         let restruck: Vec<u8> = events[index].notes.clone();
         sounding.retain(|s| !restruck.contains(&s.midi) || events[index].ids.contains(&s.id));
 
-        let struck: Vec<(NoteId, u8)> = events[index]
-            .ids
-            .iter()
-            .zip(&events[index].notes)
-            .map(|(id, midi)| (*id, *midi))
-            .collect();
-        let (struck_low, struck_high) = struck
-            .iter()
-            .fold((u8::MAX, u8::MIN), |(lo, hi), (_, m)| (lo.min(*m), hi.max(*m)));
+        let struck: Vec<(NoteId, u8)> =
+            events[index].ids.iter().zip(&events[index].notes).map(|(id, midi)| (*id, *midi)).collect();
+        let (struck_low, struck_high) =
+            struck.iter().fold((u8::MAX, u8::MIN), |(lo, hi), (_, m)| (lo.min(*m), hi.max(*m)));
 
         sounding.retain(|s| i32::from(s.high.max(struck_high) - s.low.min(struck_low)) <= reach);
         for s in &mut sounding {
@@ -472,9 +451,8 @@ fn hold_sustained(events: &mut [Event], score: &Score, reach: i32) {
             .map(|s| (s.id, s.midi))
             .collect();
 
-        let (mut low, mut high) = struck
-            .iter()
-            .fold((u8::MAX, u8::MIN), |(lo, hi), (_, m)| (lo.min(*m), hi.max(*m)));
+        let (mut low, mut high) =
+            struck.iter().fold((u8::MAX, u8::MIN), |(lo, hi), (_, m)| (lo.min(*m), hi.max(*m)));
         let mut room = FINGERS.saturating_sub(struck.len());
         held.retain(|(_, midi)| {
             let (would_low, would_high) = (low.min(*midi), high.max(*midi));
@@ -557,10 +535,8 @@ impl<'a> HandSolver<'a> {
     }
 
     fn find_scales(&mut self, events: &[Event]) {
-        let line: Vec<Option<u8>> = events
-            .iter()
-            .map(|e| if e.len() == 1 { Some(e.notes[0]) } else { None })
-            .collect();
+        let line: Vec<Option<u8>> =
+            events.iter().map(|e| if e.len() == 1 { Some(e.notes[0]) } else { None }).collect();
         let onsets: Vec<f64> = events.iter().map(|e| e.onset_seconds).collect();
         self.scales = crate::scales::scale_fingerings(self.hand, &line, &onsets);
     }
@@ -632,14 +608,7 @@ impl<'a> HandSolver<'a> {
     }
 
     fn grip(&self, event: &Event, candidate: &Candidate) -> Grip {
-        Grip::new(
-            event
-                .notes
-                .iter()
-                .copied()
-                .zip(candidate.fingers.iter().copied())
-                .collect(),
-        )
+        Grip::new(event.notes.iter().copied().zip(candidate.fingers.iter().copied()).collect())
     }
 
     fn outer(&self, event: &Event, candidate: &Candidate) -> (Placement, Placement) {
@@ -673,7 +642,8 @@ impl<'a> HandSolver<'a> {
         for i in 0..event.len() {
             let here = Placement::new(event.notes[i], candidate.fingers[i]);
             if let Some(votes) = self.agreement {
-                agreed -= votes.bonus(event.ids[i], candidate.fingers[i]) + votes.passage(event.ids[i], candidate.fingers[i]);
+                agreed -= votes.bonus(event.ids[i], candidate.fingers[i])
+                    + votes.passage(event.ids[i], candidate.fingers[i]);
             }
             rules += self
                 .rules
@@ -687,19 +657,13 @@ impl<'a> HandSolver<'a> {
                 rules += self
                     .rules
                     .score_with(
-                        &Trigram {
-                            hand: self.hand,
-                            prev: Some(below),
-                            current: here,
-                            next: None,
-                        },
+                        &Trigram { hand: self.hand, prev: Some(below), current: here, next: None },
                         WITHIN_CHORD_RULES,
                     )
                     .total();
             }
         }
-        let mut pattern =
-            crate::patterns::chord_bonus(self.hand, &event.notes, &candidate.fingers);
+        let mut pattern = crate::patterns::chord_bonus(self.hand, &event.notes, &candidate.fingers);
         if let Some(taught) = self.scales.get(&index) {
             if candidate.fingers.first() == Some(&taught.finger) {
                 pattern += taught.bonus;
@@ -738,8 +702,7 @@ impl<'a> HandSolver<'a> {
         let prev_outer = prev.map(|(e, c)| self.outer(e, c));
         let next_outer = next.map(|(e, c)| self.outer(e, c));
 
-        let shifting =
-            current.0.len() > 1 && prev.is_some_and(|(event, _)| event.len() > 1);
+        let shifting = current.0.len() > 1 && prev.is_some_and(|(event, _)| event.len() > 1);
 
         let mut total = 0.0;
         for (side, current) in [(0usize, low), (1usize, high)] {
@@ -785,27 +748,18 @@ impl<'a> HandSolver<'a> {
 
     fn move_cost(&self, from: (&Event, &Candidate), to: (&Event, &Candidate)) -> f32 {
         let seconds = to.0.onset_seconds - from.0.onset_seconds;
-        let travel = self.biomech.transition_cost(
-            &self.grip(from.0, from.1),
-            &self.grip(to.0, to.1),
-            seconds,
-        );
+        let travel =
+            self.biomech.transition_cost(&self.grip(from.0, from.1), &self.grip(to.0, to.1), seconds);
         let learned = self.prior.map_or(0.0, |model| {
             model
-                .step_cost(
-                    self.hand,
-                    (&from.0.notes, &from.1.fingers),
-                    (&to.0.notes, &to.1.fingers),
-                    seconds,
-                )
+                .step_cost(self.hand, (&from.0.notes, &from.1.fingers), (&to.0.notes, &to.1.fingers), seconds)
                 .clamp(-crate::learned::LIMIT, crate::learned::LIMIT)
         });
         travel + SUBSTITUTION_COST * self.substitutions(from, to) as f32 + learned
     }
 
     fn substitutions(&self, from: (&Event, &Candidate), to: (&Event, &Candidate)) -> usize {
-        to.0
-            .ids
+        to.0.ids
             .iter()
             .enumerate()
             .filter(|(slot, id)| {
@@ -822,11 +776,7 @@ impl<'a> HandSolver<'a> {
 
     fn solve(&self, events: &[Event]) -> Solution {
         let all: Vec<Vec<Candidate>> = events.iter().map(|e| self.candidates(e)).collect();
-        let baselines: Vec<f32> = events
-            .iter()
-            .zip(&all)
-            .map(|(e, c)| self.baseline_strain(e, c))
-            .collect();
+        let baselines: Vec<f32> = events.iter().zip(&all).map(|(e, c)| self.baseline_strain(e, c)).collect();
 
         let n = events.len();
         if n == 1 {
@@ -865,7 +815,8 @@ impl<'a> HandSolver<'a> {
                 let pb = (&events[i - 1], &all[i - 1][b]);
                 for c in 0..cc {
                     let pc = (&events[i], &all[i][c]);
-                    let step = self.event_cost(i, &events[i], &all[i][c], baselines[i]) + self.move_cost(pb, pc);
+                    let step =
+                        self.event_cost(i, &events[i], &all[i][c], baselines[i]) + self.move_cost(pb, pc);
                     for a in 0..ca {
                         let previous = best[i - 1][a * cb + b];
                         if !previous.is_finite() {
@@ -998,9 +949,7 @@ impl<'a> HandSolver<'a> {
             let outcome = self.biomech.grip_outcome(&grip);
 
             let prev = i.checked_sub(1).map(|j| (&events[j], &all[j][chosen[j]]));
-            let next = events
-                .get(i + 1)
-                .map(|e| (e, &all[i + 1][chosen[i + 1]]));
+            let next = events.get(i + 1).map(|e| (e, &all[i + 1][chosen[i + 1]]));
             let (low, high) = self.outer(event, candidate);
             let window = Trigram {
                 hand: self.hand,
@@ -1016,18 +965,13 @@ impl<'a> HandSolver<'a> {
 
             let mut breakdown = self.event_breakdown(i, event, candidate, baselines[i]);
             breakdown.rules += self.window_cost(prev, (event, candidate), next);
-            breakdown.motion = prev
-                .map(|p| self.move_cost(p, (event, candidate)))
-                .unwrap_or(0.0);
+            breakdown.motion = prev.map(|p| self.move_cost(p, (event, candidate))).unwrap_or(0.0);
             if events.len() >= 2 {
-                let before = |back: usize| {
-                    i.checked_sub(back).map(|j| (&events[j], &all[j][chosen[j]]))
-                };
+                let before = |back: usize| i.checked_sub(back).map(|j| (&events[j], &all[j][chosen[j]]));
                 breakdown.prior = self.prior_cost(before(2), before(1), (event, candidate));
             }
 
-            let local =
-                |c: &Candidate| self.neighbourhood(events, all, baselines, chosen, i, c);
+            let local = |c: &Candidate| self.neighbourhood(events, all, baselines, chosen, i, c);
             let chosen_cost = local(candidate);
             let mut margin = f32::INFINITY;
             for (j, other) in all[i].iter().enumerate() {
@@ -1243,10 +1187,7 @@ mod tests {
         let plain = FingeringOptions::default();
         let prior = trained_prior();
         let with_model = FingeringOptions { prior_scale: 1.5, ..FingeringOptions::default() };
-        vec![
-            finger_score(score, &plain),
-            finger_score_with_prior(score, &with_model, Some(&prior)),
-        ]
+        vec![finger_score(score, &plain), finger_score_with_prior(score, &with_model, Some(&prior))]
     }
 
     #[test]
@@ -1287,11 +1228,7 @@ mod tests {
             .notes
             .iter()
             .enumerate()
-            .map(|(i, n)| Note {
-                id: NoteId((pitches.len() + i) as u32),
-                midi: n.midi + 12,
-                ..n.clone()
-            })
+            .map(|(i, n)| Note { id: NoteId((pitches.len() + i) as u32), midi: n.midi + 12, ..n.clone() })
             .collect();
         score.notes.extend(upper);
         score.finalise();
@@ -1462,18 +1399,13 @@ mod tests {
     fn a_two_octave_arpeggio_is_fingered_the_way_the_charts_print_it() {
         for (tonic, register) in [(0u8, 60u8), (5, 60), (7, 60), (3, 60)] {
             let base = tonic + register;
-            let up: Vec<u8> =
-                [0u8, 4, 7, 12, 16, 19, 24].iter().map(|step| base + step).collect();
+            let up: Vec<u8> = [0u8, 4, 7, 12, 16, 19, 24].iter().map(|step| base + step).collect();
             let mut pitches = up.clone();
             pitches.extend(up.iter().rev().skip(1));
 
             let score = melody(&pitches, Hand::Right, 0.5);
             let right = fingers_of(&score, &finger_score(&score, &FingeringOptions::default()));
-            assert_eq!(
-                right,
-                vec![1, 2, 3, 1, 2, 3, 5, 3, 2, 1, 3, 2, 1],
-                "right hand, arpeggio on {base}"
-            );
+            assert_eq!(right, vec![1, 2, 3, 1, 2, 3, 5, 3, 2, 1, 3, 2, 1], "right hand, arpeggio on {base}");
 
             let score = melody(&pitches, Hand::Left, 0.5);
             let left = fingers_of(&score, &finger_score(&score, &FingeringOptions::default()));

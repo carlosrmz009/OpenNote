@@ -19,7 +19,6 @@ pub use rules::{Placement, Rule, RuleCosts, RuleScorer, RuleSet, RuleWeights, Tr
 pub use solver::set_inner_threads;
 pub use solver::{
     finger_score, finger_score_consensus, finger_score_with_prior, Agreement, CostBreakdown,
-    FingeringOptions, FingeringPrior,
-    NoteExplanation, Solution, Step,
+    FingeringOptions, FingeringPrior, NoteExplanation, Solution, Step,
 };
 pub use spans::{Span, SpanModel, SpanTable};

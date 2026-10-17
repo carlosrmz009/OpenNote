@@ -1,5 +1,5 @@
-use on_hand::{Finger, Hand};
 use glam::{Quat, Vec3};
+use on_hand::{Finger, Hand};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoneRole {
@@ -17,10 +17,7 @@ pub struct RigBone {
 
 fn normalise(name: &str) -> String {
     let name = name.rsplit(':').next().unwrap_or(name);
-    name.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+    name.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
 }
 
 fn hand_of(normalised: &str) -> Option<Hand> {
@@ -97,11 +94,10 @@ pub fn classify(name: &str) -> Option<RigBone> {
     let normalised = normalise(name);
     let hand = hand_of(&normalised)?;
 
-    let is_hand_root = matches!(
-        normalised.as_str(),
-        "handl" | "handr" | "lefthand" | "righthand" | "wristl" | "wristr"
-    ) || normalised == "hand"
-        || normalised.ends_with("hand");
+    let is_hand_root =
+        matches!(normalised.as_str(), "handl" | "handr" | "lefthand" | "righthand" | "wristl" | "wristr")
+            || normalised == "hand"
+            || normalised.ends_with("hand");
 
     let Some(finger) = finger_of(&normalised) else {
         return is_hand_root.then_some(RigBone { hand, role: BoneRole::Wrist });
@@ -178,12 +174,7 @@ mod tests {
         let little_knuckle = Vec3::new(-32.0, 84.0, 8.0 * z);
         let middle_tip = Vec3::new(2.0, 170.0, 4.0 * z);
         let turn = |v: Vec3| pose * v;
-        (
-            turn(wrist),
-            turn(middle_tip),
-            turn(index_knuckle),
-            turn(little_knuckle),
-        )
+        (turn(wrist), turn(middle_tip), turn(index_knuckle), turn(little_knuckle))
     }
 
     #[test]
@@ -227,10 +218,7 @@ mod tests {
 
                 let correction = rest_correction(hand, wrist, tip, index, little).unwrap();
                 let placed = correction * (thumb - wrist);
-                assert!(
-                    placed.x > 0.0,
-                    "{hand:?}: the thumb came out at {placed:?}"
-                );
+                assert!(placed.x > 0.0, "{hand:?}: the thumb came out at {placed:?}");
             }
         }
     }
@@ -249,10 +237,7 @@ mod tests {
             role("RightThumbIntermediate"),
             Some(RigBone { hand: Hand::Right, role: BoneRole::Intermediate(Finger::Thumb) })
         );
-        assert_eq!(
-            role("LeftHand"),
-            Some(RigBone { hand: Hand::Left, role: BoneRole::Wrist })
-        );
+        assert_eq!(role("LeftHand"), Some(RigBone { hand: Hand::Left, role: BoneRole::Wrist }));
     }
 
     #[test]
@@ -265,10 +250,7 @@ mod tests {
             role("mixamorig:RightHandPinky3"),
             Some(RigBone { hand: Hand::Right, role: BoneRole::Distal(Finger::Little) })
         );
-        assert_eq!(
-            role("mixamorig:RightHand"),
-            Some(RigBone { hand: Hand::Right, role: BoneRole::Wrist })
-        );
+        assert_eq!(role("mixamorig:RightHand"), Some(RigBone { hand: Hand::Right, role: BoneRole::Wrist }));
     }
 
     #[test]
@@ -285,10 +267,7 @@ mod tests {
             role("thumb.02.L"),
             Some(RigBone { hand: Hand::Left, role: BoneRole::Intermediate(Finger::Thumb) })
         );
-        assert_eq!(
-            role("hand.R"),
-            Some(RigBone { hand: Hand::Right, role: BoneRole::Wrist })
-        );
+        assert_eq!(role("hand.R"), Some(RigBone { hand: Hand::Right, role: BoneRole::Wrist }));
     }
 
     #[test]
@@ -401,18 +380,10 @@ mod tests {
 
     #[test]
     fn the_correction_does_not_depend_on_which_hand_it_is_told() {
-        let landmarks = (
-            Vec3::ZERO,
-            Vec3::new(0.0, 180.0, 6.0),
-            Vec3::new(30.0, 85.0, 4.0),
-            Vec3::new(-30.0, 70.0, 4.0),
-        );
-        let right =
-            rest_correction(Hand::Right, landmarks.0, landmarks.1, landmarks.2, landmarks.3)
-                .unwrap();
-        let left =
-            rest_correction(Hand::Left, landmarks.0, landmarks.1, landmarks.2, landmarks.3)
-                .unwrap();
+        let landmarks =
+            (Vec3::ZERO, Vec3::new(0.0, 180.0, 6.0), Vec3::new(30.0, 85.0, 4.0), Vec3::new(-30.0, 70.0, 4.0));
+        let right = rest_correction(Hand::Right, landmarks.0, landmarks.1, landmarks.2, landmarks.3).unwrap();
+        let left = rest_correction(Hand::Left, landmarks.0, landmarks.1, landmarks.2, landmarks.3).unwrap();
         assert!((right * Vec3::X - left * Vec3::X).length() < 1e-4);
         assert!((right * Vec3::Y - left * Vec3::Y).length() < 1e-4);
     }

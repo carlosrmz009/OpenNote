@@ -113,7 +113,12 @@ pub struct Span {
 
 impl From<Interval> for Span {
     fn from(i: Interval) -> Self {
-        Span { point: i.point * 100.0, low: i.low * 100.0, high: i.high * 100.0, real: i.low > 0.0 || i.high < 0.0 }
+        Span {
+            point: i.point * 100.0,
+            low: i.low * 100.0,
+            high: i.high * 100.0,
+            real: i.low > 0.0 || i.high < 0.0,
+        }
     }
 }
 
@@ -161,12 +166,20 @@ fn human_comfort(pieces: &[Piece], options: &FingeringOptions) -> Playability {
     use on_fingering::playability::{measure, Chord, CHORD_SECONDS};
     let mut total = Playability::default();
     for piece in pieces {
-        for (label, hand) in [(crate::corpus::HandLabel::Left, on_hand::Hand::Left), (crate::corpus::HandLabel::Right, on_hand::Hand::Right)] {
+        for (label, hand) in [
+            (crate::corpus::HandLabel::Left, on_hand::Hand::Left),
+            (crate::corpus::HandLabel::Right, on_hand::Hand::Right),
+        ] {
             let mut notes: Vec<(f64, on_fingering::Placement)> = piece
                 .notes
                 .iter()
                 .filter(|n| n.hand == label)
-                .filter_map(|n| Some((n.onset, on_fingering::Placement::new(n.midi, on_hand::Finger::from_number(n.finger?)?))))
+                .filter_map(|n| {
+                    Some((
+                        n.onset,
+                        on_fingering::Placement::new(n.midi, on_hand::Finger::from_number(n.finger?)?),
+                    ))
+                })
                 .collect();
             notes.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.midi.cmp(&b.1.midi)));
             let mut chords: Vec<Chord> = Vec::new();
@@ -210,7 +223,13 @@ pub fn probe(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn Fi
         let Some(plain) = crate::eval::solve(piece, options, prior) else { continue };
         let low = piece.notes.iter().map(|n| n.midi).min().unwrap_or(60);
         let high = piece.notes.iter().map(|n| n.midi).max().unwrap_or(60);
-        let shift: i16 = if high <= 84 { 12 } else if low >= 36 { -12 } else { 0 };
+        let shift: i16 = if high <= 84 {
+            12
+        } else if low >= 36 {
+            -12
+        } else {
+            0
+        };
         if shift != 0 {
             let mut moved = (*piece).clone();
             for n in &mut moved.notes {
@@ -278,7 +297,12 @@ pub fn excerpts_json(model: Option<String>, excerpts: &[Excerpt]) -> Result<Stri
 const EXCERPT_NOTES: usize = 32;
 const EXCERPT_DIFFERENCES: usize = 3;
 
-pub fn excerpts(manifest: &Manifest, options: &FingeringOptions, prior: &dyn FingeringPrior, count: usize) -> Result<Vec<Excerpt>> {
+pub fn excerpts(
+    manifest: &Manifest,
+    options: &FingeringOptions,
+    prior: &dyn FingeringPrior,
+    count: usize,
+) -> Result<Vec<Excerpt>> {
     let mut rules_only = options.clone();
     rules_only.prior_scale = 0.0;
     let mut out = Vec::new();
@@ -312,18 +336,40 @@ pub fn excerpts(manifest: &Manifest, options: &FingeringOptions, prior: &dyn Fin
             for (label, other) in others {
                 let best = (0..piece.notes.len().saturating_sub(EXCERPT_NOTES - 1))
                     .step_by(EXCERPT_NOTES / 4)
-                    .filter(|&i| other[i..i + EXCERPT_NOTES].iter().filter(|f| f.is_some()).count() >= EXCERPT_NOTES * 9 / 10)
-                    .map(|i| (model[i..i + EXCERPT_NOTES].iter().zip(&other[i..i + EXCERPT_NOTES]).filter(|(a, b)| b.is_some() && a != b).count(), i))
+                    .filter(|&i| {
+                        other[i..i + EXCERPT_NOTES].iter().filter(|f| f.is_some()).count()
+                            >= EXCERPT_NOTES * 9 / 10
+                    })
+                    .map(|i| {
+                        (
+                            model[i..i + EXCERPT_NOTES]
+                                .iter()
+                                .zip(&other[i..i + EXCERPT_NOTES])
+                                .filter(|(a, b)| b.is_some() && a != b)
+                                .count(),
+                            i,
+                        )
+                    })
                     .max();
                 let Some((differences, at)) = best else { continue };
                 if differences < EXCERPT_DIFFERENCES {
                     continue;
                 }
                 let range = at..at + EXCERPT_NOTES;
-                let notes = piece.notes[range.clone()].iter().map(|n| crate::corpus::FingeredNote { finger: None, ..*n }).collect();
-                let fingerings = BTreeMap::from([("model".to_string(), model[range.clone()].to_vec()), (label.to_string(), other[range].to_vec())]);
+                let notes = piece.notes[range.clone()]
+                    .iter()
+                    .map(|n| crate::corpus::FingeredNote { finger: None, ..*n })
+                    .collect();
+                let fingerings = BTreeMap::from([
+                    ("model".to_string(), model[range.clone()].to_vec()),
+                    (label.to_string(), other[range].to_vec()),
+                ]);
                 out.push(Excerpt { tier: spec.id.clone(), piece: piece.piece.clone(), notes, fingerings });
-                if label == "rules" { against_rules += 1 } else { against_people += 1 }
+                if label == "rules" {
+                    against_rules += 1
+                } else {
+                    against_people += 1
+                }
             }
         }
     }
@@ -349,7 +395,8 @@ impl Manifest {
     fn groups(&self) -> Result<HashMap<String, String>> {
         let mut groups = HashMap::new();
         if let Some(path) = &self.groups {
-            let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let text =
+                std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
             for line in text.lines() {
                 let mut fields = line.trim_start_matches('\u{feff}').split('\t');
                 if let (Some(piece), Some(group)) = (fields.next(), fields.next()) {
@@ -383,8 +430,13 @@ fn measure(
                             continue;
                         }
                         let solution = on_fingering::finger_score_with_prior(&score, options, prior);
-                        comfort.add(on_fingering::measure_solution(&score, &solution, options.span_model.table()));
-                        let chosen: HashMap<_, u8> = solution.fingerings.iter().map(|f| (f.note, f.finger.number())).collect();
+                        comfort.add(on_fingering::measure_solution(
+                            &score,
+                            &solution,
+                            options.span_model.table(),
+                        ));
+                        let chosen: HashMap<_, u8> =
+                            solution.fingerings.iter().map(|f| (f.note, f.finger.number())).collect();
                         let ours: Vec<Option<u8>> = keys.iter().map(|id| chosen.get(id).copied()).collect();
                         if let Some(r) = rate_against(&first.piece, &ours, annotations) {
                             rates.push(r);
@@ -444,7 +496,8 @@ pub fn run(
         let mut elapsed = started.elapsed();
         crate::eval::assign_groups(&mut rules, &groups);
         let notes: usize = rules.iter().map(|r| r.soft.1).sum();
-        let group_count = rules.iter().map(|r| r.group.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+        let group_count =
+            rules.iter().map(|r| r.group.as_str()).collect::<std::collections::BTreeSet<_>>().len();
         let human = {
             let reference = human_reference(&pieces);
             (!reference.is_empty()).then(|| Rates::from(combine(&reference)))
@@ -473,7 +526,10 @@ pub fn run(
             }
         };
         let judged = |rates: &[PieceRates]| {
-            let mut w: Vec<(String, f32)> = rates.iter().map(|r| (r.name.clone(), combine(std::slice::from_ref(r)).general * 100.0)).collect();
+            let mut w: Vec<(String, f32)> = rates
+                .iter()
+                .map(|r| (r.name.clone(), combine(std::slice::from_ref(r)).general * 100.0))
+                .collect();
             w.sort_by(|a, b| a.1.total_cmp(&b.1));
             w.truncate(10);
             w
@@ -490,7 +546,8 @@ pub fn run(
             Some(prior) => probe(&pieces, options, Some(prior)),
             None => probe(&pieces, &rules_only, None),
         });
-        let ms_per_1000_notes = (elapsed.as_secs_f64() * 1000.0 * threads as f64 / (notes.max(1) as f64 / 1000.0)) as f32;
+        let ms_per_1000_notes =
+            (elapsed.as_secs_f64() * 1000.0 * threads as f64 / (notes.max(1) as f64 / 1000.0)) as f32;
         tiers.push(TierCard {
             id: spec.id.clone(),
             title: spec.title.clone(),
@@ -526,7 +583,12 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
     let mut gated = None;
     for t in tiers {
         if !t.gate_failures.is_empty() {
-            gated = Some(format!("{}: {} must-pass pieces wrong (first: {})", t.id, t.gate_failures.len(), t.gate_failures[0]));
+            gated = Some(format!(
+                "{}: {} must-pass pieces wrong (first: {})",
+                t.id,
+                t.gate_failures.len(),
+                t.gate_failures[0]
+            ));
             break;
         }
         let added = comfort_of(t).unplayable_count.saturating_sub(t.comfort_rules.unplayable_count);
@@ -561,9 +623,14 @@ pub fn headline(tiers: &[TierCard]) -> Headline {
         let r = judged(t);
         agreement(Rates { general: r.recombined, ..r })
     };
-    let written: Vec<f32> = [find("T4").map(|t| agreement(judged(t))), find("T5").map(stitched)].into_iter().flatten().collect();
+    let written: Vec<f32> =
+        [find("T4").map(|t| agreement(judged(t))), find("T5").map(stitched)].into_iter().flatten().collect();
     if !written.is_empty() {
-        components.push(("written agreement".to_string(), written.iter().sum::<f32>() / written.len() as f32, 0.10));
+        components.push((
+            "written agreement".to_string(),
+            written.iter().sum::<f32>() / written.len() as f32,
+            0.10,
+        ));
     }
     let probed: Vec<f32> = tiers.iter().filter_map(|t| t.probes.map(|p| p.score())).collect();
     if !probed.is_empty() {
@@ -589,7 +656,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("data.jsonl");
         std::fs::write(&file, "one").unwrap();
-        let mut manifest = Manifest { name: "t".into(), tiers: vec![], groups: None, hashes: BTreeMap::new() };
+        let mut manifest =
+            Manifest { name: "t".into(), tiers: vec![], groups: None, hashes: BTreeMap::new() };
         manifest.hashes.insert(file.clone(), hash_file(&file).unwrap());
         assert!(manifest.verify().is_ok());
         std::fs::write(&file, "two").unwrap();
@@ -599,13 +667,35 @@ mod tests {
     fn card(id: &str, general: f32, ngram: f32) -> TierCard {
         let rates = Rates { general, highest: general, soft: general, recombined: general, ngram };
         let comfort = Comfort {
-            unplayable: 0.0, unplayable_count: 0, hand_moves: 25.0, travel_mm: 25.0, stretched: 4.0, thumb_unders: 3.0, finger_overs: 3.0,
-            thumbless: 0.1, step_spread: 2.0, chord_spread: 2.0, weak_on_black: 1.0,
+            unplayable: 0.0,
+            unplayable_count: 0,
+            hand_moves: 25.0,
+            travel_mm: 25.0,
+            stretched: 4.0,
+            thumb_unders: 3.0,
+            finger_overs: 3.0,
+            thumbless: 0.1,
+            step_spread: 2.0,
+            chord_spread: 2.0,
+            weak_on_black: 1.0,
         };
         TierCard {
-            id: id.into(), title: id.into(), pieces: 1, groups: 1, notes: 1, rules: rates, model: None, gain: None,
-            human: None, comfort_rules: comfort, comfort_model: None, comfort_human: comfort, gate_failures: vec![],
-            probes: None, ms_per_1000_notes: 0.0, weakest: vec![],
+            id: id.into(),
+            title: id.into(),
+            pieces: 1,
+            groups: 1,
+            notes: 1,
+            rules: rates,
+            model: None,
+            gain: None,
+            human: None,
+            comfort_rules: comfort,
+            comfort_model: None,
+            comfort_human: comfort,
+            gate_failures: vec![],
+            probes: None,
+            ms_per_1000_notes: 0.0,
+            weakest: vec![],
         }
     }
 
@@ -615,7 +705,11 @@ mod tests {
         let fine = headline(&tiers);
         assert!(fine.score.is_some() && fine.gated.is_none(), "{fine:?}");
         assert_eq!(fine.label, "v2-pre", "no tier with several references");
-        assert_eq!(headline(&[card("T2-dev", 60.0, 30.0)]).label, "v2", "several pianists stand in for experts");
+        assert_eq!(
+            headline(&[card("T2-dev", 60.0, 30.0)]).label,
+            "v2",
+            "several pianists stand in for experts"
+        );
         let written = headline(&[card("T4-dev", 50.0, 20.0), card("T5-dev", 70.0, 40.0)]);
         assert_eq!(written.components.len(), 1, "one editor and several editions share the written weight");
         assert!(written.components[0].1 > headline(&[card("T4-dev", 50.0, 20.0)]).components[0].1);

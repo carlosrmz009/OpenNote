@@ -42,18 +42,14 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
     let mut document =
         on_score::Document::open(path).with_context(|| format!("reading {}", path.display()))?;
 
-    let assignment = HandAssignment {
-        profile: settings.fingering.profile.clone(),
-        ..Default::default()
-    };
+    let assignment = HandAssignment { profile: settings.fingering.profile.clone(), ..Default::default() };
     on_score::assign_hands(document.score_mut(), &assignment);
 
     let score = document.score();
     let prior = settings.prior.as_deref().map(|p| p as &dyn on_fingering::FingeringPrior);
     let solution = on_fingering::finger_score_with_prior(score, &settings.fingering, prior);
     let performed = on_score::expression::perform(score, &settings.mood, settings.expression);
-    let mut timeline =
-        Timeline::build_for(&performed, &solution.fingerings, &settings.fingering.profile);
+    let mut timeline = Timeline::build_for(&performed, &solution.fingerings, &settings.fingering.profile);
     let scale = |of: f32| 1.0 + (of - 1.0) * settings.expression.min(2.0);
     timeline.style = crate::timeline::MotionStyle {
         lift: scale(settings.mood.lift),
@@ -64,10 +60,7 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
             .collect(),
     };
     if timeline.title.is_none() {
-        timeline.title = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned);
+        timeline.title = path.file_stem().and_then(|name| name.to_str()).map(str::to_owned);
     }
 
     let mut layout = Layout::for_pitches(score.notes.iter().map(|n| n.midi), settings.extent);
@@ -75,24 +68,12 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
 
     let assets = settings.assets_root.clone();
     let hands = hands_available(&assets);
-    let soundfont = settings
-        .soundfont
-        .clone()
-        .or_else(|| on_audio::sampled::find(&assets));
-    Ok(Performance::new(
-        timeline,
-        layout,
-        settings.fingering.profile.clone(),
-        assets,
-        hands,
-        soundfont,
-    ))
+    let soundfont = settings.soundfont.clone().or_else(|| on_audio::sampled::find(&assets));
+    Ok(Performance::new(timeline, layout, settings.fingering.profile.clone(), assets, hands, soundfont))
 }
 
 pub fn hands_available(assets: &Path) -> bool {
-    ["hand-left.glb", "hand-right.glb"]
-        .iter()
-        .all(|name| assets.join("hands").join(name).exists())
+    ["hand-left.glb", "hand-right.glb"].iter().all(|name| assets.join("hands").join(name).exists())
 }
 
 pub fn assets_root(candidate: Option<PathBuf>) -> Result<PathBuf> {
@@ -103,12 +84,7 @@ pub fn assets_root(candidate: Option<PathBuf>) -> Result<PathBuf> {
 
     let mut tried = vec![PathBuf::from("assets")];
     if let Ok(exe) = std::env::current_exe() {
-        tried.extend(
-            exe.ancestors()
-                .skip(1)
-                .take(4)
-                .map(|directory| directory.join("assets")),
-        );
+        tried.extend(exe.ancestors().skip(1).take(4).map(|directory| directory.join("assets")));
     }
     for path in &tried {
         if let Ok(found) = std::fs::canonicalize(path) {
@@ -120,10 +96,6 @@ pub fn assets_root(candidate: Option<PathBuf>) -> Result<PathBuf> {
     anyhow::bail!(
         "could not find an assets directory. Looked in:\n{}\n\
          Run from the repository root, or point at it with --assets.",
-        tried
-            .iter()
-            .map(|p| format!("  {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        tried.iter().map(|p| format!("  {}", p.display())).collect::<Vec<_>>().join("\n")
     )
 }

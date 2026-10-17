@@ -31,10 +31,7 @@ fn score_of(velocity: u8) -> Score {
 
 fn main() {
     println!("Height through one strike of a repeated note, in millimetres.\n");
-    println!(
-        "{:>8}  {:>17}  {:>17}  {:>17}",
-        "", "fingertip height", "wrist height", "seen from above"
-    );
+    println!("{:>8}  {:>17}  {:>17}  {:>17}", "", "fingertip height", "wrist height", "seen from above");
     println!(
         "{:>8}  {:>8}{:>9}  {:>8}{:>9}  {:>8}{:>9}",
         "time", "quiet", "loud", "quiet", "loud", "quiet", "loud"
@@ -44,16 +41,11 @@ fn main() {
     let mut seen = (0.0f32, 0.0f32);
     let measure = |velocity: u8, at: f64| -> (f32, f32, f32) {
         let score = score_of(velocity);
-        let fingerings: Vec<Fingering> = (0..4)
-            .map(|i| Fingering { note: NoteId(i), finger: Finger::Middle, substitute: None })
-            .collect();
+        let fingerings: Vec<Fingering> =
+            (0..4).map(|i| Fingering { note: NoteId(i), finger: Finger::Middle, substitute: None }).collect();
         let timeline = Timeline::build(&score, &fingerings);
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, Default::default());
-        let animator = HandAnimator::new(
-            Hand::Right,
-            model,
-            timeline.hand_grips(Hand::Right).to_vec(),
-        );
+        let animator = HandAnimator::new(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec());
         let pose = animator.pose_at(at);
         let posture = animator.skeleton().forward(&pose);
         let tip = posture.chain[Finger::Middle.index()][3];
@@ -84,18 +76,9 @@ fn main() {
         );
         t += 0.03;
     }
-    println!(
-        "\n  highest the tip gets:   quiet {:.1} mm, loud {:.1} mm",
-        peak.0, peak.1
-    );
-    println!(
-        "  deepest the wrist sinks: quiet {:.2} mm, loud {:.2} mm",
-        sink.0, sink.1
-    );
-    println!(
-        "  most the hand shortens on screen: quiet {:.2} mm, loud {:.2} mm",
-        seen.0, seen.1
-    );
+    println!("\n  highest the tip gets:   quiet {:.1} mm, loud {:.1} mm", peak.0, peak.1);
+    println!("  deepest the wrist sinks: quiet {:.2} mm, loud {:.2} mm", sink.0, sink.1);
+    println!("  most the hand shortens on screen: quiet {:.2} mm, loud {:.2} mm", seen.0, seen.1);
     println!("  (a key travels 10 mm when it is pressed, and a white key is 23.5 mm wide)");
     let _ = Grip::new(vec![(60, Finger::Middle)]);
 }

@@ -12,12 +12,7 @@ fn main() -> anyhow::Result<()> {
     let mut hist: BTreeMap<usize, usize> = BTreeMap::new();
 
     for hand in Hand::ALL {
-        let pitches: Vec<u8> = score
-            .notes
-            .iter()
-            .filter(|n| n.hand == Some(hand))
-            .map(|n| n.midi)
-            .collect();
+        let pitches: Vec<u8> = score.notes.iter().filter(|n| n.hand == Some(hand)).map(|n| n.midi).collect();
         let mut i = 0;
         while i < pitches.len() {
             let mut end = i + 1;
@@ -25,8 +20,14 @@ fn main() -> anyhow::Result<()> {
             let mut prev = pitches[i];
             while end < pitches.len() {
                 let step = pitches[end] as i32 - prev as i32;
-                if !(1..=2).contains(&step.abs()) { break; }
-                if dir == 0 { dir = step.signum(); } else if step.signum() != dir { break; }
+                if !(1..=2).contains(&step.abs()) {
+                    break;
+                }
+                if dir == 0 {
+                    dir = step.signum();
+                } else if step.signum() != dir {
+                    break;
+                }
                 prev = pitches[end];
                 end += 1;
             }

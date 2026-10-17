@@ -32,8 +32,7 @@ const REST_GAP: f32 = 0.0;
 
 fn rest_flexion_gap(pair: usize) -> f32 {
     let total = |slot: usize| {
-        LIMITS[dof::finger(slot) + dof::MCP_FLEX].neutral
-            + LIMITS[dof::finger(slot) + dof::PIP_FLEX].neutral
+        LIMITS[dof::finger(slot) + dof::MCP_FLEX].neutral + LIMITS[dof::finger(slot) + dof::PIP_FLEX].neutral
     };
     total(pair) - total(pair + 1)
 }
@@ -76,10 +75,7 @@ impl Strain {
             ("thumb opposition", self.thumb_opposition),
             ("hand carriage", self.carriage),
         ];
-        items
-            .into_iter()
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .unwrap_or(("none", 0.0))
+        items.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or(("none", 0.0))
     }
 }
 
@@ -146,8 +142,7 @@ pub fn strain_breakdown(sk: &Skeleton, posture: &Posture, w: &StrainWeights) -> 
         let gap = finger_direction(pose, pair) - finger_direction(pose, pair + 1) - REST_GAP;
         s.spread += w.spread * gap * gap;
 
-        let diff =
-            finger_flexion(pose, pair) - finger_flexion(pose, pair + 1) - rest_flexion_gap(pair);
+        let diff = finger_flexion(pose, pair) - finger_flexion(pose, pair + 1) - rest_flexion_gap(pair);
         s.tendon_coupling += w.tendon_coupling * COUPLING[pair] * diff * diff;
     }
 
@@ -200,10 +195,7 @@ pub fn strain_residuals(
             let toward_max = (LIMITS[i].max - settled) < (settled - LIMITS[i].min);
             let slope = if toward_max { 1.0 } else { -1.0 } / (BARRIER_MARGIN * range);
             let k = w.limit_barrier.sqrt();
-            out.push(StrainResidual {
-                value: k * b,
-                grad: [(i, k * slope), NO_GRAD, NO_GRAD, NO_GRAD],
-            });
+            out.push(StrainResidual { value: k * b, grad: [(i, k * slope), NO_GRAD, NO_GRAD, NO_GRAD] });
         }
     }
 
@@ -217,16 +209,9 @@ pub fn strain_residuals(
         });
 
         let k = (w.tendon_coupling * COUPLING[pair]).sqrt();
-        let (a_mcp, a_pip) = (
-            dof::finger(pair) + dof::MCP_FLEX,
-            dof::finger(pair) + dof::PIP_FLEX,
-        );
-        let (b_mcp, b_pip) = (
-            dof::finger(pair + 1) + dof::MCP_FLEX,
-            dof::finger(pair + 1) + dof::PIP_FLEX,
-        );
-        let diff = finger_flexion(pose, pair) - finger_flexion(pose, pair + 1)
-            - rest_flexion_gap(pair);
+        let (a_mcp, a_pip) = (dof::finger(pair) + dof::MCP_FLEX, dof::finger(pair) + dof::PIP_FLEX);
+        let (b_mcp, b_pip) = (dof::finger(pair + 1) + dof::MCP_FLEX, dof::finger(pair + 1) + dof::PIP_FLEX);
+        let diff = finger_flexion(pose, pair) - finger_flexion(pose, pair + 1) - rest_flexion_gap(pair);
         out.push(StrainResidual {
             value: k * diff,
             grad: [(a_mcp, k), (a_pip, k), (b_mcp, -k), (b_pip, -k)],
@@ -312,10 +297,7 @@ mod tests {
         let home = home_x(&sk);
         let here = at(home);
         let across = at(home - 500.0);
-        assert!(
-            across > here + 0.05,
-            "reaching across the body should cost more: {across} against {here}"
-        );
+        assert!(across > here + 0.05, "reaching across the body should cost more: {across} against {here}");
 
         let left = Skeleton::new(HandProfile::default(), Hand::Left);
         let left_at = |x: f32| {
@@ -397,10 +379,7 @@ mod tests {
         sum += carriage_residuals(&w, &p).iter().map(|r| r.value * r.value).sum::<f32>();
 
         let direct = strain(&sk, &sk.forward(&p), &w);
-        assert!(
-            (sum - direct).abs() < 5e-3 * direct.max(1.0),
-            "residual sum {sum} vs direct {direct}"
-        );
+        assert!((sum - direct).abs() < 5e-3 * direct.max(1.0), "residual sum {sum} vs direct {direct}");
     }
 
     #[test]

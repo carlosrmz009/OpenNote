@@ -47,7 +47,13 @@ fn percentiles(mut values: Vec<f32>) -> String {
     }
     values.sort_by(f32::total_cmp);
     let at = |p: f64| values[((values.len() - 1) as f64 * p) as usize];
-    format!("p50 {:8.0}  p95 {:8.0}  p99 {:8.0}  max {:8.0}", at(0.5), at(0.95), at(0.99), values[values.len() - 1])
+    format!(
+        "p50 {:8.0}  p95 {:8.0}  p99 {:8.0}  max {:8.0}",
+        at(0.5),
+        at(0.95),
+        at(0.99),
+        values[values.len() - 1]
+    )
 }
 
 const STRAY_MM: f32 = 1.5;
@@ -133,7 +139,8 @@ fn main() -> anyhow::Result<()> {
 
     if std::env::var("ON_PHRASES").is_ok() {
         let phrases = on_score::expression::phrases(score);
-        let lengths: Vec<f64> = phrases.iter().map(|(a, b)| score.tempo.seconds_at(*b) - score.tempo.seconds_at(*a)).collect();
+        let lengths: Vec<f64> =
+            phrases.iter().map(|(a, b)| score.tempo.seconds_at(*b) - score.tempo.seconds_at(*a)).collect();
         let short = lengths.iter().filter(|l| **l < 2.0).count();
         println!("  {} phrases, {} shorter than 2 s, median {:.1} s", phrases.len(), short, {
             let mut l = lengths.clone();
@@ -168,8 +175,15 @@ fn main() -> anyhow::Result<()> {
         let posed = poses(&animators, at);
         for side in 0..2 {
             let raw = animators[side].unpressed(at);
-            let deg = |q: &HandPose| -> Vec<String> { (6..on_hand::skeleton::DOF).map(|i| format!("{:.0}", q.q[i].to_degrees())).collect() };
-            println!("{:?} shown  thumb {:?} | index/middle/ring/little (mcp spread pip) {:?}", Hand::ALL[side], &deg(&posed[side])[..4], &deg(&posed[side])[4..]);
+            let deg = |q: &HandPose| -> Vec<String> {
+                (6..on_hand::skeleton::DOF).map(|i| format!("{:.0}", q.q[i].to_degrees())).collect()
+            };
+            println!(
+                "{:?} shown  thumb {:?} | index/middle/ring/little (mcp spread pip) {:?}",
+                Hand::ALL[side],
+                &deg(&posed[side])[..4],
+                &deg(&posed[side])[4..]
+            );
             println!("{:?} planned thumb {:?} | {:?}", Hand::ALL[side], &deg(&raw)[..4], &deg(&raw)[4..]);
         }
         return Ok(());
@@ -186,11 +200,21 @@ fn main() -> anyhow::Result<()> {
         let reach = 0.5 * (to - from);
         for hand in Hand::ALL {
             for e in timeline.hand_grips(hand).iter().filter(|e| (e.time - at).abs() < reach) {
-                println!("{hand:?} {:.3} until {:.3} {:?} struck {:?}", e.time, e.release, e.grip.keys, e.struck);
+                println!(
+                    "{hand:?} {:.3} until {:.3} {:?} struck {:?}",
+                    e.time, e.release, e.grip.keys, e.struck
+                );
             }
         }
-        for n in timeline.notes.iter().filter(|n| (n.start - at).abs() < reach && std::env::var("ON_NOTES").is_ok()) {
-            println!("note {:?} {} {:?} {:.3}-{:.3} key {:.3}..{:.3}", n.hand, n.midi, n.finger, n.start, n.end, n.key_moves, n.key_rises);
+        for n in timeline
+            .notes
+            .iter()
+            .filter(|n| (n.start - at).abs() < reach && std::env::var("ON_NOTES").is_ok())
+        {
+            println!(
+                "note {:?} {} {:?} {:.3}-{:.3} key {:.3}..{:.3}",
+                n.hand, n.midi, n.finger, n.start, n.end, n.key_moves, n.key_rises
+            );
         }
         return Ok(());
     }
@@ -203,7 +227,13 @@ fn main() -> anyhow::Result<()> {
             for side in 0..2 {
                 let joints = animators[side].joints(&posed[side]);
                 let tips: Vec<String> = (0..5).map(|f| format!("{:5.1}", joints[1 + 4 * f + 3].z)).collect();
-                print!("{at:8.3} {:?} wrist z {:5.1} flex {:5.1}  tips z {}   ", Hand::ALL[side], posed[side].q[dof::WRIST_Z], posed[side].q[dof::WRIST_FLEXION].to_degrees(), tips.join(" "));
+                print!(
+                    "{at:8.3} {:?} wrist z {:5.1} flex {:5.1}  tips z {}   ",
+                    Hand::ALL[side],
+                    posed[side].q[dof::WRIST_Z],
+                    posed[side].q[dof::WRIST_FLEXION].to_degrees(),
+                    tips.join(" ")
+                );
             }
             println!();
             at += 0.02;
@@ -215,11 +245,19 @@ fn main() -> anyhow::Result<()> {
         let mut last = f64::NEG_INFINITY;
         while at <= timeline.duration {
             let posed = poses(&animators, at);
-            let tips = |side: usize| -> Vec<f32> { (0..5).map(|f| animators[side].joints(&posed[side])[1 + 4 * f + 3].x).collect() };
+            let tips = |side: usize| -> Vec<f32> {
+                (0..5).map(|f| animators[side].joints(&posed[side])[1 + 4 * f + 3].x).collect()
+            };
             let (left, right) = (tips(0), tips(1));
-            let gap = right.iter().copied().fold(f32::INFINITY, f32::min) - left.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let gap = right.iter().copied().fold(f32::INFINITY, f32::min)
+                - left.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             if gap < 0.0 && at - last > 0.5 {
-                println!("{at:8.2}s crossed by {:.0} mm  left tips x {:?}  right tips x {:?}", -gap, left.iter().map(|x| x.round()).collect::<Vec<_>>(), right.iter().map(|x| x.round()).collect::<Vec<_>>());
+                println!(
+                    "{at:8.2}s crossed by {:.0} mm  left tips x {:?}  right tips x {:?}",
+                    -gap,
+                    left.iter().map(|x| x.round()).collect::<Vec<_>>(),
+                    right.iter().map(|x| x.round()).collect::<Vec<_>>()
+                );
                 last = at;
             }
             at += 0.02;
@@ -236,7 +274,15 @@ fn main() -> anyhow::Result<()> {
                 .map(|side| {
                     let raw = animators[side].pose_at(at).wrist_position();
                     let shown = decided[side].wrist_position();
-                    format!("{:7.1} {:6.1} {:5.1} | {:+5.1} {:+5.1} {:+5.1}", shown.x, shown.y, shown.z, shown.x - raw.x, shown.y - raw.y, shown.z - raw.z)
+                    format!(
+                        "{:7.1} {:6.1} {:5.1} | {:+5.1} {:+5.1} {:+5.1}",
+                        shown.x,
+                        shown.y,
+                        shown.z,
+                        shown.x - raw.x,
+                        shown.y - raw.y,
+                        shown.z - raw.z
+                    )
                 })
                 .collect();
             println!("{at:8.3}  L {}   R {}", line[0], line[1]);
@@ -284,7 +330,8 @@ fn main() -> anyhow::Result<()> {
             animators[Hand::Left as usize].joints(&animators[Hand::Left as usize].pose_at(at)),
             animators[Hand::Right as usize].joints(&animators[Hand::Right as usize].pose_at(at)),
         ];
-        let correction = [0, 1].map(|side| now[side].iter().zip(&alone[side]).map(|(a, b)| *a - *b).collect::<Vec<_>>());
+        let correction =
+            [0, 1].map(|side| now[side].iter().zip(&alone[side]).map(|(a, b)| *a - *b).collect::<Vec<_>>());
         if let [.., two_ago, one_ago] = corrections.as_slice() {
             for hand in Hand::ALL {
                 let side = hand as usize;
@@ -325,7 +372,11 @@ fn main() -> anyhow::Result<()> {
         if let Some(before) = &previous {
             for hand in Hand::ALL {
                 let side = hand as usize;
-                let moved = before[side].iter().zip(&now[side]).map(|(was, is)| was.distance(*is)).fold(0.0f32, f32::max);
+                let moved = before[side]
+                    .iter()
+                    .zip(&now[side])
+                    .map(|(was, is)| was.distance(*is))
+                    .fold(0.0f32, f32::max);
                 every.push(moved);
                 if moved > budget {
                     jumps.push((at, hand, moved));
@@ -360,7 +411,8 @@ fn main() -> anyhow::Result<()> {
                 let tip = joints[side][1 + 4 * finger.index() + 3];
                 let under = key_under(&keyboard, tip);
                 let stray = under.and_then(|midi| {
-                    let (top, dip) = if is_black(midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
+                    let (top, dip) =
+                        if is_black(midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
                     let surface = top - keys.depth_of(midi) * dip;
                     let into = surface - tip.z;
                     (into > STRAY_MM && keys.depth_of(midi) < 0.05).then_some((midi, into))
@@ -383,7 +435,8 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
             let tip = joints[note.hand as usize][1 + 4 * finger.index() + 3];
-            let (surface, dip) = if is_black(note.midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
+            let (surface, dip) =
+                if is_black(note.midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
             let half = if is_black(note.midi) { 13.7 / 2.0 } else { 23.5 / 2.0 };
             let across = ((tip.x - keyboard.centre_x(note.midi)).abs() - half).max(0.0);
             let down = (tip.z - (surface - depth * dip)).abs();
@@ -394,26 +447,41 @@ fn main() -> anyhow::Result<()> {
     println!("{path}");
     let own = |t: f64, hand: Hand, finger: on_hand::Finger, midi: u8, early: bool| {
         timeline.notes.iter().any(|n| {
-            n.hand == hand && n.finger == Some(finger) && n.midi == midi && if early {
-                n.key_moves >= t - 0.01 && n.key_moves <= t + 0.08
-            } else {
-                n.key_rises <= t && n.key_rises >= t - 0.25
-            }
+            n.hand == hand
+                && n.finger == Some(finger)
+                && n.midi == midi
+                && if early {
+                    n.key_moves >= t - 0.01 && n.key_moves <= t + 0.08
+                } else {
+                    n.key_rises <= t && n.key_rises >= t - 0.25
+                }
         })
     };
     let early = strays.iter().filter(|s| own(s.0, s.1, s.2, s.3, true)).count();
-    let late = strays.iter().filter(|s| !own(s.0, s.1, s.2, s.3, true) && own(s.0, s.1, s.2, s.3, false)).count();
-    let strays: Vec<_> = strays.into_iter().filter(|s| !own(s.0, s.1, s.2, s.3, true) && !own(s.0, s.1, s.2, s.3, false)).collect();
+    let late =
+        strays.iter().filter(|s| !own(s.0, s.1, s.2, s.3, true) && own(s.0, s.1, s.2, s.3, false)).count();
+    let strays: Vec<_> = strays
+        .into_iter()
+        .filter(|s| !own(s.0, s.1, s.2, s.3, true) && !own(s.0, s.1, s.2, s.3, false))
+        .collect();
     println!("  stray touches (a finger pushing a key nobody is playing): {}  (+{early} early on its own key, {late} late off it)", strays.len());
-    for (t, hand, finger, midi, into) in strays.iter().take(if std::env::var("ON_STRAYS").is_ok() { 40 } else { 0 }) {
+    for (t, hand, finger, midi, into) in
+        strays.iter().take(if std::env::var("ON_STRAYS").is_ok() { 40 } else { 0 })
+    {
         println!("    {t:8.3}s {hand:?} {finger:?} on {midi}, {into:.1} mm in");
     }
-    println!("  built in {load_seconds:.2} s{}", if prior.is_some() { " (fingered with the model)" } else { "" });
+    println!(
+        "  built in {load_seconds:.2} s{}",
+        if prior.is_some() { " (fingered with the model)" } else { "" }
+    );
     every.sort_by(f32::total_cmp);
     let at_percentile = |p: f64| every[((every.len() - 1) as f64 * p) as usize];
     let (median, p99) = (at_percentile(0.5), at_percentile(0.99));
     println!("  {} frames at {FPS:.0} fps, a hand may cover {budget:.0} mm in one of them", every.len() / 2);
-    println!("  worst joint movement per frame: median {median:.1} mm, 99th {p99:.1} mm, worst {:.1} mm", every[every.len() - 1]);
+    println!(
+        "  worst joint movement per frame: median {median:.1} mm, 99th {p99:.1} mm, worst {:.1} mm",
+        every[every.len() - 1]
+    );
     println!("  frames where a joint outran a hand: {}", jumps.len());
     println!("  frames where moving the hands apart jolted one: {}", jolts.len());
     println!(
@@ -438,7 +506,10 @@ fn main() -> anyhow::Result<()> {
                 for i in 1..p.len().saturating_sub(2) {
                     speed.push(((p[i + 1] - p[i - 1]) / (2.0 * fine as f32)).length());
                     accel.push(((p[i + 1] - 2.0 * p[i] + p[i - 1]) / (fine * fine) as f32).length());
-                    jerk.push(((p[i + 2] - 3.0 * p[i + 1] + 3.0 * p[i] - p[i - 1]) / (fine * fine * fine) as f32).length());
+                    jerk.push(
+                        ((p[i + 2] - 3.0 * p[i + 1] + 3.0 * p[i] - p[i - 1]) / (fine * fine * fine) as f32)
+                            .length(),
+                    );
                 }
                 let found = twitches(p);
                 twitch += found.len();
@@ -448,7 +519,8 @@ fn main() -> anyhow::Result<()> {
             if std::env::var("ON_WHEN").is_ok() && label == "wrist" {
                 when.sort_unstable();
                 when.dedup();
-                let times: Vec<String> = when.iter().take(12).map(|i| format!("{:.3}", *i as f64 * fine)).collect();
+                let times: Vec<String> =
+                    when.iter().take(12).map(|i| format!("{:.3}", *i as f64 * fine)).collect();
                 println!("      at {}", times.join(" "));
             }
             println!("      speed  {}", percentiles(speed));
@@ -456,14 +528,16 @@ fn main() -> anyhow::Result<()> {
             println!("      jerk   {}", percentiles(jerk));
         }
         let wrist = &tracks[side][0];
-        let fastest = (1..wrist.len()).max_by(|a, b| {
-            wrist[*a].distance(wrist[*a - 1]).total_cmp(&wrist[*b].distance(wrist[*b - 1]))
-        });
+        let fastest = (1..wrist.len())
+            .max_by(|a, b| wrist[*a].distance(wrist[*a - 1]).total_cmp(&wrist[*b].distance(wrist[*b - 1])));
         if let Some(at) = fastest {
             println!("    {hand:?} fastest wrist at {:.3} s", at as f64 * fine);
         }
         let joint_speed = |index: usize| {
-            angles[side].windows(2).map(|w| (w[1][index] - w[0][index]).abs() / fine as f32).fold(0.0f32, f32::max)
+            angles[side]
+                .windows(2)
+                .map(|w| (w[1][index] - w[0][index]).abs() / fine as f32)
+                .fold(0.0f32, f32::max)
         };
         let mcp = (0..4).map(|slot| joint_speed(dof::finger(slot) + dof::MCP_FLEX)).fold(0.0f32, f32::max);
         println!(
@@ -473,7 +547,8 @@ fn main() -> anyhow::Result<()> {
         );
     }
     println!("  fingertip to its pressed key (mm): {}", percentiles(contact).replace("p", " p"));
-    let (mut tip_drops, mut hand_drops, mut shares, mut pivots) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut tip_drops, mut hand_drops, mut shares, mut pivots) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for note in &timeline.notes {
         let Some(finger) = note.finger else { continue };
         let side = note.hand as usize;
@@ -507,13 +582,23 @@ fn main() -> anyhow::Result<()> {
     println!("  strokes: fingertip drop (mm) {}", spread(tip_drops));
     println!("           by the hand (mm)    {}", spread(hand_drops));
     println!("           wrist pivot (deg)   {}", spread(pivots));
-    println!("           hand share (%)      {}  hand-led {wrist_led}/{}", spread(shares.clone()), shares.len());
-    for (label, picked) in [("bend", [dof::MCP_FLEX, dof::PIP_FLEX]), ("spread", [dof::MCP_SPREAD, dof::MCP_SPREAD])] {
+    println!(
+        "           hand share (%)      {}  hand-led {wrist_led}/{}",
+        spread(shares.clone()),
+        shares.len()
+    );
+    for (label, picked) in
+        [("bend", [dof::MCP_FLEX, dof::PIP_FLEX]), ("spread", [dof::MCP_SPREAD, dof::MCP_SPREAD])]
+    {
         let mut rates: Vec<f32> = Vec::new();
         for side in 0..2 {
             for slot in 0..4 {
-                for j in picked.iter().map(|o| dof::finger(slot) + o).collect::<std::collections::BTreeSet<_>>() {
-                    rates.extend(angles[side].windows(2).map(|w| 100.0 * (w[1][j] - w[0][j]).abs() / fine as f32));
+                for j in
+                    picked.iter().map(|o| dof::finger(slot) + o).collect::<std::collections::BTreeSet<_>>()
+                {
+                    rates.extend(
+                        angles[side].windows(2).map(|w| 100.0 * (w[1][j] - w[0][j]).abs() / fine as f32),
+                    );
                 }
             }
         }
@@ -566,7 +651,8 @@ fn main() -> anyhow::Result<()> {
     for side in 0..2 {
         let (mut hooked, mut flat, mut thumb_out) = (0usize, 0usize, 0usize);
         for q in &angles[side] {
-            let fingers = (0..4).map(|slot| (q[dof::finger(slot) + dof::MCP_FLEX], q[dof::finger(slot) + dof::PIP_FLEX]));
+            let fingers = (0..4)
+                .map(|slot| (q[dof::finger(slot) + dof::MCP_FLEX], q[dof::finger(slot) + dof::PIP_FLEX]));
             let fingers: Vec<(f32, f32)> = fingers.collect();
             if fingers.iter().any(|(mcp, pip)| *mcp < -0.2 && *pip > 1.0) {
                 hooked += 1;
@@ -582,7 +668,10 @@ fn main() -> anyhow::Result<()> {
             .map(|slot| {
                 let count = angles[side]
                     .iter()
-                    .filter(|q| q[dof::finger(slot) + dof::MCP_FLEX] < -0.2 && q[dof::finger(slot) + dof::PIP_FLEX] > 1.0)
+                    .filter(|q| {
+                        q[dof::finger(slot) + dof::MCP_FLEX] < -0.2
+                            && q[dof::finger(slot) + dof::PIP_FLEX] > 1.0
+                    })
                     .count();
                 format!("{}:{:.1}%", slot + 2, 100.0 * count as f32 / angles[side].len().max(1) as f32)
             })
@@ -592,20 +681,37 @@ fn main() -> anyhow::Result<()> {
             let mut shown = 0;
             for (i, q) in angles[side].iter().enumerate() {
                 let t = i as f64 * fine;
-                let hooked: Vec<usize> = (0..4).filter(|slot| q[dof::finger(*slot) + dof::MCP_FLEX] < -0.2 && q[dof::finger(*slot) + dof::PIP_FLEX] > 1.0).collect();
+                let hooked: Vec<usize> = (0..4)
+                    .filter(|slot| {
+                        q[dof::finger(*slot) + dof::MCP_FLEX] < -0.2
+                            && q[dof::finger(*slot) + dof::PIP_FLEX] > 1.0
+                    })
+                    .collect();
                 if !hooked.is_empty() && t - last > 0.5 && shown < 8 {
-                    println!("    hook {t:.3}s side {side} fingers {:?}", hooked.iter().map(|s| s + 2).collect::<Vec<_>>());
+                    println!(
+                        "    hook {t:.3}s side {side} fingers {:?}",
+                        hooked.iter().map(|s| s + 2).collect::<Vec<_>>()
+                    );
                     shown += 1;
                     last = t;
                 }
             }
         }
-        let thumb_hook = angles[side].iter().filter(|q| q[dof::THUMB_MCP_FLEX] < -0.25 && q[dof::THUMB_IP_FLEX] > 0.8).count();
-        println!("  side {side} hooks by finger: 1:{:.1}% {}", 100.0 * thumb_hook as f32 / angles[side].len().max(1) as f32, per.join(" "));
+        let thumb_hook = angles[side]
+            .iter()
+            .filter(|q| q[dof::THUMB_MCP_FLEX] < -0.25 && q[dof::THUMB_IP_FLEX] > 0.8)
+            .count();
+        println!(
+            "  side {side} hooks by finger: 1:{:.1}% {}",
+            100.0 * thumb_hook as f32 / angles[side].len().max(1) as f32,
+            per.join(" ")
+        );
         let n = angles[side].len().max(1) as f32 / 100.0;
         println!(
             "  side {side} posture: hooked finger {:.1}%  flat hand {:.1}%  thumb out {:.1}%",
-            hooked as f32 / n, flat as f32 / n, thumb_out as f32 / n
+            hooked as f32 / n,
+            flat as f32 / n,
+            thumb_out as f32 / n
         );
     }
 
@@ -618,11 +724,18 @@ fn main() -> anyhow::Result<()> {
         let tip = joints[1 + 4 * finger.index() + 3];
         let (x0, x1, y0, y1) = keyboard.footprint(note.midi);
         let depth = timeline.key_depression(t).depth_of(note.midi);
-        let (surface, dip) = if is_black(note.midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
+        let (surface, dip) =
+            if is_black(note.midi) { (BLACK_KEY_HEIGHT, BLACK_KEY_DIP) } else { (0.0, KEY_DIP) };
         let across = (x0 - tip.x).max(tip.x - x1).max(0.0);
         let along = (y0 - tip.y).max(tip.y - y1).max(0.0);
         let down = (tip.z - (surface - depth * dip)).abs();
-        strikes.push(((across * across + along * along + down * down).sqrt(), t, note.hand, finger, note.midi));
+        strikes.push((
+            (across * across + along * along + down * down).sqrt(),
+            t,
+            note.hand,
+            finger,
+            note.midi,
+        ));
     }
     let misses = |limit: f32| strikes.iter().filter(|s| s.0 > limit).count();
     println!(
@@ -645,7 +758,10 @@ fn main() -> anyhow::Result<()> {
                 println!("    ... and more");
                 break;
             }
-            println!("    {time:7.2}s {hand:?} a joint moved {moved:6.1} mm in one frame ({:.0} mm/s)", f64::from(*moved) * FPS);
+            println!(
+                "    {time:7.2}s {hand:?} a joint moved {moved:6.1} mm in one frame ({:.0} mm/s)",
+                f64::from(*moved) * FPS
+            );
             shown += 1;
         }
         last = *time;

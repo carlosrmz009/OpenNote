@@ -129,11 +129,7 @@ fn fingerings_are_written_back_onto_the_original_notes() {
     let reloaded = MusicXmlDocument::read(&out).unwrap();
     assert_eq!(reloaded.score().notes.len(), 9);
     for note in &reloaded.score().notes {
-        assert!(
-            note.given_finger.is_some(),
-            "midi {} came back without its fingering",
-            note.midi
-        );
+        assert!(note.given_finger.is_some(), "midi {} came back without its fingering", note.midi);
     }
     let c4 = reloaded.score().notes.iter().find(|n| n.midi == 60).unwrap();
     assert_eq!(c4.given_finger, Some(Finger::Thumb));

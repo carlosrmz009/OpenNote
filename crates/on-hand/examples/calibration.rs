@@ -13,15 +13,8 @@ fn main() {
         ("L", HandSize::Large),
         ("XL", HandSize::ExtraLarge),
     ];
-    let intervals = [
-        ("6th", 69u8),
-        ("7th", 71),
-        ("octave", 72),
-        ("9th", 74),
-        ("10th", 76),
-        ("11th", 77),
-        ("12th", 79),
-    ];
+    let intervals =
+        [("6th", 69u8), ("7th", 71), ("octave", 72), ("9th", 74), ("10th", 76), ("11th", 77), ("12th", 79)];
 
     println!("Thumb on C4, little finger reaching up. Cost of holding the stretch,");
     println!("and whether the fingers land at all.\n");
@@ -35,10 +28,7 @@ fn main() {
         let sk = Skeleton::new(HandProfile::from_size(size), Hand::Right);
         print!("{label:<8}");
         for (_, top) in intervals {
-            let targets = [
-                (Finger::Thumb, kb.nominal_strike(60)),
-                (Finger::Little, kb.nominal_strike(top)),
-            ];
+            let targets = [(Finger::Thumb, kb.nominal_strike(60)), (Finger::Little, kb.nominal_strike(top))];
             let out = reach(&sk, &ReachRequest::new(&targets));
             let cell = if out.reached {
                 format!("{:.1}", out.strain_total())

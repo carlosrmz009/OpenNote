@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use midly::{
-    Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
-};
+use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind};
 
 use crate::{Fingering, Note, NoteId, Score, SourceRef, Ticks, TieState, TICKS_PER_QUARTER};
 
@@ -81,8 +79,7 @@ impl MidiDocument {
         }
 
         let path = path.as_ref();
-        out.save(path)
-            .with_context(|| format!("writing {}", path.display()))
+        out.save(path).with_context(|| format!("writing {}", path.display()))
     }
 }
 
@@ -137,13 +134,22 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
                 continue;
             };
             let channel = channel.as_int();
-            if channel == DRUMS && melodic && matches!(message, MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }) {
+            if channel == DRUMS
+                && melodic
+                && matches!(message, MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. })
+            {
                 continue;
             }
             match message {
                 MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
                     if let Some(open) = pending.remove(&(channel, key.as_int())) {
-                        push_note(&mut score, track_index, key.as_int(), open, rescale(tick as i64, source_ppq));
+                        push_note(
+                            &mut score,
+                            track_index,
+                            key.as_int(),
+                            open,
+                            rescale(tick as i64, source_ppq),
+                        );
                     }
                     pending.insert(
                         (channel, key.as_int()),
@@ -156,12 +162,16 @@ fn extract(smf: &Smf, source_ppq: u16) -> Result<Score> {
                 }
                 MidiMessage::NoteOff { key, .. } | MidiMessage::NoteOn { key, .. } => {
                     if let Some(open) = pending.remove(&(channel, key.as_int())) {
-                        push_note(&mut score, track_index, key.as_int(), open, rescale(tick as i64, source_ppq));
+                        push_note(
+                            &mut score,
+                            track_index,
+                            key.as_int(),
+                            open,
+                            rescale(tick as i64, source_ppq),
+                        );
                     }
                 }
-                MidiMessage::Controller { controller, value }
-                    if controller.as_int() == DAMPER_PEDAL =>
-                {
+                MidiMessage::Controller { controller, value } if controller.as_int() == DAMPER_PEDAL => {
                     let at = rescale(tick as i64, source_ppq);
                     match (value.as_int() >= DAMPER_PEDAL, pressed) {
                         (true, None) => pressed = Some(at),
@@ -235,37 +245,27 @@ fn rescale(tick: Ticks, source_ppq: u16) -> Ticks {
 }
 
 pub fn to_smf(score: &Score) -> Smf<'static> {
-    let mut smf = Smf::new(Header::new(
-        Format::SingleTrack,
-        Timing::Metrical((TICKS_PER_QUARTER as u16).into()),
-    ));
+    let mut smf =
+        Smf::new(Header::new(Format::SingleTrack, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
     let mut events: Vec<(Ticks, TrackEventKind<'static>)> = Vec::new();
 
     for change in score.tempo.changes() {
-        events.push((
-            change.tick,
-            TrackEventKind::Meta(MetaMessage::Tempo(change.micros_per_quarter.into())),
-        ));
+        events
+            .push((change.tick, TrackEventKind::Meta(MetaMessage::Tempo(change.micros_per_quarter.into()))));
     }
     for note in &score.notes {
         events.push((
             note.onset,
             TrackEventKind::Midi {
                 channel: 0.into(),
-                message: MidiMessage::NoteOn {
-                    key: note.midi.into(),
-                    vel: note.velocity.into(),
-                },
+                message: MidiMessage::NoteOn { key: note.midi.into(), vel: note.velocity.into() },
             },
         ));
         events.push((
             note.offset(),
             TrackEventKind::Midi {
                 channel: 0.into(),
-                message: MidiMessage::NoteOff {
-                    key: note.midi.into(),
-                    vel: 0.into(),
-                },
+                message: MidiMessage::NoteOff { key: note.midi.into(), vel: 0.into() },
             },
         ));
     }
@@ -274,16 +274,10 @@ pub fn to_smf(score: &Score) -> Smf<'static> {
     let mut track = Track::new();
     let mut previous = 0;
     for (tick, kind) in events {
-        track.push(TrackEvent {
-            delta: ((tick - previous) as u32).into(),
-            kind,
-        });
+        track.push(TrackEvent { delta: ((tick - previous) as u32).into(), kind });
         previous = tick;
     }
-    track.push(TrackEvent {
-        delta: 0.into(),
-        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
-    });
+    track.push(TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) });
     smf.tracks.push(track);
     smf
 }
@@ -340,8 +334,7 @@ mod tests {
 
     #[test]
     fn tempo_is_read_back_from_the_file() {
-        let mut score =
-            Score { tempo: crate::TempoMap::constant_bpm(144.0), ..Default::default() };
+        let mut score = Score { tempo: crate::TempoMap::constant_bpm(144.0), ..Default::default() };
         score.notes.push(Note {
             id: NoteId(0),
             midi: 60,
@@ -368,11 +361,15 @@ mod tests {
     }
 
     fn file(tracks: &[&[(u32, u8, MidiMessage)]]) -> Score {
-        let mut smf = Smf::new(Header::new(Format::Parallel, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
+        let mut smf =
+            Smf::new(Header::new(Format::Parallel, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
         for events in tracks {
             let mut track = Track::new();
             for &(delta, channel, message) in events.iter() {
-                track.push(TrackEvent { delta: delta.into(), kind: TrackEventKind::Midi { channel: channel.into(), message } });
+                track.push(TrackEvent {
+                    delta: delta.into(),
+                    kind: TrackEventKind::Midi { channel: channel.into(), message },
+                });
             }
             track.push(TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) });
             smf.tracks.push(track);
@@ -399,8 +396,14 @@ mod tests {
         // The right hand's track ends with the pedal still down; the left hand's track
         // pedals twice, from the start. One track's pedal must not pair with the other's.
         let right: &[(u32, u8, MidiMessage)] = &[(0, 0, on(72)), (1920, 0, damper(true)), (1920, 0, off(72))];
-        let left: &[(u32, u8, MidiMessage)] =
-            &[(0, 1, damper(true)), (0, 1, on(48)), (480, 1, damper(false)), (480, 1, damper(true)), (480, 1, damper(false)), (480, 1, off(48))];
+        let left: &[(u32, u8, MidiMessage)] = &[
+            (0, 1, damper(true)),
+            (0, 1, on(48)),
+            (480, 1, damper(false)),
+            (480, 1, damper(true)),
+            (480, 1, damper(false)),
+            (480, 1, off(48)),
+        ];
         let score = file(&[right, left]);
         assert_eq!(score.pedal, vec![(0, 480), (960, 1440), (1920, 3840)]);
     }
@@ -419,10 +422,8 @@ mod tests {
     #[test]
     fn a_zero_velocity_note_on_ends_the_note() {
         let mut bytes = Vec::new();
-        let mut smf = Smf::new(Header::new(
-            Format::SingleTrack,
-            Timing::Metrical((TICKS_PER_QUARTER as u16).into()),
-        ));
+        let mut smf =
+            Smf::new(Header::new(Format::SingleTrack, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
         let mut track = Track::new();
         track.push(TrackEvent {
             delta: 0.into(),
@@ -438,10 +439,7 @@ mod tests {
                 message: MidiMessage::NoteOn { key: 60.into(), vel: 0.into() },
             },
         });
-        track.push(TrackEvent {
-            delta: 0.into(),
-            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
-        });
+        track.push(TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) });
         smf.tracks.push(track);
         smf.write(&mut bytes).unwrap();
 
@@ -457,28 +455,38 @@ mod tests {
         let mut push = |delta: u32, kind: TrackEventKind<'static>| {
             track.push(TrackEvent { delta: delta.into(), kind });
         };
-        push(0, TrackEventKind::Midi {
-            channel: 0.into(),
-            message: MidiMessage::Controller { controller: 64.into(), value: 127.into() },
-        });
-        push(0, TrackEventKind::Midi {
-            channel: 0.into(),
-            message: MidiMessage::NoteOn { key: 60.into(), vel: 90.into() },
-        });
-        push(q, TrackEventKind::Midi {
-            channel: 0.into(),
-            message: MidiMessage::NoteOff { key: 60.into(), vel: 0.into() },
-        });
-        push(2 * q, TrackEventKind::Midi {
-            channel: 0.into(),
-            message: MidiMessage::Controller { controller: 64.into(), value: 0.into() },
-        });
+        push(
+            0,
+            TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::Controller { controller: 64.into(), value: 127.into() },
+            },
+        );
+        push(
+            0,
+            TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::NoteOn { key: 60.into(), vel: 90.into() },
+            },
+        );
+        push(
+            q,
+            TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::NoteOff { key: 60.into(), vel: 0.into() },
+            },
+        );
+        push(
+            2 * q,
+            TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::Controller { controller: 64.into(), value: 0.into() },
+            },
+        );
         push(0, TrackEventKind::Meta(MetaMessage::EndOfTrack));
 
-        let mut smf = Smf::new(Header::new(
-            Format::SingleTrack,
-            Timing::Metrical((TICKS_PER_QUARTER as u16).into()),
-        ));
+        let mut smf =
+            Smf::new(Header::new(Format::SingleTrack, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
         smf.tracks.push(track);
         let mut bytes = Vec::new();
         smf.write(&mut bytes).unwrap();

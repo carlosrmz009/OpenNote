@@ -26,8 +26,7 @@ fn taught(hand: Hand, tonic: u8) -> Vec<Placement> {
     let pitches = scale_pitches(tonic, base);
     let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
     let onsets: Vec<f64> = (0..pitches.len()).map(|i| i as f64 * 0.2).collect();
-    let table: std::collections::HashMap<usize, Taught> =
-        scale_fingerings(hand, &optional, &onsets);
+    let table: std::collections::HashMap<usize, Taught> = scale_fingerings(hand, &optional, &onsets);
     let mut out = Vec::new();
     for (index, pitch) in pitches.iter().enumerate() {
         if let Some(t) = table.get(&index) {
@@ -38,12 +37,7 @@ fn taught(hand: Hand, tonic: u8) -> Vec<Placement> {
 }
 
 fn halves(run: &[Placement]) -> (Vec<Placement>, Vec<Placement>) {
-    let peak = run
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, p)| p.midi)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
+    let peak = run.iter().enumerate().max_by_key(|(_, p)| p.midi).map(|(i, _)| i).unwrap_or(0);
     (run[..=peak].to_vec(), run[peak..].to_vec())
 }
 
@@ -114,11 +108,7 @@ fn line(label: &str, none: f32, time: f32, full: f32) {
     );
 }
 
-fn compare(
-    train: &[(Hand, Vec<Placement>)],
-    test_hand: Hand,
-    test: &[Vec<Placement>],
-) -> (f32, f32, f32) {
+fn compare(train: &[(Hand, Vec<Placement>)], test_hand: Hand, test: &[Vec<Placement>]) -> (f32, f32, f32) {
     (
         trial(Symmetries::None, train, test_hand, test),
         trial(Symmetries::Time, train, test_hand, test),
@@ -131,10 +121,7 @@ fn main() {
     let left: Vec<Vec<Placement>> = (0..12).map(|t| taught(Hand::Left, t)).collect();
 
     println!("Agreement of the prior alone with the taught scale fingerings.\n");
-    println!(
-        "  {:<24} {:>6} {:>6} {:>6} {:>6} {:>6}",
-        "", "none", "time", "", "full", ""
-    );
+    println!("  {:<24} {:>6} {:>6} {:>6} {:>6} {:>6}", "", "none", "time", "", "full", "");
 
     println!("\n  Trained on some keys, measured on the rest");
     for count in [1usize, 2, 3, 4, 6] {
@@ -146,10 +133,8 @@ fn main() {
                 train.push((Hand::Right, right[*key].clone()));
                 train.push((Hand::Left, left[*key].clone()));
             }
-            let held: Vec<Vec<Placement>> = (0..12)
-                .filter(|k| !chosen.contains(k))
-                .map(|k| right[k].clone())
-                .collect();
+            let held: Vec<Vec<Placement>> =
+                (0..12).filter(|k| !chosen.contains(k)).map(|k| right[k].clone()).collect();
             let got = compare(&train, Hand::Right, &held);
             totals = (totals.0 + got.0, totals.1 + got.1, totals.2 + got.2);
         }
@@ -159,9 +144,8 @@ fn main() {
 
     println!("\n  Trained on the right hand, measured on the left");
     for count in [1usize, 3, 12] {
-        let train: Vec<(Hand, Vec<Placement>)> = (0..count)
-            .map(|k| (Hand::Right, right[k % 12].clone()))
-            .collect();
+        let train: Vec<(Hand, Vec<Placement>)> =
+            (0..count).map(|k| (Hand::Right, right[k % 12].clone())).collect();
         let got = compare(&train, Hand::Left, &left);
         let label = format!("{count} right-hand scale{}", if count == 1 { "" } else { "s" });
         line(&label, got.0, got.1, got.2);
@@ -169,9 +153,8 @@ fn main() {
 
     println!("\n  Trained on ascents, measured on descents");
     for count in [1usize, 3, 12] {
-        let train: Vec<(Hand, Vec<Placement>)> = (0..count)
-            .map(|k| (Hand::Right, halves(&right[k % 12]).0))
-            .collect();
+        let train: Vec<(Hand, Vec<Placement>)> =
+            (0..count).map(|k| (Hand::Right, halves(&right[k % 12]).0)).collect();
         let down: Vec<Vec<Placement>> = (0..12).map(|k| halves(&right[k]).1).collect();
         let got = compare(&train, Hand::Right, &down);
         let label = format!("{count} ascent{}", if count == 1 { "" } else { "s" });

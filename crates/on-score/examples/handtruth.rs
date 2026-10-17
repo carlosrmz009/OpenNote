@@ -4,11 +4,7 @@ use on_score::{MidiDocument, MusicXmlDocument};
 fn main() -> anyhow::Result<()> {
     let mut total = (0usize, 0usize);
     for path in std::env::args().skip(1) {
-        let name = std::path::Path::new(&path)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+        let name = std::path::Path::new(&path).file_name().unwrap_or_default().to_string_lossy().to_string();
 
         let midi = path.to_lowercase().ends_with(".mid") || path.to_lowercase().ends_with(".midi");
         let mut score = if midi {
@@ -34,17 +30,15 @@ fn main() -> anyhow::Result<()> {
                 if note.hand != Some(*want) {
                     println!(
                         "DIFF {:8.2} {:3} got {:?} want {want:?}",
-                        note.onset_seconds, note.midi, note.hand.unwrap()
+                        note.onset_seconds,
+                        note.midi,
+                        note.hand.unwrap()
                     );
                 }
             }
         }
-        let judged: Vec<_> = score
-            .notes
-            .iter()
-            .zip(&truth)
-            .filter_map(|(note, want)| want.map(|w| (note, w)))
-            .collect();
+        let judged: Vec<_> =
+            score.notes.iter().zip(&truth).filter_map(|(note, want)| want.map(|w| (note, w))).collect();
         let wrong = judged.iter().filter(|(note, want)| note.hand != Some(*want)).count();
         let n = judged.len();
         total = (total.0 + n - wrong, total.1 + n);

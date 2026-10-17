@@ -88,11 +88,7 @@ pub fn seed_pose(sk: &Skeleton, targets: &[(Finger, Vec3)]) -> HandPose {
     let centre = sum / n;
     let bias = lateral_bias / n;
 
-    let mut pose = sk.rest_pose(Vec3::new(
-        centre.x - bias,
-        COMFORTABLE_WRIST_Y,
-        COMFORTABLE_WRIST_Z,
-    ));
+    let mut pose = sk.rest_pose(Vec3::new(centre.x - bias, COMFORTABLE_WRIST_Y, COMFORTABLE_WRIST_Z));
     let mean_depth = sum.y / n;
     pose.q[dof::WRIST_Y] += (mean_depth - 30.0) * 0.6;
     pose
@@ -135,8 +131,7 @@ fn seeds(sk: &Skeleton, req: &ReachRequest<'_>) -> Vec<HandPose> {
                 variant.q[i] += crate::skeleton::LIMITS[i].range() * scale * 0.5;
             }
         }
-        variant.q[dof::THUMB_CMC_FLEX] +=
-            crate::skeleton::LIMITS[dof::THUMB_CMC_FLEX].range() * scale * 0.3;
+        variant.q[dof::THUMB_CMC_FLEX] += crate::skeleton::LIMITS[dof::THUMB_CMC_FLEX].range() * scale * 0.3;
         sk.clamp(&mut variant);
         out.push(variant);
     }
@@ -324,11 +319,7 @@ fn finish(sk: &Skeleton, pose: HandPose, posture: Posture, req: &ReachRequest<'_
         max_error = max_error.max(e);
         sum_sq += e * e;
     }
-    let rms = if req.targets.is_empty() {
-        0.0
-    } else {
-        (sum_sq / req.targets.len() as f32).sqrt()
-    };
+    let rms = if req.targets.is_empty() { 0.0 } else { (sum_sq / req.targets.len() as f32).sqrt() };
     let strain = strain_breakdown(sk, &posture, &req.weights);
     ReachOutcome {
         pose,
@@ -389,32 +380,17 @@ mod tests {
     use crate::Hand;
 
     fn setup(hand: Hand, size: HandSize) -> (Skeleton, Keyboard) {
-        (
-            Skeleton::new(HandProfile::from_size(size), hand),
-            Keyboard::new(),
-        )
+        (Skeleton::new(HandProfile::from_size(size), hand), Keyboard::new())
     }
 
     fn five_finger(kb: &Keyboard, hand: Hand, lowest: u8) -> Vec<(Finger, Vec3)> {
-        let whites: Vec<u8> = (lowest..lowest + 12)
-            .filter(|m| crate::keyboard::is_white(*m))
-            .take(5)
-            .collect();
+        let whites: Vec<u8> =
+            (lowest..lowest + 12).filter(|m| crate::keyboard::is_white(*m)).take(5).collect();
         let fingers = match hand {
             Hand::Right => Finger::ALL,
-            Hand::Left => [
-                Finger::Little,
-                Finger::Ring,
-                Finger::Middle,
-                Finger::Index,
-                Finger::Thumb,
-            ],
+            Hand::Left => [Finger::Little, Finger::Ring, Finger::Middle, Finger::Index, Finger::Thumb],
         };
-        whites
-            .iter()
-            .zip(fingers)
-            .map(|(m, f)| (f, kb.nominal_strike(*m)))
-            .collect()
+        whites.iter().zip(fingers).map(|(m, f)| (f, kb.nominal_strike(*m))).collect()
     }
 
     #[test]
@@ -440,10 +416,7 @@ mod tests {
     fn an_octave_is_comfortable_a_ninth_is_a_stretch_a_twelfth_is_not_happening() {
         let (sk, kb) = setup(Hand::Right, HandSize::Medium);
         let span = |top: u8| {
-            let targets = [
-                (Finger::Thumb, kb.nominal_strike(60)),
-                (Finger::Little, kb.nominal_strike(top)),
-            ];
+            let targets = [(Finger::Thumb, kb.nominal_strike(60)), (Finger::Little, kb.nominal_strike(top))];
             reach(&sk, &ReachRequest::new(&targets))
         };
 
@@ -459,14 +432,8 @@ mod tests {
             "a twelfth should be out of reach for an average hand, error was {} mm",
             twelfth.max_error_mm
         );
-        assert!(
-            octave.strain_total() < ninth.strain_total(),
-            "a ninth should cost more than an octave"
-        );
-        assert!(
-            ninth.strain_total() < tenth.strain_total(),
-            "a tenth should cost more than a ninth"
-        );
+        assert!(octave.strain_total() < ninth.strain_total(), "a ninth should cost more than an octave");
+        assert!(ninth.strain_total() < tenth.strain_total(), "a tenth should cost more than a ninth");
     }
 
     #[test]
@@ -474,10 +441,7 @@ mod tests {
         let kb = Keyboard::new();
         let reach_of = |size: HandSize, top: u8| {
             let sk = Skeleton::new(HandProfile::from_size(size), Hand::Right);
-            let targets = [
-                (Finger::Thumb, kb.nominal_strike(60)),
-                (Finger::Little, kb.nominal_strike(top)),
-            ];
+            let targets = [(Finger::Thumb, kb.nominal_strike(60)), (Finger::Little, kb.nominal_strike(top))];
             reach(&sk, &ReachRequest::new(&targets)).strain_total()
         };
         assert!(reach_of(HandSize::Small, 76) > reach_of(HandSize::ExtraLarge, 76));
@@ -487,34 +451,21 @@ mod tests {
     fn the_solver_lands_on_black_keys_too() {
         let (sk, kb) = setup(Hand::Right, HandSize::Medium);
         let notes = [66u8, 68, 70, 71, 73];
-        let targets: Vec<_> = notes
-            .iter()
-            .zip(Finger::ALL)
-            .map(|(m, f)| (f, kb.nominal_strike(*m)))
-            .collect();
+        let targets: Vec<_> =
+            notes.iter().zip(Finger::ALL).map(|(m, f)| (f, kb.nominal_strike(*m))).collect();
         let out = reach(&sk, &ReachRequest::new(&targets));
-        assert!(
-            out.reached,
-            "black-key shape unreached, max error {} mm",
-            out.max_error_mm
-        );
+        assert!(out.reached, "black-key shape unreached, max error {} mm", out.max_error_mm);
     }
 
     #[test]
     fn a_warm_start_from_the_previous_chord_still_converges() {
         let (sk, kb) = setup(Hand::Right, HandSize::Medium);
-        let first: Vec<_> = [60u8, 62, 64, 65, 67]
-            .iter()
-            .zip(Finger::ALL)
-            .map(|(m, f)| (f, kb.nominal_strike(*m)))
-            .collect();
+        let first: Vec<_> =
+            [60u8, 62, 64, 65, 67].iter().zip(Finger::ALL).map(|(m, f)| (f, kb.nominal_strike(*m))).collect();
         let a = reach(&sk, &ReachRequest::new(&first));
 
-        let second: Vec<_> = [67u8, 69, 71, 72, 74]
-            .iter()
-            .zip(Finger::ALL)
-            .map(|(m, f)| (f, kb.nominal_strike(*m)))
-            .collect();
+        let second: Vec<_> =
+            [67u8, 69, 71, 72, 74].iter().zip(Finger::ALL).map(|(m, f)| (f, kb.nominal_strike(*m))).collect();
         let b = reach(&sk, &ReachRequest::new(&second).from_pose(a.pose));
         assert!(b.reached, "warm start failed: {} mm", b.max_error_mm);
     }
@@ -526,11 +477,7 @@ mod tests {
             for f in Finger::ALL {
                 let targets = [(f, kb.nominal_strike(midi))];
                 let out = reach(&sk, &ReachRequest::new(&targets));
-                assert!(
-                    out.reached,
-                    "{f:?} could not reach midi {midi}: {} mm off",
-                    out.max_error_mm
-                );
+                assert!(out.reached, "{f:?} could not reach midi {midi}: {} mm off", out.max_error_mm);
             }
         }
     }
@@ -538,10 +485,7 @@ mod tests {
     #[test]
     fn solved_postures_never_break_a_joint_limit() {
         let (sk, kb) = setup(Hand::Right, HandSize::Small);
-        let targets = [
-            (Finger::Thumb, kb.nominal_strike(60)),
-            (Finger::Little, kb.nominal_strike(77)),
-        ];
+        let targets = [(Finger::Thumb, kb.nominal_strike(60)), (Finger::Little, kb.nominal_strike(77))];
         let out = reach(&sk, &ReachRequest::new(&targets));
         for i in dof::WRIST_DEVIATION..DOF {
             let v = crate::skeleton::LIMITS[i].violation(out.pose.q[i]);

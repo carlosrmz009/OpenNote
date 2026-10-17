@@ -109,11 +109,19 @@ impl Playability {
     }
 
     pub fn step_spread(&self) -> f32 {
-        if self.steps_measured == 0 { 0.0 } else { (self.step_spread_total / self.steps_measured as f64) as f32 }
+        if self.steps_measured == 0 {
+            0.0
+        } else {
+            (self.step_spread_total / self.steps_measured as f64) as f32
+        }
     }
 
     pub fn chord_spread(&self) -> f32 {
-        if self.chord_pairs == 0 { 0.0 } else { (self.chord_spread_total / self.chord_pairs as f64) as f32 }
+        if self.chord_pairs == 0 {
+            0.0
+        } else {
+            (self.chord_spread_total / self.chord_pairs as f64) as f32
+        }
     }
 
     pub fn weak_on_black_rate(&self) -> f32 {
@@ -206,10 +214,7 @@ fn hand_position_mm(hand: Hand, spans: &SpanTable, keys: &Keyboard, at: Placemen
 fn chord_position_mm(hand: Hand, spans: &SpanTable, keys: &Keyboard, chord: &Chord) -> Option<f64> {
     let low = chord.notes.first()?;
     let high = chord.notes.last()?;
-    Some(
-        (hand_position_mm(hand, spans, keys, *low) + hand_position_mm(hand, spans, keys, *high))
-            / 2.0,
-    )
+    Some((hand_position_mm(hand, spans, keys, *low) + hand_position_mm(hand, spans, keys, *high)) / 2.0)
 }
 
 fn span_stress(span: crate::spans::Span, semitones: i32) -> f64 {
@@ -234,12 +239,7 @@ fn seconds_to_uncross(hand: Hand, spans: &SpanTable, from: Placement, to: Placem
     shortfall * f64::from(crate::ruler::SEMITONE_MM) / HAND_SPEED_MM_PER_SECOND
 }
 
-fn position_change(
-    hand: Hand,
-    spans: &SpanTable,
-    from: Placement,
-    to: Placement,
-) -> Option<Change> {
+fn position_change(hand: Hand, spans: &SpanTable, from: Placement, to: Placement) -> Option<Change> {
     let semitones = i32::from(to.midi) - i32::from(from.midi);
     if semitones == 0 && from.finger == to.finger {
         return None;
@@ -284,7 +284,8 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
         for pair in chord.notes.windows(2) {
             let fingers = (i32::from(pair[1].finger.number()) - i32::from(pair[0].finger.number())).abs();
             if fingers > 0 {
-                out.chord_spread_total += f64::from(i32::from(pair[1].midi) - i32::from(pair[0].midi)).abs() / f64::from(fingers);
+                out.chord_spread_total +=
+                    f64::from(i32::from(pair[1].midi) - i32::from(pair[0].midi)).abs() / f64::from(fingers);
                 out.chord_pairs += 1;
             }
         }
@@ -302,10 +303,9 @@ pub fn measure(hand: Hand, spans: &SpanTable, events: &[Chord]) -> Playability {
     }
 
     for pair in events.windows(2) {
-        if let (Some(from), Some(to)) = (
-            chord_position_mm(hand, spans, &keys, &pair[0]),
-            chord_position_mm(hand, spans, &keys, &pair[1]),
-        ) {
+        if let (Some(from), Some(to)) =
+            (chord_position_mm(hand, spans, &keys, &pair[0]), chord_position_mm(hand, spans, &keys, &pair[1]))
+        {
             out.travel_mm += (to - from).abs();
         }
         let (Some(from), Some(to)) = (pair[0].notes.first(), pair[1].notes.first()) else {
@@ -376,9 +376,7 @@ pub fn measure_solution(score: &Score, solution: &Solution, spans: &SpanTable) -
         let events = group(score, solution, hand);
         total.add(measure(hand, spans, &events));
     }
-    total
-        .flaws
-        .sort_by(|a, b| a.onset_seconds.total_cmp(&b.onset_seconds));
+    total.flaws.sort_by(|a, b| a.onset_seconds.total_cmp(&b.onset_seconds));
     total
 }
 
@@ -387,11 +385,7 @@ fn group(score: &Score, solution: &Solution, hand: Hand) -> Vec<Chord> {
         .notes
         .iter()
         .filter(|n| n.hand == Some(hand))
-        .filter_map(|n| {
-            solution
-                .finger_of(n.id)
-                .map(|f| (n.onset_seconds, Placement::new(n.midi, f)))
-        })
+        .filter_map(|n| solution.finger_of(n.id).map(|f| (n.onset_seconds, Placement::new(n.midi, f))))
         .collect();
     notes.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.midi.cmp(&b.1.midi)));
 
@@ -496,10 +490,7 @@ mod tests {
 
         let unhurried = measure(Hand::Left, &PARNCUTT, &crossed(1.0));
         assert_eq!(unhurried.impossible, 1, "still a crossing: {unhurried}");
-        assert_eq!(
-            unhurried.unplayable, 0,
-            "a second is long enough to carry a hand anywhere: {unhurried}"
-        );
+        assert_eq!(unhurried.unplayable, 0, "a second is long enough to carry a hand anywhere: {unhurried}");
     }
 
     #[test]
@@ -520,31 +511,16 @@ mod tests {
                 Chord::single(0.0, Placement::new(60, Finger::Little)),
                 Chord::single(0.05, Placement::new(to, Finger::Ring)),
             ];
-            measure(Hand::Left, &PARNCUTT, &events)
-                .flaws
-                .first()
-                .map(|f| f.seconds_needed)
+            measure(Hand::Left, &PARNCUTT, &events).flaws.first().map(|f| f.seconds_needed)
         };
         let (near, far) = (gap(58), gap(52));
         assert!(near.is_some() && far.is_some(), "{near:?} {far:?}");
-        assert!(
-            far > near,
-            "six semitones out of position needs no longer than two: {far:?} vs {near:?}"
-        );
+        assert!(far > near, "six semitones out of position needs no longer than two: {far:?} vs {near:?}");
     }
 
     #[test]
     fn a_taught_scale_is_playable() {
-        let scale = events(&[
-            (60, 1),
-            (62, 2),
-            (64, 3),
-            (65, 1),
-            (67, 2),
-            (69, 3),
-            (71, 4),
-            (72, 5),
-        ]);
+        let scale = events(&[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2), (69, 3), (71, 4), (72, 5)]);
         let out = measure(Hand::Right, &PARNCUTT, &scale);
         assert_eq!(out.impossible, 0, "{out}");
         assert_eq!(out.crossings, 1, "{out}");
@@ -570,7 +546,11 @@ mod tests {
         let crossed = events(&[(64, 2), (62, 3)]);
         assert_eq!(measure(Hand::Right, &PARNCUTT, &crossed).thumbless_crossings, 1);
         let leap = events(&[(76, 2), (62, 3)]);
-        assert_eq!(measure(Hand::Right, &PARNCUTT, &leap).thumbless_crossings, 0, "fourteen semitones is a jump");
+        assert_eq!(
+            measure(Hand::Right, &PARNCUTT, &leap).thumbless_crossings,
+            0,
+            "fourteen semitones is a jump"
+        );
     }
 
     #[test]
@@ -607,10 +587,7 @@ mod tests {
             .map(|(midi, finger)| (124 - *midi, *finger))
             .collect();
         let left = events(&mirrored);
-        assert_eq!(
-            measure(Hand::Right, &PARNCUTT, &right),
-            measure(Hand::Left, &PARNCUTT, &left)
-        );
+        assert_eq!(measure(Hand::Right, &PARNCUTT, &right), measure(Hand::Left, &PARNCUTT, &left));
     }
 
     #[test]

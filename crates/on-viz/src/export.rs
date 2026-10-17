@@ -82,10 +82,7 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
     let total = (seconds * f64::from(options.fps)).ceil() as u32;
 
     let mut encoder = start_ffmpeg(&ffmpeg, &options, &audio_path)?;
-    let stdin = encoder
-        .stdin
-        .take()
-        .context("ffmpeg did not give us anywhere to write frames")?;
+    let stdin = encoder.stdin.take().context("ffmpeg did not give us anywhere to write frames")?;
 
     let (frames, incoming) = mpsc::channel::<Vec<u8>>();
     let trouble = Arc::new(AtomicBool::new(false));
@@ -108,10 +105,7 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
         })
         .context("starting the encoder thread")?;
 
-    println!(
-        "Rendering {} frames at {}x{}, {} fps.",
-        total, options.width, options.height, options.fps
-    );
+    println!("Rendering {} frames at {}x{}, {} fps.", total, options.width, options.height, options.fps);
 
     let assets = performance.assets_root.clone();
     let width = options.width;
@@ -195,11 +189,7 @@ fn offscreen_target(width: u32, height: u32) -> Image {
     use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
 
     let mut image = Image::new_fill(
-        bevy::render::render_resource::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
+        bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
         TextureDimension::D2,
         &[0, 0, 0, 255],
         TextureFormat::Rgba8UnormSrgb,
@@ -278,11 +268,7 @@ fn drive_export(
 }
 
 fn check_ffmpeg(path: &Path) -> Result<PathBuf> {
-    let found = Command::new(path)
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let found = Command::new(path).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status();
     match found {
         Ok(status) if status.success() => Ok(path.to_path_buf()),
         _ => bail!(

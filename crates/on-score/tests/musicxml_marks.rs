@@ -49,7 +49,8 @@ fn hairpins_slurs_and_articulations_are_kept() {
     assert_eq!(score.marks.hairpins, vec![(q, 3 * q, 1)]);
     assert_eq!(score.marks.slurs, vec![(0, 2 * q)]);
     assert_eq!(score.marks.measures, vec![0, 4 * q]);
-    let flags = |midi: u8| score.marks.articulation(score.notes.iter().find(|n| n.midi == midi).unwrap().source);
+    let flags =
+        |midi: u8| score.marks.articulation(score.notes.iter().find(|n| n.midi == midi).unwrap().source);
     assert_eq!(flags(65), art::STACCATO);
     assert_eq!(flags(67), art::ACCENT);
     assert_eq!(flags(72), art::FERMATA);

@@ -63,7 +63,8 @@ fn unseal(path: &Path) -> Result<String> {
     let Some(key) = RELEASE_KEY else {
         bail!("this copy of opennote was not built to open published models; use an official build");
     };
-    String::from_utf8(crate::seal::seal(&bytes[MAGIC.len()..], key)).with_context(|| format!("{} is damaged, or was sealed for another build", path.display()))
+    String::from_utf8(crate::seal::seal(&bytes[MAGIC.len()..], key))
+        .with_context(|| format!("{} is damaged, or was sealed for another build", path.display()))
 }
 
 fn curl(args: &[&str]) -> Result<Vec<u8>> {
@@ -119,7 +120,10 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             println!("downloaded models are kept in {}", dir().display());
         }
         ModelsCommand::Get { name } => {
-            ensure!(name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)), "not a model name: {name}");
+            ensure!(
+                name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+                "not a model name: {name}"
+            );
             std::fs::create_dir_all(dir())?;
             let path = dir().join(format!("{name}.onm"));
             let partial = dir().join(format!("{name}.onm.part"));
@@ -127,19 +131,24 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             let fetched = curl(&["-o", &partial.to_string_lossy(), &url])
                 .with_context(|| format!("downloading {name}"))
                 .and_then(|_| {
-                    unseal(&partial).with_context(|| format!("{name} downloaded, but this build cannot open it"))
+                    unseal(&partial)
+                        .with_context(|| format!("{name} downloaded, but this build cannot open it"))
                 });
             if let Err(error) = fetched {
                 let _ = std::fs::remove_file(&partial);
                 return Err(error);
             }
-            std::fs::rename(&partial, &path).with_context(|| format!("moving the download to {}", path.display()))?;
+            std::fs::rename(&partial, &path)
+                .with_context(|| format!("moving the download to {}", path.display()))?;
             println!("{name} -> {}\nuse it with: opennote <command> --model {name}", path.display());
         }
         ModelsCommand::Seal { model, out } => {
-            let Some(key) = RELEASE_KEY else { bail!("this build has no release key (models/release-key.txt)") };
+            let Some(key) = RELEASE_KEY else {
+                bail!("this build has no release key (models/release-key.txt)")
+            };
             let text = std::fs::read(&model).with_context(|| format!("reading {}", model.display()))?;
-            on_fingering::NgramPrior::from_json(std::str::from_utf8(&text)?).context("that is not a model")?;
+            on_fingering::NgramPrior::from_json(std::str::from_utf8(&text)?)
+                .context("that is not a model")?;
             let out = out.unwrap_or_else(|| model.with_extension("onm"));
             let mut sealed = MAGIC.to_vec();
             sealed.extend(crate::seal::seal(&text, key));
@@ -182,7 +191,9 @@ pub fn run(args: ModelsArgs) -> Result<()> {
 
 pub fn resolve(model: &Path) -> Result<Option<String>> {
     if model.exists() {
-        return std::fs::read_to_string(model).map(Some).with_context(|| format!("reading the model at {}", model.display()));
+        return std::fs::read_to_string(model)
+            .map(Some)
+            .with_context(|| format!("reading the model at {}", model.display()));
     }
     let name = model.to_string_lossy();
     if name == "none" {

@@ -106,9 +106,7 @@ impl Synth {
         if let Some(piano) = &mut self.sampled {
             piano.silence();
         }
-        self.next_note = self
-            .notes
-            .partition_point(|note| note.start < self.position);
+        self.next_note = self.notes.partition_point(|note| note.start < self.position);
     }
 
     pub fn silent(&self) -> bool {
@@ -275,12 +273,7 @@ mod tests {
     #[test]
     fn a_repeated_note_takes_its_own_string_back() {
         let notes = (0..10)
-            .map(|i| Note {
-                midi: 60,
-                start: i as f64 * 0.05,
-                end: i as f64 * 0.05 + 2.0,
-                velocity: 110,
-            })
+            .map(|i| Note { midi: 60, start: i as f64 * 0.05, end: i as f64 * 0.05 + 2.0, velocity: 110 })
             .collect();
         let mut synth = Synth::new(notes, 44_100.0);
         synth.set_playing(true);

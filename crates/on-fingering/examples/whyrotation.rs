@@ -65,11 +65,7 @@ fn even_onsets(n: usize) -> Vec<f64> {
 fn main() {
     let mut args = std::env::args().skip(1);
     let key = args.next().unwrap_or_else(|| "Eb".into());
-    let hand = if args.next().is_some_and(|h| h.starts_with('l')) {
-        Hand::Left
-    } else {
-        Hand::Right
-    };
+    let hand = if args.next().is_some_and(|h| h.starts_with('l')) { Hand::Left } else { Hand::Right };
     let tonic = NAMES.iter().position(|n| n.eq_ignore_ascii_case(&key)).unwrap_or(3) as u8;
     let base = match hand {
         Hand::Right => 60,
@@ -79,15 +75,11 @@ fn main() {
     let optional: Vec<Option<u8>> = pitches.iter().map(|p| Some(*p)).collect();
     let books = scale_fingerings(hand, &optional, &even_onsets(optional.len()));
 
-    let options = FingeringOptions {
-        pattern_scale: 0.0,
-        ..FingeringOptions::for_hand(HandProfile::default())
-    };
+    let options =
+        FingeringOptions { pattern_scale: 0.0, ..FingeringOptions::for_hand(HandProfile::default()) };
 
     let free = finger_score(&melody(&pitches, hand, &[]), &options);
-    let pinned: Vec<Option<Finger>> = (0..pitches.len())
-        .map(|i| books.get(&i).map(|t| t.finger))
-        .collect();
+    let pinned: Vec<Option<Finger>> = (0..pitches.len()).map(|i| books.get(&i).map(|t| t.finger)).collect();
     let taught = finger_score(&melody(&pitches, hand, &pinned), &options);
 
     println!("{} major, {hand:?} hand, two octaves up and back down\n", NAMES[tonic as usize]);
@@ -119,8 +111,10 @@ fn main() {
     }
 
     if let Some((worst_rule, _)) = per_rule(&free).first().copied() {
-        println!("
-  {worst_rule:?}, note by note, in the model's own fingering:");
+        println!(
+            "
+  {worst_rule:?}, note by note, in the model's own fingering:"
+        );
         let mut hits = 0;
         let mut total = 0.0f32;
         for e in &free.explanations {
@@ -137,17 +131,15 @@ fn main() {
         );
     }
 
-    println!("
-  notes of the books' fingering charged as impractical:");
+    println!(
+        "
+  notes of the books' fingering charged as impractical:"
+    );
     let finger_at = |i: usize| taught.finger_of(NoteId(i as u32)).map(|f| f.number());
     let mut shown = 0;
     for e in &taught.explanations {
-        let amount: f32 = e
-            .rules
-            .iter()
-            .filter(|(r, _)| matches!(r, Rule::Impractical))
-            .map(|(_, v)| *v)
-            .sum();
+        let amount: f32 =
+            e.rules.iter().filter(|(r, _)| matches!(r, Rule::Impractical)).map(|(_, v)| *v).sum();
         if amount <= 0.0 {
             continue;
         }

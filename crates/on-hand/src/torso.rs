@@ -128,7 +128,9 @@ mod tests {
             assert!(((wrist - elbow).length() - fore).abs() < 1.0);
             assert!(elbow.z < shoulder.z, "the elbow hangs below the shoulder");
             let outward = if hand == Hand::Left { -1.0 } else { 1.0 };
-            let line = shoulder + (wrist - shoulder) * ((elbow - shoulder).dot(wrist - shoulder) / (wrist - shoulder).length_squared());
+            let line = shoulder
+                + (wrist - shoulder)
+                    * ((elbow - shoulder).dot(wrist - shoulder) / (wrist - shoulder).length_squared());
             assert!((elbow.x - line.x) * outward > 0.0, "the elbow points away from the body");
         }
     }
@@ -167,10 +169,7 @@ mod tests {
         let far = torso.effort(Hand::Right, at(60.0));
         assert_eq!(home, 0.0, "a hand in front of its own shoulder is free");
         assert!(across > 0.0, "the top of the keyboard costs something");
-        assert!(
-            far > across,
-            "and the far end costs more: {far} reaching down against {across} reaching up"
-        );
+        assert!(far > across, "and the far end costs more: {far} reaching down against {across} reaching up");
     }
 
     #[test]
@@ -191,9 +190,6 @@ mod tests {
         let at = |x: f32| Vec3::new(x, -80.0, 60.0);
         let own_side = torso.effort(Hand::Right, at(611.0 + 400.0));
         let across = torso.effort(Hand::Right, at(611.0 - 400.0));
-        assert!(
-            across > own_side,
-            "reaching across should cost more: across {across}, own side {own_side}"
-        );
+        assert!(across > own_side, "reaching across should cost more: across {across}, own side {own_side}");
     }
 }

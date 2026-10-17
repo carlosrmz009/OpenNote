@@ -4,11 +4,20 @@ use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
 
 fn note(id: u32, midi: u8, onset: i64, duration: i64, hand: Hand, chord: bool) -> Note {
     Note {
-        id: NoteId(id), midi, onset, duration,
-        onset_seconds: 0.0, duration_seconds: 0.0,
-        staff: None, voice: None, hand: Some(hand),
-        tie: TieState::default(), grace: false, chord,
-        velocity: 72, given_finger: None,
+        id: NoteId(id),
+        midi,
+        onset,
+        duration,
+        onset_seconds: 0.0,
+        duration_seconds: 0.0,
+        staff: None,
+        voice: None,
+        hand: Some(hand),
+        tie: TieState::default(),
+        grace: false,
+        chord,
+        velocity: 72,
+        given_finger: None,
         source: SourceRef::Midi { track: 0, event: id as usize },
     }
 }
@@ -32,15 +41,9 @@ fn main() {
             score.finalise();
             let solution = finger_score(&score, &FingeringOptions::default());
             let chord: Vec<_> = score.notes.iter().filter(|n| n.onset == start).collect();
-            let fingers: Vec<u8> = chord
-                .iter()
-                .filter_map(|n| solution.finger_of(n.id).map(|f| f.number()))
-                .collect();
-            let e = solution
-                .explanations
-                .iter()
-                .find(|e| e.note == chord[0].id)
-                .unwrap();
+            let fingers: Vec<u8> =
+                chord.iter().filter_map(|n| solution.finger_of(n.id).map(|f| f.number())).collect();
+            let e = solution.explanations.iter().find(|e| e.note == chord[0].id).unwrap();
             println!(
                 "{hand:?} lead-in {:<9} -> {fingers:?}  rules {:6.2} posture {:6.2} pattern {:6.2} motion {:6.2}  margin {:5.2}",
                 format!("{lead_in:?}"),

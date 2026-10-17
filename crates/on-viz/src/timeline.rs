@@ -145,8 +145,7 @@ impl Timeline {
     }
 
     pub fn build_for(score: &Score, fingerings: &[Fingering], profile: &HandProfile) -> Self {
-        let by_note: BTreeMap<NoteId, Finger> =
-            fingerings.iter().map(|f| (f.note, f.finger)).collect();
+        let by_note: BTreeMap<NoteId, Finger> = fingerings.iter().map(|f| (f.note, f.finger)).collect();
 
         let mut notes: Vec<TimelineNote> = score
             .notes
@@ -209,7 +208,13 @@ impl Timeline {
             .map(|hand| {
                 let model = BiomechModel::new(profile.clone(), *hand, weights);
                 if smooth_motion() {
-                    HandAnimator::moving(*hand, model, self.hand_grips(*hand).to_vec(), &self.notes, &self.style)
+                    HandAnimator::moving(
+                        *hand,
+                        model,
+                        self.hand_grips(*hand).to_vec(),
+                        &self.notes,
+                        &self.style,
+                    )
                 } else {
                     HandAnimator::new(*hand, model, self.hand_grips(*hand).to_vec())
                 }
@@ -287,9 +292,7 @@ impl Timeline {
 
             let makeable = |held: &[(&TimelineNote, Finger)]| {
                 holdable(held) && {
-                    let shape = Grip::new(
-                        held.iter().map(|(note, finger)| (note.midi, *finger)).collect(),
-                    );
+                    let shape = Grip::new(held.iter().map(|(note, finger)| (note.midi, *finger)).collect());
                     model.grip_outcome(&shape).reachable
                 }
             };
@@ -325,10 +328,7 @@ impl Timeline {
                 .filter(|(note, _)| together(note.start, time))
                 .map(|(note, finger)| (*finger, note.velocity))
                 .collect();
-            let keys: Vec<(u8, Finger)> = held
-                .iter()
-                .map(|(note, finger)| (note.midi, *finger))
-                .collect();
+            let keys: Vec<(u8, Finger)> = held.iter().map(|(note, finger)| (note.midi, *finger)).collect();
             let release = held.iter().fold(grip_time, |latest, (note, _)| latest.max(note.end));
             let mut grip = Grip::new(keys);
             grip.keys.sort_by_key(|(midi, _)| *midi);
@@ -360,9 +360,7 @@ impl Timeline {
     }
 
     pub fn visible_notes(&self, time: f64, lookahead: f64) -> impl Iterator<Item = &TimelineNote> {
-        self.notes
-            .iter()
-            .filter(move |n| n.end > time - 0.5 && n.start < time + lookahead)
+        self.notes.iter().filter(move |n| n.end > time - 0.5 && n.start < time + lookahead)
     }
 }
 
@@ -459,11 +457,7 @@ fn roll_in_time(notes: &mut [TimelineNote], grips: &[Vec<GripEvent>; 2]) {
     }
 }
 
-fn grip_event(
-    notes: &[(&TimelineNote, Finger)],
-    time: f64,
-    struck_at: f64,
-) -> GripEvent {
+fn grip_event(notes: &[(&TimelineNote, Finger)], time: f64, struck_at: f64) -> GripEvent {
     let struck: Vec<(Finger, u8)> = notes
         .iter()
         .filter(|(note, _)| together(note.start, struck_at))
@@ -558,7 +552,8 @@ impl HandAnimator {
             let pose = match poses.last() {
                 Some(previous) if !alike(previous, &cold) => {
                     let (warm, error) = model.grip_pose_near(&event.grip, previous, CONTINUITY);
-                    if error > on_hand::ik::CONTACT_TOLERANCE_MM && model.grip_outcome(&event.grip).reachable {
+                    if error > on_hand::ik::CONTACT_TOLERANCE_MM && model.grip_outcome(&event.grip).reachable
+                    {
                         cold
                     } else {
                         warm
@@ -571,9 +566,7 @@ impl HandAnimator {
 
         let resting = poses.first().copied().unwrap_or_else(|| {
             let centre = model.keyboard().centre_x(60);
-            model
-                .skeleton()
-                .rest_pose(glam::Vec3::new(centre, PARK_Y_MM, PARK_Z_MM))
+            model.skeleton().rest_pose(glam::Vec3::new(centre, PARK_Y_MM, PARK_Z_MM))
         });
 
         let skeleton = model.skeleton().clone();
@@ -604,7 +597,11 @@ impl HandAnimator {
             rest.q[dof::WRIST_Z] += REST_LIFT_MM;
             let other = notes
                 .iter()
-                .filter(|n| n.hand != hand && n.end > from - REST_MARGIN_SECONDS && n.start < until + REST_MARGIN_SECONDS)
+                .filter(|n| {
+                    n.hand != hand
+                        && n.end > from - REST_MARGIN_SECONDS
+                        && n.start < until + REST_MARGIN_SECONDS
+                })
                 .map(|n| keyboard.centre_x(n.midi));
             let (lo, hi) = other.fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
             if lo <= hi {
@@ -617,8 +614,13 @@ impl HandAnimator {
             rest
         };
         let track = crate::motion::Track::new(&animator.events, &animator.poses, &rest);
-        let mut strikes =
-            crate::motion::Strikes::new(&mine, &animator.events, &track.stays, &animator.poses, &animator.skeleton);
+        let mut strikes = crate::motion::Strikes::new(
+            &mine,
+            &animator.events,
+            &track.stays,
+            &animator.poses,
+            &animator.skeleton,
+        );
         strikes.lift = style.lift;
         let (from, until) = track.span();
         let (from, until) = (from - 1.0, until + 2.0);
@@ -635,9 +637,7 @@ impl HandAnimator {
         if !self.events.is_empty() {
             return;
         }
-        self.resting = self
-            .skeleton
-            .rest_pose(glam::Vec3::new(centre_x, PARK_Y_MM, PARK_Z_MM));
+        self.resting = self.skeleton.rest_pose(glam::Vec3::new(centre_x, PARK_Y_MM, PARK_Z_MM));
     }
 
     pub fn skeleton(&self) -> &on_hand::Skeleton {
@@ -648,10 +648,7 @@ impl HandAnimator {
         if self.events.is_empty() || time < self.events[0].time {
             return None;
         }
-        let index = self
-            .events
-            .partition_point(|e| e.time <= time)
-            .saturating_sub(1);
+        let index = self.events.partition_point(|e| e.time <= time).saturating_sub(1);
         Some(index)
     }
 
@@ -717,7 +714,11 @@ impl HandAnimator {
         let index = stays.partition_point(|s| s.arrive <= time).saturating_sub(1);
         if let (Some(current), Some(next)) = (self.events.get(index), stays.get(index + 1)) {
             let gap = next.arrive - current.release;
-            if gap > 1e-3 && gap < crate::motion::REST_GAP_SECONDS && time > current.release && time < next.arrive {
+            if gap > 1e-3
+                && gap < crate::motion::REST_GAP_SECONDS
+                && time > current.release
+                && time < next.arrive
+            {
                 let hardest = self.events[index + 1].struck.iter().map(|(_, v)| *v).max().unwrap_or(64);
                 let force = 1.0 + APPROACH_BY_FORCE * (f32::from(hardest) / 127.0 - 0.5) * 2.0;
                 let room = crate::motion::hop_room(gap);
@@ -726,7 +727,8 @@ impl HandAnimator {
                 let ends = &motion.style.phrase_ends;
                 let at = ends.partition_point(|e| *e < current.release - BREATH_NEAR_SECONDS);
                 if ends.get(at).is_some_and(|e| *e <= current.release + BREATH_NEAR_SECONDS) {
-                    let breath = (BREATH_LIFT_MM.0 + BREATH_LIFT_MM.1 * (motion.style.lift - 1.0).max(0.0)) * room;
+                    let breath =
+                        (BREATH_LIFT_MM.0 + BREATH_LIFT_MM.1 * (motion.style.lift - 1.0).max(0.0)) * room;
                     height = height.max(breath * motion.style.lift.min(1.5));
                     pose.q[dof::WRIST_FLEXION] += BREATH_DEG.to_radians() * motion.style.lift * room * shape;
                 }
@@ -759,10 +761,8 @@ impl HandAnimator {
         let t = ((time - start) / span).clamp(0.0, 1.0);
 
         let resting_before = start > current.time + 1e-4;
-        let resting_after = self
-            .events
-            .get(index + 2)
-            .is_none_or(|_| self.departure(index + 1) > next.time + 1e-4);
+        let resting_after =
+            self.events.get(index + 2).is_none_or(|_| self.departure(index + 1) > next.time + 1e-4);
 
         let mut moved = pose.lerp(&next_pose, travel(t, resting_before, resting_after) as f32);
         moved.q[dof::WRIST_Z] += lift_between(current, next, time);
@@ -783,8 +783,7 @@ impl HandAnimator {
         let shape = if since < WRIST_FALL_SECONDS {
             (since / WRIST_FALL_SECONDS) as f32
         } else {
-            let back =
-                ((since - WRIST_FALL_SECONDS) / (WRIST_SETTLE_SECONDS - WRIST_FALL_SECONDS)) as f32;
+            let back = ((since - WRIST_FALL_SECONDS) / (WRIST_SETTLE_SECONDS - WRIST_FALL_SECONDS)) as f32;
             1.0 - back * back * (3.0 - 2.0 * back)
         };
         let until = self.events.get(index + 1).map_or(f64::INFINITY, |next| next.time - time);
@@ -831,11 +830,7 @@ impl HandAnimator {
             let hardness = f32::from(*velocity) / 127.0;
             let height = STRIKE_LIFT_DEG.0 + (STRIKE_LIFT_DEG.1 - STRIKE_LIFT_DEG.0) * hardness;
             let peak = STRIKE_PEAK.0 + (STRIKE_PEAK.1 - STRIKE_PEAK.0) * hardness;
-            let shape = if through < peak {
-                through / peak
-            } else {
-                (1.0 - through) / (1.0 - peak)
-            };
+            let shape = if through < peak { through / peak } else { (1.0 - through) / (1.0 - peak) };
             let lift = height.to_radians() * shape.clamp(0.0, 1.0);
 
             match finger {
@@ -876,10 +871,16 @@ impl HandAnimator {
     pub fn grips_around(&self, time: f64) -> Option<(&Grip, Option<&Grip>, f32)> {
         if let Some(motion) = &self.motion {
             return match motion.track.travelling(time) {
-                Some((a, b, blend)) if a != b => Some((&self.events[a].grip, Some(&self.events[b].grip), blend)),
+                Some((a, b, blend)) if a != b => {
+                    Some((&self.events[a].grip, Some(&self.events[b].grip), blend))
+                }
                 Some((a, _, _)) => Some((&self.events[a].grip, None, 0.0)),
                 None => {
-                    let last = if time <= motion.track.stays.first().map_or(0.0, |s| s.arrive) { 0 } else { self.events.len() - 1 };
+                    let last = if time <= motion.track.stays.first().map_or(0.0, |s| s.arrive) {
+                        0
+                    } else {
+                        self.events.len() - 1
+                    };
                     self.events.get(last).map(|e| (&e.grip, None, 0.0))
                 }
             };
@@ -898,10 +899,8 @@ impl HandAnimator {
         let span = (next.time - start).max(1e-4);
         let t = ((time - start) / span).clamp(0.0, 1.0);
         let resting_before = start > self.events[index].time + 1e-4;
-        let resting_after = self
-            .events
-            .get(index + 2)
-            .is_none_or(|_| self.departure(index + 1) > next.time + 1e-4);
+        let resting_after =
+            self.events.get(index + 2).is_none_or(|_| self.departure(index + 1) > next.time + 1e-4);
         Some((current, Some(&next.grip), travel(t, resting_before, resting_after) as f32))
     }
 
@@ -916,7 +915,9 @@ impl HandAnimator {
                 if self.events[k].grip.keys.is_empty() {
                     continue;
                 }
-                let until = stays[k].leave.max(self.events[k].release.min(stays.get(k + 1).map_or(f64::MAX, |s| s.arrive)));
+                let until = stays[k]
+                    .leave
+                    .max(self.events[k].release.min(stays.get(k + 1).map_or(f64::MAX, |s| s.arrive)));
                 let inside = (time - stays[k].arrive).min(until - time);
                 held = held.max(crate::motion::minimum_jerk((inside + ramp) / ramp) as f32);
             }
@@ -937,10 +938,7 @@ impl HandAnimator {
 
     fn lands_next(&self, time: f64) -> f64 {
         let after = self.events.partition_point(|e| e.time <= time);
-        self.events[after..]
-            .iter()
-            .find(|e| !e.grip.keys.is_empty())
-            .map_or(f64::INFINITY, |e| e.time)
+        self.events[after..].iter().find(|e| !e.grip.keys.is_empty()).map_or(f64::INFINITY, |e| e.time)
     }
 
     pub fn grip_at(&self, time: f64) -> Option<&Grip> {
@@ -1017,7 +1015,9 @@ impl Decisions {
                 continue;
             }
             total += weight;
-            let Some(shift) = usize::try_from(k - self.first).ok().and_then(|i| self.shifts.get(i)) else { continue };
+            let Some(shift) = usize::try_from(k - self.first).ok().and_then(|i| self.shifts.get(i)) else {
+                continue;
+            };
             for side in 0..2 {
                 for d in 0..SHIFTED {
                     sum[side][d] += weight * shift[side][d];
@@ -1144,16 +1144,12 @@ fn apart_around(time: f64, decide: impl Fn(i64) -> Apart) -> Apart {
 
 fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
     let mut apart = Apart::default();
-    let poses = [
-        animators[Hand::Left as usize].unpressed(time),
-        animators[Hand::Right as usize].unpressed(time),
-    ];
-    let joints = [
-        animators[Hand::Left as usize].joints(&poses[0]),
-        animators[Hand::Right as usize].joints(&poses[1]),
-    ];
-    let near = ((ENGAGE_MM - nearest(&joints[0], &joints[1])) / (ENGAGE_MM - HAND_THICKNESS_MM))
-        .clamp(0.0, 1.0);
+    let poses =
+        [animators[Hand::Left as usize].unpressed(time), animators[Hand::Right as usize].unpressed(time)];
+    let joints =
+        [animators[Hand::Left as usize].joints(&poses[0]), animators[Hand::Right as usize].joints(&poses[1])];
+    let near =
+        ((ENGAGE_MM - nearest(&joints[0], &joints[1])) / (ENGAGE_MM - HAND_THICKNESS_MM)).clamp(0.0, 1.0);
     if near <= 0.0 {
         return apart;
     }
@@ -1162,10 +1158,8 @@ fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
         animators[Hand::Left as usize].grip_at(time).is_none(),
         animators[Hand::Right as usize].grip_at(time).is_none(),
     ];
-    let lands = [
-        animators[Hand::Left as usize].lands_next(time),
-        animators[Hand::Right as usize].lands_next(time),
-    ];
+    let lands =
+        [animators[Hand::Left as usize].lands_next(time), animators[Hand::Right as usize].lands_next(time)];
     let up = match (free[0], free[1]) {
         (true, true) => Some(usize::from(lands[1] > lands[0])),
         (true, false) => Some(0),
@@ -1185,9 +1179,7 @@ fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
         return apart;
     }
     let centre = |side: usize| {
-        let (lo, hi) = joints[side]
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
+        let (lo, hi) = joints[side].iter().fold((f32::MAX, f32::MIN), |(a, b), j| (a.min(j.x), b.max(j.x)));
         (lo + hi) / 2.0
     };
     for side in 0..2 {
@@ -1205,14 +1197,11 @@ fn apart_at(animators: &[HandAnimator], time: f64) -> Apart {
 }
 
 pub fn nearest(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
-    a.iter()
-        .flat_map(|p| b.iter().map(move |q| p.distance(*q)))
-        .fold(f32::MAX, f32::min)
+    a.iter().flat_map(|p| b.iter().map(move |q| p.distance(*q))).fold(f32::MAX, f32::min)
 }
 
 pub fn overlapping(a: &[glam::Vec3], b: &[glam::Vec3]) -> bool {
-    a.iter()
-        .any(|p| b.iter().any(|q| p.distance_squared(*q) < HAND_THICKNESS_MM * HAND_THICKNESS_MM))
+    a.iter().any(|p| b.iter().any(|q| p.distance_squared(*q) < HAND_THICKNESS_MM * HAND_THICKNESS_MM))
 }
 
 pub fn overlap_depth(a: &[glam::Vec3], b: &[glam::Vec3]) -> f32 {
@@ -1247,10 +1236,7 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
         let mut trial = *pose;
         let middle = |p: &HandPose| -> glam::Vec3 {
             let posture = animator.skeleton.forward(p);
-            grip.keys
-                .iter()
-                .map(|(_, finger)| posture.chain[finger.index()][3])
-                .sum::<glam::Vec3>()
+            grip.keys.iter().map(|(_, finger)| posture.chain[finger.index()][3]).sum::<glam::Vec3>()
                 / grip.keys.len() as f32
         };
         let held = middle(&trial);
@@ -1277,13 +1263,7 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
     *pose = raised(height);
 }
 
-fn swing_angle(
-    animator: &HandAnimator,
-    pose: &HandPose,
-    grip: &Grip,
-    away_from: f32,
-    urgency: f32,
-) -> f32 {
+fn swing_angle(animator: &HandAnimator, pose: &HandPose, grip: &Grip, away_from: f32, urgency: f32) -> f32 {
     if grip.keys.is_empty() {
         return 0.0;
     }
@@ -1295,8 +1275,8 @@ fn swing_angle(
         if strayed > 1.1 {
             continue;
         }
-        let gained = (trial.wrist_position().x - away_from).abs()
-            - (pose.wrist_position().x - away_from).abs();
+        let gained =
+            (trial.wrist_position().x - away_from).abs() - (pose.wrist_position().x - away_from).abs();
         if gained > best.0 {
             best = (gained, angle);
         }
@@ -1310,10 +1290,7 @@ fn swing_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, angle: f3
     }
     let tips = |p: &HandPose| -> Vec<glam::Vec3> {
         let posture = animator.skeleton.forward(p);
-        grip.keys
-            .iter()
-            .map(|(_, finger)| posture.chain[finger.index()][3])
-            .collect()
+        grip.keys.iter().map(|(_, finger)| posture.chain[finger.index()][3]).collect()
     };
     let middle = |t: &[glam::Vec3]| t.iter().copied().sum::<glam::Vec3>() / t.len() as f32;
     let before = tips(pose);
@@ -1330,8 +1307,7 @@ fn swing_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, angle: f3
             .iter()
             .zip(&before)
             .map(|(now, was)| {
-                ((now.x - was.x).abs() / SWING_TOLERANCE_MM)
-                    .max((now.y - was.y).abs() / SWING_SLIDE_MM)
+                ((now.x - was.x).abs() / SWING_TOLERANCE_MM).max((now.y - was.y).abs() / SWING_SLIDE_MM)
             })
             .fold(0.0f32, f32::max);
         (trial, strayed)
@@ -1386,11 +1362,7 @@ mod tests {
     fn pinned(entries: &[(u32, Finger)]) -> Vec<Fingering> {
         entries
             .iter()
-            .map(|(id, finger)| Fingering {
-                note: NoteId(*id),
-                finger: *finger,
-                substitute: None,
-            })
+            .map(|(id, finger)| Fingering { note: NoteId(*id), finger: *finger, substitute: None })
             .collect()
     }
 
@@ -1410,12 +1382,7 @@ mod tests {
         let timeline = Timeline::build(&score, &[]);
 
         let at = |midi: u8, nth: usize| {
-            timeline
-                .notes
-                .iter()
-                .filter(|n| n.midi == midi)
-                .nth(nth)
-                .expect("note is there")
+            timeline.notes.iter().filter(|n| n.midi == midi).nth(nth).expect("note is there")
         };
 
         let first = at(60, 0);
@@ -1440,27 +1407,18 @@ mod tests {
         let timeline = Timeline::build(&score, &[]);
 
         let tail = 0.10_f64;
-        let window = |n: &TimelineNote| {
-            (n.start, (n.end + tail).min(n.restruck.unwrap_or(f64::INFINITY)))
-        };
+        let window = |n: &TimelineNote| (n.start, (n.end + tail).min(n.restruck.unwrap_or(f64::INFINITY)));
         for pair in timeline.notes.windows(2) {
             let (_, ends) = window(&pair[0]);
             let (starts, _) = window(&pair[1]);
-            assert!(
-                ends <= starts + 1e-9,
-                "a plume ending at {ends} overlaps the next starting at {starts}"
-            );
+            assert!(ends <= starts + 1e-9, "a plume ending at {ends} overlaps the next starting at {starts}");
         }
     }
 
     #[test]
     fn a_timeline_keeps_every_note_with_its_finger() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (60, 0, q, Hand::Right),
-            (64, q, q, Hand::Right),
-            (48, 0, 2 * q, Hand::Left),
-        ]);
+        let score = score_of(&[(60, 0, q, Hand::Right), (64, q, q, Hand::Right), (48, 0, 2 * q, Hand::Left)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         assert_eq!(timeline.notes.len(), 3);
         assert!(timeline.notes.iter().all(|n| n.finger.is_some()));
@@ -1490,11 +1448,8 @@ mod tests {
             if event.grip.keys.len() < 2 {
                 continue;
             }
-            let (low, high) = event
-                .grip
-                .keys
-                .iter()
-                .fold((u8::MAX, u8::MIN), |(lo, hi), (m, _)| (lo.min(*m), hi.max(*m)));
+            let (low, high) =
+                event.grip.keys.iter().fold((u8::MAX, u8::MIN), |(lo, hi), (m, _)| (lo.min(*m), hi.max(*m)));
             assert!(
                 high - low <= 24,
                 "the hand is holding {low} to {high} at {:.2}s — {} semitones",
@@ -1534,10 +1489,7 @@ mod tests {
     #[test]
     fn a_hold_no_hand_could_make_is_let_go_of() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (36, 0, 4 * q, Hand::Left),
-            (43, 0, 4 * q, Hand::Left),
-        ]);
+        let score = score_of(&[(36, 0, 4 * q, Hand::Left), (43, 0, 4 * q, Hand::Left)]);
         let fingerings = pinned(&[(0, Finger::Little), (1, Finger::Ring)]);
         let timeline = Timeline::build(&score, &fingerings);
 
@@ -1551,8 +1503,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finger_is_never_asked_to_hold_two_keys(
-    ) {
+    fn a_finger_is_never_asked_to_hold_two_keys() {
         let q = TICKS_PER_QUARTER as i64;
         let score = score_of(&[
             (60, 0, 8 * q, Hand::Right),
@@ -1598,20 +1549,14 @@ mod tests {
             "the hand should rise between strikes: {struck:.2} then {between:.2}"
         );
         let next = height(1.05);
-        assert!(
-            (next - struck).abs() < 0.5,
-            "and be back on the key: {struck:.2} then {next:.2}"
-        );
+        assert!((next - struck).abs() < 0.5, "and be back on the key: {struck:.2} then {next:.2}");
     }
 
     #[test]
     fn an_unused_hand_waits_out_of_the_way() {
         let q = TICKS_PER_QUARTER as i64;
-        let mut score = score_of(&[
-            (60, 0, q, Hand::Right),
-            (64, q, q, Hand::Right),
-            (67, 2 * q, q, Hand::Right),
-        ]);
+        let mut score =
+            score_of(&[(60, 0, q, Hand::Right), (64, q, q, Hand::Right), (67, 2 * q, q, Hand::Right)]);
         for note in &mut score.notes {
             note.hand = Some(Hand::Right);
         }
@@ -1630,19 +1575,13 @@ mod tests {
     #[test]
     fn a_free_hand_is_lifted_over_the_other_and_a_busy_one_is_not() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (60, 0, 8 * q, Hand::Right),
-            (64, 0, 8 * q, Hand::Right),
-            (62, 0, q / 4, Hand::Left),
-        ]);
+        let score =
+            score_of(&[(60, 0, 8 * q, Hand::Right), (64, 0, 8 * q, Hand::Right), (62, 0, q / 4, Hand::Left)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
 
         let at = 1.0;
-        let alone = [
-            animators[Hand::Left as usize].pose_at(at),
-            animators[Hand::Right as usize].pose_at(at),
-        ];
+        let alone = [animators[Hand::Left as usize].pose_at(at), animators[Hand::Right as usize].pose_at(at)];
         let together = pose_both(&animators, at);
 
         assert_eq!(
@@ -1693,7 +1632,13 @@ mod tests {
     fn flowing(score: &Score, fingers: &[(u32, Finger)]) -> (Timeline, HandAnimator) {
         let timeline = Timeline::build(score, &pinned(fingers));
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
-        let animator = HandAnimator::moving(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec(), &timeline.notes, &MotionStyle::default());
+        let animator = HandAnimator::moving(
+            Hand::Right,
+            model,
+            timeline.hand_grips(Hand::Right).to_vec(),
+            &timeline.notes,
+            &MotionStyle::default(),
+        );
         (timeline, animator)
     }
 
@@ -1702,8 +1647,10 @@ mod tests {
         let q = TICKS_PER_QUARTER as i64;
         let pitches = [60u8, 62, 64, 65, 67, 72, 71, 69, 67, 65, 64, 62, 60];
         let fingers = [1, 2, 3, 1, 2, 5, 4, 3, 2, 1, 3, 2, 1];
-        let entries: Vec<_> = pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
-        let fingered: Vec<_> = fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
+        let entries: Vec<_> =
+            pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
+        let fingered: Vec<_> =
+            fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
         let (timeline, animator) = flowing(&score_of(&entries), &fingered);
         let mut before = animator.joints(&animator.pose_at(0.0));
         let mut at = 0.0005;
@@ -1721,8 +1668,10 @@ mod tests {
         let q = TICKS_PER_QUARTER as i64;
         let pitches = [48u8, 72, 50, 74, 52, 76, 53, 77];
         let fingers = [1, 5, 1, 5, 1, 5, 1, 5];
-        let entries: Vec<_> = pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
-        let fingered: Vec<_> = fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
+        let entries: Vec<_> =
+            pitches.iter().enumerate().map(|(i, m)| (*m, i as i64 * q / 4, q / 4, Hand::Right)).collect();
+        let fingered: Vec<_> =
+            fingers.iter().enumerate().map(|(i, f)| (i as u32, Finger::from_number(*f).unwrap())).collect();
         let (timeline, animator) = flowing(&score_of(&entries), &fingered);
         let keyboard = on_hand::keyboard::Keyboard::new();
         for note in &timeline.notes {
@@ -1737,13 +1686,20 @@ mod tests {
     fn a_pressed_key_has_a_fingertip_on_it() {
         let q = TICKS_PER_QUARTER as i64;
         let entries = [(60u8, 0, q, Hand::Right), (64, q, q, Hand::Right), (67, 2 * q, q, Hand::Right)];
-        let (timeline, animator) = flowing(&score_of(&entries), &[(0, Finger::Thumb), (1, Finger::Middle), (2, Finger::Little)]);
+        let (timeline, animator) =
+            flowing(&score_of(&entries), &[(0, Finger::Thumb), (1, Finger::Middle), (2, Finger::Little)]);
         for note in &timeline.notes {
             let finger = note.finger.unwrap();
             let at = note.key_bottoms() + 0.01;
             let tip = animator.joints(&animator.pose_at(at))[1 + 4 * finger.index() + 3];
             let want = -KEY_DIP * note.key_depth(at) as f32;
-            assert!((tip.z - want).abs() < 2.0, "{:?} on {} is at {:.1} mm, the key at {want:.1}", finger, note.midi, tip.z);
+            assert!(
+                (tip.z - want).abs() < 2.0,
+                "{:?} on {} is at {:.1} mm, the key at {want:.1}",
+                finger,
+                note.midi,
+                tip.z
+            );
         }
     }
 
@@ -1751,7 +1707,8 @@ mod tests {
     fn notes_a_moment_apart_are_one_chord_not_two_leaps() {
         let q = TICKS_PER_QUARTER as i64;
         let score = score_of(&[(46, 0, q, Hand::Left), (58, 2, q, Hand::Left), (62, 4, q, Hand::Left)]);
-        let timeline = Timeline::build(&score, &pinned(&[(0, Finger::Little), (1, Finger::Index), (2, Finger::Thumb)]));
+        let timeline =
+            Timeline::build(&score, &pinned(&[(0, Finger::Little), (1, Finger::Index), (2, Finger::Thumb)]));
         let grips = timeline.hand_grips(Hand::Left);
         let animators = timeline.animators(&HandProfile::default(), BiomechWeights::default());
         let wrist = |at: f64| animators[0].pose_at(at).q[dof::WRIST_X];
@@ -1813,14 +1770,18 @@ mod tests {
         let samples = (timeline.duration / step) as usize;
         let met = (0..samples).step_by(12).any(|n| {
             let at = n as f64 * step;
-            (pose_both_decided(&animators, &decisions, at)[0].q[dof::WRIST_X] - animators[0].pose_at(at).q[dof::WRIST_X]).abs() > 1.0
+            (pose_both_decided(&animators, &decisions, at)[0].q[dof::WRIST_X]
+                - animators[0].pose_at(at).q[dof::WRIST_X])
+                .abs()
+                > 1.0
         });
         assert!(met, "the hands never came close enough to be moved apart, so this showed nothing");
         for side in 0..2 {
             let x: Vec<f32> = (0..samples)
                 .map(|n| pose_both_decided(&animators, &decisions, n as f64 * step)[side].q[dof::WRIST_X])
                 .collect();
-            let turns: Vec<usize> = (1..x.len() - 1).filter(|&i| (x[i] - x[i - 1]) * (x[i + 1] - x[i]) < 0.0).collect();
+            let turns: Vec<usize> =
+                (1..x.len() - 1).filter(|&i| (x[i] - x[i - 1]) * (x[i + 1] - x[i]) < 0.0).collect();
             for pair in turns.windows(3) {
                 let (p, m, r) = (pair[0], pair[1], pair[2]);
                 let quick = (r - p) as f64 * step <= 0.08;
@@ -1905,7 +1866,8 @@ mod tests {
         for event in grips {
             assert!(event.release >= event.time, "a grip let go of before it is taken: {shown:?}");
         }
-        let mut starts: Vec<f64> = timeline.notes.iter().filter(|n| n.start >= 1.0).map(|n| n.start).collect();
+        let mut starts: Vec<f64> =
+            timeline.notes.iter().filter(|n| n.start >= 1.0).map(|n| n.start).collect();
         starts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
         assert!(starts.len() >= 2, "a rolled chord sounds as it is rolled: {starts:?}");
     }
@@ -1921,7 +1883,8 @@ mod tests {
             let alone = animators[hand as usize].pose_at(0.5);
             let together = pose_both(&animators, 0.5)[hand as usize];
             assert_eq!(
-                alone.q[dof::WRIST_Z], together.q[dof::WRIST_Z],
+                alone.q[dof::WRIST_Z],
+                together.q[dof::WRIST_Z],
                 "{hand:?} was moved for a collision that is not there"
             );
         }
@@ -1946,10 +1909,7 @@ mod tests {
             "the wrist should drop into the note: {settled:.2} settled, {sinking:.2} at \
              the bottom"
         );
-        assert!(
-            (height(WRIST_SETTLE_SECONDS + 0.4) - settled).abs() < 0.01,
-            "the wrist should come back up"
-        );
+        assert!((height(WRIST_SETTLE_SECONDS + 0.4) - settled).abs() < 0.01, "the wrist should come back up");
     }
 
     #[test]
@@ -1967,8 +1927,7 @@ mod tests {
         let flat = |t: f64| {
             let pose = animator.pose_at(t);
             let posture = animator.skeleton().forward(&pose);
-            (posture.chain[Finger::Middle.index()][3].truncate() - posture.wrist.truncate())
-                .length()
+            (posture.chain[Finger::Middle.index()][3].truncate() - posture.wrist.truncate()).length()
         };
 
         let settled = flat(WRIST_SETTLE_SECONDS + 0.05);
@@ -2000,10 +1959,7 @@ mod tests {
         let quiet = sink(20);
         let loud = sink(120);
         assert!(quiet > 0.0, "even a quiet note sinks a little: {quiet:.2}");
-        assert!(
-            loud > quiet * 1.8,
-            "a loud note should sink much further: {quiet:.2} quiet, {loud:.2} loud"
-        );
+        assert!(loud > quiet * 1.8, "a loud note should sink much further: {quiet:.2} quiet, {loud:.2} loud");
     }
 
     #[test]
@@ -2031,10 +1987,7 @@ mod tests {
             highest - lowest > 0.2,
             "a hand waiting through a rest should drift: {lowest:.2} to {highest:.2}"
         );
-        assert!(
-            highest - lowest <= 2.0 * BREATH_MM + 1e-3,
-            "and only just: {lowest:.2} to {highest:.2}"
-        );
+        assert!(highest - lowest <= 2.0 * BREATH_MM + 1e-3, "and only just: {lowest:.2} to {highest:.2}");
     }
 
     #[test]
@@ -2066,10 +2019,7 @@ mod tests {
     #[test]
     fn a_held_note_is_never_lifted_off() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (60, 0, 4 * q, Hand::Right),
-            (72, 4 * q, q, Hand::Right),
-        ]);
+        let score = score_of(&[(60, 0, 4 * q, Hand::Right), (72, 4 * q, q, Hand::Right)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let animator = HandAnimator::new(
             Hand::Right,
@@ -2150,11 +2100,7 @@ mod tests {
     #[test]
     fn a_chord_becomes_one_grip_not_several() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (60, 0, q, Hand::Right),
-            (64, 0, q, Hand::Right),
-            (67, 0, q, Hand::Right),
-        ]);
+        let score = score_of(&[(60, 0, q, Hand::Right), (64, 0, q, Hand::Right), (67, 0, q, Hand::Right)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let grips = timeline.hand_grips(Hand::Right);
         assert_eq!(grips.len(), 1);
@@ -2173,11 +2119,7 @@ mod tests {
         ]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
-        let animator = HandAnimator::new(
-            Hand::Right,
-            model,
-            timeline.hand_grips(Hand::Right).to_vec(),
-        );
+        let animator = HandAnimator::new(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec());
 
         let first = animator.pose_at(0.1);
         let arrival = animator.pose_at(2.0);
@@ -2199,11 +2141,7 @@ mod tests {
         let score = score_of(&[(60, 0, 4 * q, Hand::Right), (67, 0, 4 * q, Hand::Right)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
-        let animator = HandAnimator::new(
-            Hand::Right,
-            model,
-            timeline.hand_grips(Hand::Right).to_vec(),
-        );
+        let animator = HandAnimator::new(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec());
         let a = animator.pose_at(0.3);
         let b = animator.pose_at(1.5);
         assert!((a.wrist_position() - b.wrist_position()).length() < 1e-3);
@@ -2215,11 +2153,7 @@ mod tests {
         let score = score_of(&[(60, 0, q, Hand::Right), (84, 2 * q, q, Hand::Right)]);
         let timeline = Timeline::build(&score, &fingered(&score));
         let model = BiomechModel::new(HandProfile::default(), Hand::Right, BiomechWeights::default());
-        let animator = HandAnimator::new(
-            Hand::Right,
-            model,
-            timeline.hand_grips(Hand::Right).to_vec(),
-        );
+        let animator = HandAnimator::new(Hand::Right, model, timeline.hand_grips(Hand::Right).to_vec());
 
         let mut previous = animator.pose_at(0.0).wrist_position().x;
         let mut biggest: f32 = 0.0;
@@ -2299,18 +2233,13 @@ mod tests {
             (64, 2 * q, q, Hand::Right),
             (64, 3 * q, q, Hand::Right),
         ]);
-        let fingerings = pinned(&[
-            (0, Finger::Middle),
-            (1, Finger::Middle),
-            (2, Finger::Middle),
-            (3, Finger::Middle),
-        ]);
+        let fingerings =
+            pinned(&[(0, Finger::Middle), (1, Finger::Middle), (2, Finger::Middle), (3, Finger::Middle)]);
         let animator = animator_for(&score, &fingerings, Hand::Right);
 
         let down = lowest_tip(&animator, 1.0);
-        let between = (0..12)
-            .map(|i| lowest_tip(&animator, 0.84 + f64::from(i) * 0.01))
-            .fold(0.0f32, f32::max);
+        let between =
+            (0..12).map(|i| lowest_tip(&animator, 0.84 + f64::from(i) * 0.01)).fold(0.0f32, f32::max);
         assert!(down < 1.0, "the finger should be on the key on the beat: {down}");
         assert!(
             between > 3.0,
@@ -2327,12 +2256,8 @@ mod tests {
             (64, 2 * q, q, Hand::Right),
             (64, 3 * q, q, Hand::Right),
         ]);
-        let fingerings = pinned(&[
-            (0, Finger::Middle),
-            (1, Finger::Middle),
-            (2, Finger::Middle),
-            (3, Finger::Middle),
-        ]);
+        let fingerings =
+            pinned(&[(0, Finger::Middle), (1, Finger::Middle), (2, Finger::Middle), (3, Finger::Middle)]);
         let animator = animator_for(&score, &fingerings, Hand::Right);
         let middle = dof::finger(1);
         let struck = animator.pose_at(1.0);
@@ -2377,16 +2302,8 @@ mod tests {
     #[test]
     fn a_chord_wider_than_the_hand_is_rolled_rather_than_dropped() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (45, 0, 4 * q, Hand::Left),
-            (57, 0, q, Hand::Left),
-            (60, 0, q, Hand::Left),
-        ]);
-        let fingerings = pinned(&[
-            (0, Finger::Little),
-            (1, Finger::Index),
-            (2, Finger::Thumb),
-        ]);
+        let score = score_of(&[(45, 0, 4 * q, Hand::Left), (57, 0, q, Hand::Left), (60, 0, q, Hand::Left)]);
+        let fingerings = pinned(&[(0, Finger::Little), (1, Finger::Index), (2, Finger::Thumb)]);
         let timeline = Timeline::build(&score, &fingerings);
         let grips = timeline.hand_grips(Hand::Left);
 
@@ -2399,10 +2316,7 @@ mod tests {
                 }),
                 "{} was struck with no finger on it; grips were {:?}",
                 note.midi,
-                grips
-                    .iter()
-                    .map(|e| (e.time, e.grip.keys.clone()))
-                    .collect::<Vec<_>>()
+                grips.iter().map(|e| (e.time, e.grip.keys.clone())).collect::<Vec<_>>()
             );
         }
 
@@ -2411,25 +2325,15 @@ mod tests {
             grips[0].grip.keys.iter().any(|(midi, _)| *midi == 45),
             "the bottom of the chord goes down first"
         );
-        assert!(
-            grips[1].time > grips[0].time,
-            "the rest of it arrives afterwards"
-        );
+        assert!(grips[1].time > grips[0].time, "the rest of it arrives afterwards");
     }
 
     #[test]
     fn a_hand_never_takes_a_finger_off_a_note_it_is_striking() {
         let q = TICKS_PER_QUARTER as i64;
-        let score = score_of(&[
-            (28, 0, 8 * q, Hand::Left),
-            (40, 0, 8 * q, Hand::Left),
-            (52, 4 * q, q, Hand::Left),
-        ]);
-        let fingerings = pinned(&[
-            (0, Finger::Little),
-            (1, Finger::Thumb),
-            (2, Finger::Thumb),
-        ]);
+        let score =
+            score_of(&[(28, 0, 8 * q, Hand::Left), (40, 0, 8 * q, Hand::Left), (52, 4 * q, q, Hand::Left)]);
+        let fingerings = pinned(&[(0, Finger::Little), (1, Finger::Thumb), (2, Finger::Thumb)]);
         let timeline = Timeline::build(&score, &fingerings);
         let grips = timeline.hand_grips(Hand::Left);
         for note in timeline.notes.iter().filter(|n| n.hand == Hand::Left) {

@@ -27,11 +27,7 @@ fn sized(width: u32, height: u32, shade: impl Fn(f32, f32) -> Rgba) -> Image {
         }
     }
     Image::new(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
+        Extent3d { width, height, depth_or_array_layers: 1 },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,
@@ -184,10 +180,7 @@ mod tests {
         ] {
             assert_eq!(image.width(), TEXTURE_WIDTH);
             assert_eq!(image.height(), TEXTURE_HEIGHT);
-            assert_eq!(
-                image.data.as_ref().unwrap().len(),
-                (TEXTURE_WIDTH * TEXTURE_HEIGHT * 4) as usize
-            );
+            assert_eq!(image.data.as_ref().unwrap().len(), (TEXTURE_WIDTH * TEXTURE_HEIGHT * 4) as usize);
         }
     }
 

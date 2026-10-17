@@ -31,10 +31,7 @@ pub const LEAD_IN: f64 = -1.0;
 
 pub(crate) const KEYBOARD_Y_MM: f32 = -WHITE_KEY_LENGTH;
 
-const HAND_COLOURS: [Color; 2] = [
-    Color::srgb(0.85, 0.012, 0.012),
-    Color::srgb(0.045, 0.88, 1.0),
-];
+const HAND_COLOURS: [Color; 2] = [Color::srgb(0.85, 0.012, 0.012), Color::srgb(0.045, 0.88, 1.0)];
 
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct NoteColours(pub [Color; 2]);
@@ -196,13 +193,7 @@ pub struct Transport {
 
 impl Default for Transport {
     fn default() -> Self {
-        Self {
-            position: LEAD_IN,
-            playing: true,
-            speed: 1.0,
-            looping: true,
-            pending_seek: None,
-        }
+        Self { position: LEAD_IN, playing: true, speed: 1.0, looping: true, pending_seek: None }
     }
 }
 
@@ -343,14 +334,7 @@ impl Plugin for VisualizerPlugin {
             .add_plugins(MaterialPlugin::<Lacquered>::default())
             .add_systems(
                 Startup,
-                (
-                    setup_camera,
-                    setup_keyboard,
-                    setup_notes,
-                    setup_sparks,
-                    setup_note_lights,
-                    setup_flashes,
-                ),
+                (setup_camera, setup_keyboard, setup_notes, setup_sparks, setup_note_lights, setup_flashes),
             )
             .add_systems(
                 Update,
@@ -390,10 +374,7 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
         camera_placement(layout),
         bevy::post_process::bloom::Bloom {
             intensity: 0.30,
-            prefilter: bevy::post_process::bloom::BloomPrefilter {
-                threshold: 1.0,
-                threshold_softness: 0.35,
-            },
+            prefilter: bevy::post_process::bloom::BloomPrefilter { threshold: 1.0, threshold_softness: 0.35 },
             composite_mode: bevy::post_process::bloom::BloomCompositeMode::Additive,
             low_frequency_boost: BLOOM_HAZE,
             max_mip_dimension: 512,
@@ -405,13 +386,8 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
     ));
 
     commands.spawn((
-        DirectionalLight {
-            illuminance: 4_650.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(cx + 380.0, cy - 300.0, 1_050.0)
-            .looking_at(Vec3::new(cx, cy, 0.0), Vec3::Z),
+        DirectionalLight { illuminance: 4_650.0, shadow_maps_enabled: true, ..default() },
+        Transform::from_xyz(cx + 380.0, cy - 300.0, 1_050.0).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Z),
         bevy::light::CascadeShadowConfigBuilder {
             num_cascades: 2,
             first_cascade_far_bound: 900.0,
@@ -629,11 +605,7 @@ fn setup_keyboard(
     let case_depth = -layout.bottom_mm() * 1.4;
     commands.spawn((
         Mesh3d(meshes.add(Rectangle::new(layout.width_mm(), case_depth))),
-        MeshMaterial3d(materials.add(painted(
-            images.add(skin::case()),
-            Color::WHITE,
-            AlphaMode::Opaque,
-        ))),
+        MeshMaterial3d(materials.add(painted(images.add(skin::case()), Color::WHITE, AlphaMode::Opaque))),
         Transform::from_xyz(centre_x, -case_depth / 2.0, CASE_Z),
         Backdrop,
     ));
@@ -670,11 +642,8 @@ fn setup_notes(
     note_colours: Res<NoteColours>,
 ) {
     let layout = &performance.layout;
-    let colours: Vec<Handle<NoteMaterial>> = note_colours
-        .0
-        .iter()
-        .map(|colour| materials.add(note_material(*colour)))
-        .collect();
+    let colours: Vec<Handle<NoteMaterial>> =
+        note_colours.0.iter().map(|colour| materials.add(note_material(*colour))).collect();
 
     for note in &performance.timeline.notes {
         if !layout.shows(note.midi) {
@@ -739,11 +708,7 @@ fn key_mesh(size: Vec3, radius: f32, narrowing: f32, recess: f32) -> Mesh {
                     Vec3::new(0.0, 1.0 - pull * rise, 0.0),
                     Vec3::new(-p.x * narrow / size.z, (half.y - p.y) * pull / size.z, 1.0),
                 );
-                positions.push([
-                    p.x * (1.0 - narrow * rise),
-                    p.y + (half.y - p.y) * pull * rise,
-                    p.z,
-                ]);
+                positions.push([p.x * (1.0 - narrow * rise), p.y + (half.y - p.y) * pull * rise, p.z]);
                 normals.push((jacobian.inverse().transpose() * outward).normalize().to_array());
                 uvs.push([(p.x + half.x) / size.x, (half.y - p.y) / size.y]);
             }
@@ -770,8 +735,7 @@ fn key_mesh(size: Vec3, radius: f32, narrowing: f32, recess: f32) -> Mesh {
 fn note_mesh(width: f32, height: f32) -> Mesh {
     let half = [width / 2.0, height / 2.0];
     let corners = [[-1.0, 1.0], [1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]];
-    let positions: Vec<[f32; 3]> =
-        corners.iter().map(|[x, y]| [x * half[0], y * half[1], 0.0]).collect();
+    let positions: Vec<[f32; 3]> = corners.iter().map(|[x, y]| [x * half[0], y * half[1], 0.0]).collect();
     let local: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
     Mesh::new(
         bevy::mesh::PrimitiveTopology::TriangleList,
@@ -839,10 +803,8 @@ fn setup_flashes(
             })
         })
     };
-    let colours = [
-        glow(images.add(skin::flash()), 0.20, FLASH_GLOW),
-        glow(images.add(skin::beam()), 0.05, BEAM_GLOW),
-    ];
+    let colours =
+        [glow(images.add(skin::flash()), 0.20, FLASH_GLOW), glow(images.add(skin::beam()), 0.05, BEAM_GLOW)];
 
     let quad = meshes.add(Rectangle::new(FLASH_SIZE_MM * skin::FLASH_STREAK, FLASH_SIZE_MM));
     let shaft = meshes.add(
@@ -878,12 +840,7 @@ fn raise_flashes(
     transport: Res<Transport>,
     performance: Res<Performance>,
     colours: Res<FlashColours>,
-    flashes: Query<(
-        &Flash,
-        &mut Transform,
-        &mut Visibility,
-        &mut MeshMaterial3d<StandardMaterial>,
-    )>,
+    flashes: Query<(&Flash, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let states = performance.timeline.key_depression(transport.position);
     for (flash, mut transform, mut visibility, mut material) in flashes {
@@ -951,11 +908,8 @@ fn light_struck_keys(
                 let (x0, x1, y0, y1) = layout.key_rect(*midi);
                 light.color = note_colours.0[*hand as usize];
                 light.intensity = NOTE_LIGHT_LUMENS * depth;
-                transform.translation = Vec3::new(
-                    (x0 + x1) / 2.0,
-                    y0 + (y1 - y0) * 0.28,
-                    NOTE_LIGHT_HEIGHT_MM,
-                ) + offset;
+                transform.translation =
+                    Vec3::new((x0 + x1) / 2.0, y0 + (y1 - y0) * 0.28, NOTE_LIGHT_HEIGHT_MM) + offset;
                 *visibility = Visibility::Visible;
             }
             None => {
@@ -972,10 +926,7 @@ fn update_sparks(
     transport: Res<Transport>,
     performance: Res<Performance>,
     colours: Res<SparkColours>,
-    sparks: Query<
-        (&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>),
-        With<Spark>,
-    >,
+    sparks: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), With<Spark>>,
 ) {
     let layout = &performance.layout;
     let now = transport.position;
@@ -983,17 +934,15 @@ fn update_sparks(
     let stagger = SPARK_LIFE / SPARKS_PER_NOTE as f32;
 
     for (index, note) in performance.timeline.notes.iter().enumerate() {
-        let done = (note.end + f64::from(SPARK_TAIL_SECONDS))
-            .min(note.restruck.unwrap_or(f64::INFINITY));
+        let done = (note.end + f64::from(SPARK_TAIL_SECONDS)).min(note.restruck.unwrap_or(f64::INFINITY));
         if now < note.start || now >= done {
             continue;
         }
         let elapsed = (now - note.start) as f32;
         let throwing = (note.end.min(done) - note.start) as f32;
 
-        let evaporation = (((done - now) as f32) / SPARK_TAIL_SECONDS)
-            .clamp(0.0, 1.0)
-            .powf(SPARK_EVAPORATE_SHAPE);
+        let evaporation =
+            (((done - now) as f32) / SPARK_TAIL_SECONDS).clamp(0.0, 1.0).powf(SPARK_EVAPORATE_SHAPE);
 
         let (x0, x1, _, _) = layout.key_rect(note.midi);
         let centre = (x0 + x1) / 2.0;
@@ -1020,21 +969,15 @@ fn update_sparks(
             if born > throwing {
                 continue;
             }
-            if born > SPARK_EMIT_SECONDS
-                && scramble(seed ^ 0x7f4a_7c15) > SPARK_SUSTAIN_SHARE
-            {
+            if born > SPARK_EMIT_SECONDS && scramble(seed ^ 0x7f4a_7c15) > SPARK_SUSTAIN_SHARE {
                 continue;
             }
 
-            let strand = seed
-                .wrapping_div(SPARK_FILAMENT)
-                .wrapping_mul(0x9e37_79b9)
+            let strand = seed.wrapping_div(SPARK_FILAMENT).wrapping_mul(0x9e37_79b9)
                 ^ (turn as u32).wrapping_mul(0x85eb_ca6b);
 
-            let reach =
-                width * SPARK_WANDER_KEYS * (2.0 * scramble(strand ^ 0x94d0_49bb) - 1.0);
-            let upward =
-                SPARK_RISE_MM * (0.40 + 0.60 * scramble(strand ^ 0x5bf0_3635).powf(1.7));
+            let reach = width * SPARK_WANDER_KEYS * (2.0 * scramble(strand ^ 0x94d0_49bb) - 1.0);
+            let upward = SPARK_RISE_MM * (0.40 + 0.60 * scramble(strand ^ 0x5bf0_3635).powf(1.7));
             let size = SPARK_SIZE_MM.start
                 + (SPARK_SIZE_MM.end - SPARK_SIZE_MM.start) * scramble(seed ^ 0x27d4_eb2f);
             let phase = scramble(seed ^ 0x1656_67b1) * std::f32::consts::TAU;
@@ -1043,10 +986,8 @@ fn update_sparks(
             let place = |age: f32| {
                 let height = upward * age - 0.5 * SPARK_GRAVITY_MM * age * age;
                 let opened = (age / SPARK_LIFE).powf(SPARK_WANDER_SHAPE);
-                let spread =
-                    reach * (SPARK_WANDER_AT_BIRTH + (1.0 - SPARK_WANDER_AT_BIRTH) * opened);
-                let curl =
-                    (phase + age * SPARK_CURL_RATE).sin() * width * SPARK_CURL_KEYS * age;
+                let spread = reach * (SPARK_WANDER_AT_BIRTH + (1.0 - SPARK_WANDER_AT_BIRTH) * opened);
+                let curl = (phase + age * SPARK_CURL_RATE).sin() * width * SPARK_CURL_KEYS * age;
                 let drift = lean * width * SPARK_DRIFT_KEYS * age * age;
                 Vec2::new(centre + spread + curl + drift, height)
             };
@@ -1068,11 +1009,7 @@ fn update_sparks(
             *visibility = Visibility::Visible;
 
             let hand = note.hand as usize;
-            let wanted = if age < SPARK_WHITE_FOR {
-                &colours.hot[hand]
-            } else {
-                &colours.cool[hand]
-            };
+            let wanted = if age < SPARK_WHITE_FOR { &colours.hot[hand] } else { &colours.cool[hand] };
             if material.0.id() != wanted.id() {
                 material.0 = wanted.clone();
             }
@@ -1216,13 +1153,11 @@ fn move_notes(
         let (bottom, height) = bar_extent(layout, bar, now);
         let top = bottom + height;
 
-        transform.translation.y = bottom + height / 2.0 + (LANE_Z + 1.0 - NOTE_Z) * CAMERA_TILT_DEG.to_radians().tan();
+        transform.translation.y =
+            bottom + height / 2.0 + (LANE_Z + 1.0 - NOTE_Z) * CAMERA_TILT_DEG.to_radians().tan();
 
-        *visibility = if top > 0.0 && bottom < layout.lane_height {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
+        *visibility =
+            if top > 0.0 && bottom < layout.lane_height { Visibility::Visible } else { Visibility::Hidden };
     }
 }
 
@@ -1269,10 +1204,7 @@ fn update_labels(
     let Ok((camera, camera_transform)) = camera.single() else {
         return;
     };
-    let inset = camera
-        .logical_viewport_rect()
-        .map(|rect| rect.min)
-        .unwrap_or(Vec2::ZERO);
+    let inset = camera.logical_viewport_rect().map(|rect| rect.min).unwrap_or(Vec2::ZERO);
     let layout = &performance.layout;
     let now = transport.position;
 
@@ -1299,25 +1231,23 @@ fn update_labels(
     let mut slot = 0;
     for (mut node, mut text, mut colour) in labels {
         match wanted.get(slot) {
-            Some((_, finger, hand, anchor)) => {
-                match camera.world_to_viewport(camera_transform, *anchor) {
-                    Ok(screen) => {
-                        let screen = screen - inset;
-                        node.display = Display::Flex;
-                        node.left = Val::Px(screen.x - LABEL_FONT_PX * 0.28);
-                        node.top = Val::Px(screen.y - LABEL_FONT_PX * 0.62);
-                        let digit = finger.to_string();
-                        if text.0 != digit {
-                            text.0 = digit;
-                        }
-                        colour.0 = match hand {
-                            Hand::Left => Color::srgb(0.03, 0.11, 0.22),
-                            Hand::Right => Color::srgb(0.20, 0.08, 0.01),
-                        };
+            Some((_, finger, hand, anchor)) => match camera.world_to_viewport(camera_transform, *anchor) {
+                Ok(screen) => {
+                    let screen = screen - inset;
+                    node.display = Display::Flex;
+                    node.left = Val::Px(screen.x - LABEL_FONT_PX * 0.28);
+                    node.top = Val::Px(screen.y - LABEL_FONT_PX * 0.62);
+                    let digit = finger.to_string();
+                    if text.0 != digit {
+                        text.0 = digit;
                     }
-                    Err(_) => node.display = Display::None,
+                    colour.0 = match hand {
+                        Hand::Left => Color::srgb(0.03, 0.11, 0.22),
+                        Hand::Right => Color::srgb(0.20, 0.08, 0.01),
+                    };
                 }
-            }
+                Err(_) => node.display = Display::None,
+            },
             None => node.display = Display::None,
         }
         slot += 1;
@@ -1326,16 +1256,9 @@ fn update_labels(
     for _ in slot..wanted.len().min(slot + 16) {
         commands.spawn((
             Text::new(""),
-            TextFont {
-                font_size: bevy::text::FontSize::Px(LABEL_FONT_PX),
-                ..default()
-            },
+            TextFont { font_size: bevy::text::FontSize::Px(LABEL_FONT_PX), ..default() },
             TextColor(Color::WHITE),
-            Node {
-                position_type: PositionType::Absolute,
-                display: Display::None,
-                ..default()
-            },
+            Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
             FingerLabel,
         ));
     }
@@ -1452,22 +1375,16 @@ pub fn capture(
 }
 
 pub(crate) fn default_plugins(title: &str, assets: &std::path::Path) -> impl PluginGroup {
-    let mut plugins = DefaultPlugins
-        .build()
-        .disable::<bevy::log::LogPlugin>()
-        .set(WindowPlugin {
-            primary_window: Some(Window {
-                title: title.to_string(),
-                resolution: (1600u32, 900u32).into(),
-                ..default()
-            }),
+    let mut plugins = DefaultPlugins.build().disable::<bevy::log::LogPlugin>().set(WindowPlugin {
+        primary_window: Some(Window {
+            title: title.to_string(),
+            resolution: (1600u32, 900u32).into(),
             ..default()
-        });
+        }),
+        ..default()
+    });
     if let Some(path) = assets.to_str() {
-        plugins = plugins.set(AssetPlugin {
-            file_path: path.to_string(),
-            ..default()
-        });
+        plugins = plugins.set(AssetPlugin { file_path: path.to_string(), ..default() });
     }
     plugins
 }
@@ -1477,11 +1394,7 @@ pub fn run(
     settings: crate::SessionSettings,
     path: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
-    let title = performance
-        .timeline
-        .title
-        .clone()
-        .unwrap_or_else(|| "OpenNote".into());
+    let title = performance.timeline.title.clone().unwrap_or_else(|| "OpenNote".into());
 
     let assets = performance.assets_root.clone();
     let audio = Audio::open(&performance.timeline, performance.soundfont.clone());

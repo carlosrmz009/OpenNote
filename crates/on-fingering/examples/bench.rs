@@ -91,12 +91,7 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 }
 
 fn show(fingers: &[u8], take: usize) -> String {
-    fingers
-        .iter()
-        .take(take)
-        .map(|f| f.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
+    fingers.iter().take(take).map(|f| f.to_string()).collect::<Vec<_>>().join(" ")
 }
 
 fn main() {
@@ -145,13 +140,8 @@ fn main() {
 
     println!("\n== 3. The four published rule sets, one harness, one metric");
     println!("Same search, same hand model, same evaluation; only the rules differ\n");
-    for set in [
-        RuleSet::Parncutt,
-        RuleSet::Jacobs,
-        RuleSet::Balliauw,
-        RuleSet::Badgerow,
-        RuleSet::Consensus,
-    ] {
+    for set in [RuleSet::Parncutt, RuleSet::Jacobs, RuleSet::Balliauw, RuleSet::Badgerow, RuleSet::Consensus]
+    {
         let mut o = base.clone();
         o.rule_set = set;
         o.rule_weights = RuleWeights::default();
@@ -159,19 +149,20 @@ fn main() {
         println!("  {:<44} {:>9.1}%", format!("{set:?}"), pct(taught_agreement(&o)));
     }
 
-    println!("
-== 4. Tempo dependence");
+    println!(
+        "
+== 4. Tempo dependence"
+    );
     println!("The cost function is tempo-aware: the work of reconfiguring the hand is");
     println!("divided by the time available and squared. Conventions off, so nothing");
-    println!("else decides. Broken octaves, where the choice is stretch against shift
-");
+    println!(
+        "else decides. Broken octaves, where the choice is stretch against shift
+"
+    );
     let mut bare = base.clone();
     bare.pattern_scale = 0.0;
     let octaves = vec![60u8, 72, 62, 74, 64, 76, 65, 77, 67, 79];
-    println!(
-        "  {:>8}  {:>9} {:>9} {:>9}  {}",
-        "notes/s", "rules", "motion", "motion %", "fingering"
-    );
+    println!("  {:>8}  {:>9} {:>9} {:>9}  {}", "notes/s", "rules", "motion", "motion %", "fingering");
     for rate in [0.5f64, 1.0, 2.0, 4.0, 8.0, 16.0, 24.0] {
         let score = melody(&octaves, Hand::Right, rate);
         let solution = finger_score_with_prior(&score, &bare, None);
@@ -192,11 +183,15 @@ fn main() {
         );
     }
 
-    println!("
-== 5. Hand size");
+    println!(
+        "
+== 5. Hand size"
+    );
     println!("The same notes for hands of different reach, conventions off. A spread of");
-    println!("tenths, where what the hand can hold is what decides
-");
+    println!(
+        "tenths, where what the hand can hold is what decides
+"
+    );
     let spread = vec![60u8, 76, 62, 77, 64, 79, 65, 81, 67, 83];
     println!("  {:<14} {:>12}  {}", "hand", "differs by", "fingering");
     let medium = {
@@ -204,13 +199,9 @@ fn main() {
         o.pattern_scale = 0.0;
         fingers_of(&melody(&spread, Hand::Right, 4.0), &o)
     };
-    for size in [
-        HandSize::ExtraSmall,
-        HandSize::Small,
-        HandSize::Medium,
-        HandSize::Large,
-        HandSize::ExtraLarge,
-    ] {
+    for size in
+        [HandSize::ExtraSmall, HandSize::Small, HandSize::Medium, HandSize::Large, HandSize::ExtraLarge]
+    {
         let mut o = FingeringOptions::for_hand(HandProfile::from_size(size));
         o.pattern_scale = 0.0;
         let got = fingers_of(&melody(&spread, Hand::Right, 4.0), &o);

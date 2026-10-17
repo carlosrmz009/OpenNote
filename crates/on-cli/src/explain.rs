@@ -36,8 +36,8 @@ pub fn run(args: ExplainArgs) -> Result<()> {
         bail!("{} does not exist", args.input.display());
     }
     let options = args.model.options()?;
-    let mut input = on_score::Document::open(&args.input)
-        .with_context(|| format!("reading {}", args.input.display()))?;
+    let mut input =
+        on_score::Document::open(&args.input).with_context(|| format!("reading {}", args.input.display()))?;
     let assignment = args.model.hands(&options)?;
     on_score::assign_hands(input.score_mut(), &assignment);
 
@@ -93,10 +93,7 @@ pub fn run(args: ExplainArgs) -> Result<()> {
             println!("           ! this chord is out of reach for the given hand size");
         }
         if explanation.posture_strain > 2.0 {
-            println!(
-                "           the shape costs {:.2} to hold, which is a lot",
-                explanation.posture_strain
-            );
+            println!("           the shape costs {:.2} to hold, which is a lot", explanation.posture_strain);
         }
         for (rule, cost) in explanation.rules.iter().take(3) {
             println!("           {:>5.2}  {}", cost, rule.describe());

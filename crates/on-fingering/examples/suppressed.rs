@@ -10,18 +10,10 @@ fn main() -> anyhow::Result<()> {
     let score = file.score();
 
     for hand in Hand::ALL {
-        let onsets: Vec<f64> = score
-            .notes
-            .iter()
-            .filter(|n| n.hand == Some(hand))
-            .map(|n| n.onset_seconds)
-            .collect();
-        let pitches: Vec<Option<u8>> = score
-            .notes
-            .iter()
-            .filter(|n| n.hand == Some(hand))
-            .map(|n| Some(n.midi))
-            .collect();
+        let onsets: Vec<f64> =
+            score.notes.iter().filter(|n| n.hand == Some(hand)).map(|n| n.onset_seconds).collect();
+        let pitches: Vec<Option<u8>> =
+            score.notes.iter().filter(|n| n.hand == Some(hand)).map(|n| Some(n.midi)).collect();
 
         let mut all = 0usize;
         let mut suppressed = Vec::new();

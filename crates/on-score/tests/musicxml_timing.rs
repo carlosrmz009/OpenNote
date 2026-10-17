@@ -57,7 +57,8 @@ fn triplets_and_a_plain_beat_meet_on_the_next_beat() {
 
 #[test]
 fn a_grace_note_comes_just_before_the_note_it_leads_into() {
-    let measures = format!("{}{}{}</measure>", note('C', 4, 1, 1, ""), grace('E', 4, false), note('D', 4, 1, 1, ""));
+    let measures =
+        format!("{}{}{}</measure>", note('C', 4, 1, 1, ""), grace('E', 4, false), note('D', 4, 1, 1, ""));
     let score = read(&measures, 1);
     let (grace, principal) = (onset(&score, 64), onset(&score, 62));
     assert!(grace < principal, "grace at {grace}, principal at {principal}");

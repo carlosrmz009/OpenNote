@@ -12,8 +12,8 @@ use on_score::{Note, NoteId, Score, SourceRef, TieState, TICKS_PER_QUARTER};
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::Piece;
-use crate::hash::fnv;
 use crate::eval::evaluate;
+use crate::hash::fnv;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Target {
@@ -33,8 +33,7 @@ impl Target {
         }
     }
 
-    pub const ALL: [Target; 4] =
-        [Target::Hands, Target::Fingers, Target::Play, Target::Taught];
+    pub const ALL: [Target; 4] = [Target::Hands, Target::Fingers, Target::Play, Target::Taught];
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -115,8 +114,18 @@ fn knobs(target: Target) -> Vec<Knob> {
                 Knob::scaled("hands.travel", d.travel_weight),
                 Knob::scaled("hands.register", d.register_weight),
                 Knob::scaled("hands.abandon", d.abandon_weight),
-                Knob { name: "hands.pivot_window".into(), default: d.pivot_window_seconds as f32, min: 0.5, max: 20.0 },
-                Knob { name: "hands.one_hand_fraction".into(), default: d.one_hand_fraction, min: 0.5, max: 1.2 },
+                Knob {
+                    name: "hands.pivot_window".into(),
+                    default: d.pivot_window_seconds as f32,
+                    min: 0.5,
+                    max: 20.0,
+                },
+                Knob {
+                    name: "hands.one_hand_fraction".into(),
+                    default: d.one_hand_fraction,
+                    min: 0.5,
+                    max: 1.2,
+                },
             ]
         }
         Target::Fingers | Target::Play | Target::Taught => {
@@ -277,11 +286,7 @@ impl Examples {
         Examples::Fingers(parts)
     }
 
-    pub fn scores(
-        paths: &[PathBuf],
-        load: &Load,
-        mut progress: impl FnMut(usize, usize),
-    ) -> Result<Self> {
+    pub fn scores(paths: &[PathBuf], load: &Load, mut progress: impl FnMut(usize, usize)) -> Result<Self> {
         let mut files = Vec::new();
         for path in paths {
             walk(path, &mut files)?;
@@ -392,10 +397,8 @@ impl Examples {
         }
         let chunk = all.len().div_ceil(threads.max(1)).max(1);
         let (good, of) = std::thread::scope(|scope| {
-            let handles: Vec<_> = all
-                .chunks(chunk)
-                .map(|pick| scope.spawn(move || self.tally(weights, part, pick)))
-                .collect();
+            let handles: Vec<_> =
+                all.chunks(chunk).map(|pick| scope.spawn(move || self.tally(weights, part, pick))).collect();
             handles
                 .into_iter()
                 .map(|h| h.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
@@ -434,8 +437,7 @@ impl Examples {
                 for (_, score) in pick.iter().map(|i| &parts[part][*i]) {
                     let solution = finger_score(score, &options);
                     let measured = on_fingering::measure_solution(score, &solution, spans);
-                    let faults = measured.stretched as f64
-                        + UNPLAYABLE_PRICE * measured.unplayable as f64;
+                    let faults = measured.stretched as f64 + UNPLAYABLE_PRICE * measured.unplayable as f64;
                     let chances = measured.spans_measured as f64;
                     good += (chances - faults).max(0.0);
                     of += chances;
@@ -483,13 +485,8 @@ const UNPLAYABLE_PRICE: f64 = 4.0;
 
 fn shared(score: &Score, truth: &[Option<Hand>]) -> f64 {
     let pitches = |hand: Hand| {
-        let mut out: Vec<u8> = score
-            .notes
-            .iter()
-            .zip(truth)
-            .filter(|(_, h)| **h == Some(hand))
-            .map(|(n, _)| n.midi)
-            .collect();
+        let mut out: Vec<u8> =
+            score.notes.iter().zip(truth).filter(|(_, h)| **h == Some(hand)).map(|(n, _)| n.midi).collect();
         out.sort_unstable();
         out
     };
@@ -499,8 +496,8 @@ fn shared(score: &Score, truth: &[Option<Hand>]) -> f64 {
     }
     let at = |sorted: &[u8], p: f64| sorted[(p * (sorted.len() - 1) as f64) as usize];
     let (right_low, left_high) = (at(&right, 0.1), at(&left, 0.9));
-    let inside = right.iter().filter(|p| **p <= left_high).count()
-        + left.iter().filter(|p| **p >= right_low).count();
+    let inside =
+        right.iter().filter(|p| **p <= left_high).count() + left.iter().filter(|p| **p >= right_low).count();
     inside as f64 / (right.len() + left.len()) as f64
 }
 
@@ -511,9 +508,8 @@ fn read_music_render(path: &Path) -> Result<Score> {
         bail!("absolute time is not handled");
     }
     let resolution = json["resolution"].as_i64().filter(|r| *r > 0).context("no resolution")?;
-    let ticks = |time: &serde_json::Value| {
-        time.as_i64().map(|t| t * i64::from(TICKS_PER_QUARTER) / resolution)
-    };
+    let ticks =
+        |time: &serde_json::Value| time.as_i64().map(|t| t * i64::from(TICKS_PER_QUARTER) / resolution);
     let mut score = Score::default();
     for tempo in json["tempos"].as_array().into_iter().flatten() {
         if let (Some(at), Some(qpm)) = (ticks(&tempo["time"]), tempo["qpm"].as_f64()) {
@@ -570,11 +566,7 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
         return Ok(());
     }
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
     if matches!(extension.as_str(), "mid" | "midi" | "mxl" | "musicxml" | "xml" | "json") {
         out.push(path.to_path_buf());
     }
@@ -588,9 +580,8 @@ fn scale_agreement(options: &FingeringOptions) -> (f64, f64) {
     for tonic in 0..12u8 {
         for hand in Hand::ALL {
             let base = if hand == Hand::Right { 60 } else { 36 };
-            let mut up: Vec<u8> = (0..2)
-                .flat_map(|octave| MAJOR.map(|step| base + tonic + step + 12 * octave))
-                .collect();
+            let mut up: Vec<u8> =
+                (0..2).flat_map(|octave| MAJOR.map(|step| base + tonic + step + 12 * octave)).collect();
             up.push(base + tonic + 24);
             let mut pitches = up.clone();
             pitches.extend(up.iter().rev().skip(1));
@@ -766,9 +757,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let names: Vec<String> = knobs.iter().map(|k| k.name.clone()).collect();
     let lows: Vec<f64> = knobs.iter().map(|k| f64::from(k.min).ln()).collect();
     let highs: Vec<f64> = knobs.iter().map(|k| f64::from(k.max).ln()).collect();
-    let weights_of = |x: &[f64]| {
-        Weights(names.iter().cloned().zip(x.iter().map(|v| v.exp() as f32)).collect())
-    };
+    let weights_of =
+        |x: &[f64]| Weights(names.iter().cloned().zip(x.iter().map(|v| v.exp() as f32)).collect());
 
     let directory = config.directory.join(target.name());
     std::fs::create_dir_all(&directory)?;
@@ -776,11 +766,7 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let log_path = directory.join("log.csv");
     let sizes = examples.sizes();
     if sizes[0] == 0 || sizes[1] == 0 {
-        bail!(
-            "need examples to learn from and to hold back; have {} and {}. Add more.",
-            sizes[0],
-            sizes[1]
-        );
+        bail!("need examples to learn from and to hold back; have {} and {}. Add more.", sizes[0], sizes[1]);
     }
     say(&format!(
         "{} examples to learn from, {} held back, {} kept for the final test.",
@@ -793,8 +779,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
     let threads = config.threads.max(1);
     let defaults: Vec<f64> = knobs.iter().map(|k| f64::from(k.default).ln()).collect();
-    let resumed = read_existing::<State>(&state_path)?
-        .filter(|state| state.target == target && state.names == names);
+    let resumed =
+        read_existing::<State>(&state_path)?.filter(|state| state.target == target && state.names == names);
     let mut state = match resumed {
         Some(mut state) => {
             if state.sizes != sizes {
@@ -834,10 +820,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             }
         }
     };
-    let counter_floor = config
-        .counterpart
-        .as_ref()
-        .map(|other| other.score(&weights_of(&defaults), 0, threads));
+    let counter_floor =
+        config.counterpart.as_ref().map(|other| other.score(&weights_of(&defaults), 0, threads));
     if let (Some(other), Some(floor)) = (&config.counterpart, counter_floor) {
         say(&format!(
             "Also watching the {} measure, at {:.2}%, which no promotion may spend.",
@@ -861,7 +845,10 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
     let new_log = !log_path.exists();
     let mut log = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
     if new_log {
-        writeln!(log, "time,generation,evaluated,step,current_train,best_train,best_held_out,best_test,event")?;
+        writeln!(
+            log,
+            "time,generation,evaluated,step,current_train,best_train,best_held_out,best_test,event"
+        )?;
     }
 
     let started = Instant::now();
@@ -888,8 +875,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
                 while !moved {
                     for (i, value) in child.iter_mut().enumerate() {
                         if uniform(&mut state.rng) < share {
-                            *value = (*value + state.step * gaussian(&mut state.rng))
-                                .clamp(lows[i], highs[i]);
+                            *value =
+                                (*value + state.step * gaussian(&mut state.rng)).clamp(lows[i], highs[i]);
                             moved = true;
                         }
                     }
@@ -919,17 +906,11 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
         ledger.settings_tried += children.len() as u64;
         since = Instant::now();
 
-        let (index, &train) = scored
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .expect("at least one child");
+        let (index, &train) =
+            scored.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).expect("at least one child");
         let mut event = "";
-        let (candidate, candidate_score) = if train >= here {
-            (children[index].clone(), train)
-        } else {
-            (state.current.clone(), here)
-        };
+        let (candidate, candidate_score) =
+            if train >= here { (children[index].clone(), train) } else { (state.current.clone(), here) };
         state.current_train = here;
         if train >= here - 1e-12 {
             state.current = children[index].clone();
@@ -1007,18 +988,12 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
             if kept {
                 state.since_promotion = 0;
                 state.best = candidate.clone();
-                state.best_scores = Scores {
-                    train: candidate_score,
-                    held_out,
-                    test: examples.score(&weights, 2, threads),
-                };
+                state.best_scores =
+                    Scores { train: candidate_score, held_out, test: examples.score(&weights, 2, threads) };
                 let mut file = read_existing::<Weights>(&config.weights)?.unwrap_or_default();
                 file.0.extend(weights.0);
                 let name = target.name();
-                file.0.insert(
-                    format!("_{name}.searched_hours"),
-                    (ledger.searched_seconds / 3600.0) as f32,
-                );
+                file.0.insert(format!("_{name}.searched_hours"), (ledger.searched_seconds / 3600.0) as f32);
                 file.0.insert(format!("_{name}.settings_tried"), ledger.settings_tried as f32);
                 file.0.insert(format!("_{name}.examples"), sizes.iter().sum::<usize>() as f32);
                 file.save(&config.weights)?;
@@ -1037,9 +1012,8 @@ pub fn run(examples: &Examples, config: &TuneConfig, mut say: impl FnMut(&str)) 
 
         state.since_promotion += 1;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         writeln!(
             log,
             "{now},{},{},{:.4},{:.6},{:.6},{:.6},{:.6},{event}",
@@ -1121,13 +1095,17 @@ pub fn report(directory: &Path) -> Result<Vec<String>> {
             lines.push("  nothing kept from the search running now yet.".into());
             continue;
         };
-        let state: State = serde_json::from_str(&text)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let state: State =
+            serde_json::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
         let measure = match target {
-            Target::Play => "music a hand can play comfortably, on the third it never \
-                             learned from",
-            _ => "agreement with the people who wrote the music down, on the third it \
-                  never learned from",
+            Target::Play => {
+                "music a hand can play comfortably, on the third it never \
+                             learned from"
+            }
+            _ => {
+                "agreement with the people who wrote the music down, on the third it \
+                  never learned from"
+            }
         };
         lines.push(format!(
             "  {measure}: {:.2}%, against {:.2}% for the engine's defaults at the time.",
@@ -1222,10 +1200,7 @@ mod tests {
         )
         .unwrap();
         let lines = report(&directory).unwrap();
-        assert!(
-            lines.iter().any(|line| line.contains("2.50 hours reading videos, 12 added")),
-            "{lines:?}"
-        );
+        assert!(lines.iter().any(|line| line.contains("2.50 hours reading videos, 12 added")), "{lines:?}");
         assert!(lines.last().unwrap().starts_with("Altogether: 2.50 hours"), "{lines:?}");
     }
 

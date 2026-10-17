@@ -265,10 +265,7 @@ impl RuleSet {
     }
 
     pub fn endorsements(rule: Rule) -> usize {
-        PUBLISHED
-            .iter()
-            .filter(|set| set.rules().contains(&rule))
-            .count()
+        PUBLISHED.iter().filter(|set| set.rules().contains(&rule)).count()
     }
 
     fn weak_is_only_four(self) -> bool {
@@ -364,12 +361,7 @@ impl RuleCosts {
     }
 }
 
-const SPAN_RULES: &[Rule] = &[
-    Rule::Stretch,
-    Rule::SmallSpan,
-    Rule::LargeSpan,
-    Rule::Impractical,
-];
+const SPAN_RULES: &[Rule] = &[Rule::Stretch, Rule::SmallSpan, Rule::LargeSpan, Rule::Impractical];
 
 #[derive(Debug, Clone)]
 pub struct RuleScorer {
@@ -512,11 +504,8 @@ impl RuleScorer {
         if a == b {
             return 0.0;
         }
-        let penalty = if a == Finger::Thumb || b == Finger::Thumb {
-            1.0
-        } else {
-            self.set.small_span_penalty()
-        };
+        let penalty =
+            if a == Finger::Thumb || b == Finger::Thumb { 1.0 } else { self.set.small_span_penalty() };
         let d = self.distance(prev.midi, t.current.midi);
         let span = self.spans.get(t.hand, a, b);
 
@@ -535,11 +524,8 @@ impl RuleScorer {
     fn large_span(&self, t: &Trigram) -> f32 {
         let Some(prev) = t.prev else { return 0.0 };
         let (a, b) = (prev.finger, t.current.finger);
-        let penalty = if a == Finger::Thumb || b == Finger::Thumb {
-            1.0
-        } else {
-            self.set.large_span_penalty()
-        };
+        let penalty =
+            if a == Finger::Thumb || b == Finger::Thumb { 1.0 } else { self.set.large_span_penalty() };
         let Some(max_rel) = self.outward_max_rel(t, prev) else {
             return 0.0;
         };
@@ -574,8 +560,8 @@ impl RuleScorer {
         }
         let d13 = self.distance(prev.midi, next.midi);
         let span = self.spans.get(t.hand, prev.finger, next.finger);
-        let thumb_between = t.current.finger == Finger::Thumb
-            && is_between(t.current.midi, prev.midi, next.midi);
+        let thumb_between =
+            t.current.finger == Finger::Thumb && is_between(t.current.midi, prev.midi, next.midi);
 
         if d13 > span.max_comf as f32 {
             if thumb_between && d13 > span.max_prac as f32 {
@@ -630,8 +616,7 @@ impl RuleScorer {
         for p in [t.prev, Some(t.current), t.next].into_iter().flatten() {
             seen[p.finger.index()] = true;
         }
-        if seen[Finger::Middle.index()] && seen[Finger::Ring.index()] && seen[Finger::Little.index()]
-        {
+        if seen[Finger::Middle.index()] && seen[Finger::Ring.index()] && seen[Finger::Little.index()] {
             1.0
         } else {
             0.0
@@ -650,10 +635,7 @@ impl RuleScorer {
     fn four_on_black(&self, t: &Trigram) -> f32 {
         let Some(prev) = t.prev else { return 0.0 };
         let awkward = |a: Placement, b: Placement| {
-            a.finger == Finger::Middle
-                && is_black(a.midi)
-                && b.finger == Finger::Ring
-                && is_white(b.midi)
+            a.finger == Finger::Middle && is_black(a.midi) && b.finger == Finger::Ring && is_white(b.midi)
         };
         if awkward(prev, t.current) || awkward(t.current, prev) {
             1.0
@@ -778,10 +760,7 @@ impl RuleScorer {
         let (Some(prev), Some(next)) = (t.prev, t.next) else {
             return 0.0;
         };
-        if prev.midi != next.midi
-            && prev.finger == next.finger
-            && self.position_change_count(t) > 0.0
-        {
+        if prev.midi != next.midi && prev.finger == next.finger && self.position_change_count(t) > 0.0 {
             1.0
         } else {
             0.0
@@ -833,11 +812,7 @@ impl RuleScorer {
         let (Some(prev), Some(next)) = (t.prev, t.next) else {
             return 0.0;
         };
-        let pattern = (
-            prev.finger.number(),
-            t.current.finger.number(),
-            next.finger.number(),
-        );
+        let pattern = (prev.finger.number(), t.current.finger.number(), next.finger.number());
         if matches!(pattern, (3, 4, 3) | (4, 3, 4) | (4, 5, 4) | (5, 4, 5)) {
             1.0
         } else {
@@ -923,10 +898,7 @@ mod tests {
         let jacobs = RuleSet::Jacobs.large_span_penalty();
         let others = RuleSet::Parncutt.large_span_penalty();
         let consensus = RuleSet::Consensus.large_span_penalty();
-        assert!(
-            jacobs < consensus && consensus < others,
-            "{jacobs} < {consensus} < {others}"
-        );
+        assert!(jacobs < consensus && consensus < others, "{jacobs} < {consensus} < {others}");
     }
     use crate::spans::PARNCUTT;
 
@@ -1082,10 +1054,7 @@ mod tests {
             next: None,
         };
         assert_eq!(s.non_repeating_finger(&same), 0.0);
-        let changed = Trigram {
-            current: Placement::new(60, Finger::Index),
-            ..same
-        };
+        let changed = Trigram { current: Placement::new(60, Finger::Index), ..same };
         assert_eq!(s.non_repeating_finger(&changed), 1.0);
     }
 
@@ -1146,12 +1115,8 @@ mod tests {
 
     #[test]
     fn an_ordinary_semitone_between_adjacent_fingers_is_not_impossible() {
-        let physical = RuleScorer::new(
-            RuleSet::Consensus,
-            RuleWeights::default(),
-            &PARNCUTT,
-            Ruler::Physical,
-        );
+        let physical =
+            RuleScorer::new(RuleSet::Consensus, RuleWeights::default(), &PARNCUTT, Ruler::Physical);
         let up = trigram(Hand::Right, (65, 1), (67, 2), (68, 3));
         assert_eq!(physical.impractical(&up), 0.0, "G to A flat, fingers 2 to 3");
         let down = trigram(Hand::Right, (70, 4), (68, 3), (67, 2));
@@ -1202,23 +1167,16 @@ mod tests {
     fn every_set_carries_the_rules_no_author_had_to_write() {
         for set in PUBLISHED.iter().chain(std::iter::once(&RuleSet::Consensus)) {
             for rule in UNIVERSAL_RULES {
-                assert!(
-                    set.rules().contains(&rule),
-                    "{set:?} is missing {rule:?}, which is not optional"
-                );
+                assert!(set.rules().contains(&rule), "{set:?} is missing {rule:?}, which is not optional");
             }
         }
     }
 
     #[test]
     fn a_finger_cannot_play_two_different_notes_in_a_row_under_any_set() {
-        for set in [
-            RuleSet::Parncutt,
-            RuleSet::Jacobs,
-            RuleSet::Balliauw,
-            RuleSet::Badgerow,
-            RuleSet::Consensus,
-        ] {
+        for set in
+            [RuleSet::Parncutt, RuleSet::Jacobs, RuleSet::Balliauw, RuleSet::Badgerow, RuleSet::Consensus]
+        {
             let s = scorer(set);
             let stepped = trigram(Hand::Right, (60, 1), (62, 1), (64, 2));
             assert!(

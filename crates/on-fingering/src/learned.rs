@@ -53,13 +53,7 @@ impl Learned {
         self.sum(&facts)
     }
 
-    pub fn step(
-        &self,
-        hand: Hand,
-        from: (&[u8], &[Finger]),
-        to: (&[u8], &[Finger]),
-        seconds: f64,
-    ) -> f32 {
+    pub fn step(&self, hand: Hand, from: (&[u8], &[Finger]), to: (&[u8], &[Finger]), seconds: f64) -> f32 {
         let mut facts = Vec::with_capacity(8);
         step_features(hand, from, to, seconds, &mut facts);
         self.sum(&facts)
@@ -159,11 +153,8 @@ pub fn step_features(
     }
     let h = hand as u64;
     let line = from.0.len() == 1 && to.0.len() == 1;
-    let sides: &[(u64, usize, usize)] = if line {
-        &[(2, 0, 0)]
-    } else {
-        &[(0, 0, 0), (1, from.0.len() - 1, to.0.len() - 1)]
-    };
+    let sides: &[(u64, usize, usize)] =
+        if line { &[(2, 0, 0)] } else { &[(0, 0, 0), (1, from.0.len() - 1, to.0.len() - 1)] };
     for &(side, a, b) in sides {
         let (Some(&p), Some(&q)) = (from.0.get(a), to.0.get(b)) else { continue };
         let (Some(&f), Some(&g)) = (from.1.get(a), to.1.get(b)) else { continue };
@@ -276,7 +267,12 @@ fn describe_fact(fact: u64) -> String {
             _ => "line",
         };
         return match kind {
-            1 => format!("{hand} hand, finger {} on a {} key, in a {}-note chord", fields[1] + 1, key(fields[2]), fields[3]),
+            1 => format!(
+                "{hand} hand, finger {} on a {} key, in a {}-note chord",
+                fields[1] + 1,
+                key(fields[2]),
+                fields[3]
+            ),
             2 => format!(
                 "{hand} hand chord, fingers {}-{} a {} semitones apart, {} then {}",
                 fields[1] + 1,
@@ -295,7 +291,17 @@ fn describe_fact(fact: u64) -> String {
                 key(fields[6])
             ),
             5 => {
-                let step = |b: u64| ["down far", "down a third", "down a step", "repeated", "up a step", "up a third", "up far"][b.min(6) as usize];
+                let step = |b: u64| {
+                    [
+                        "down far",
+                        "down a third",
+                        "down a step",
+                        "repeated",
+                        "up a step",
+                        "up a third",
+                        "up far",
+                    ][b.min(6) as usize]
+                };
                 format!(
                     "{hand} hand {}, fingers {}-{}-{}, {} then {}, middle key {}",
                     side(fields[1]),
@@ -371,8 +377,14 @@ mod tests {
         step_features(Hand::Right, (&[61], &[Finger::Middle]), (&[60], &[Finger::Thumb]), 0.1, &mut facts);
         let said: Vec<String> = facts.iter().map(|f| describe(*f)).collect();
         assert!(said.iter().all(|s| !s.starts_with("unknown")), "{said:?}");
-        assert!(said.contains(&"left hand chord, fingers 5-3 a 4 semitones apart, white then white".to_string()), "{said:?}");
-        assert!(said.contains(&"right hand line, finger 3 to 1 moving -1 semitones, black to white".to_string()), "{said:?}");
+        assert!(
+            said.contains(&"left hand chord, fingers 5-3 a 4 semitones apart, white then white".to_string()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&"right hand line, finger 3 to 1 moving -1 semitones, black to white".to_string()),
+            "{said:?}"
+        );
     }
 
     use super::*;
@@ -381,10 +393,7 @@ mod tests {
     fn an_empty_model_changes_nothing() {
         let model = Learned::default();
         assert_eq!(model.chord(Hand::Right, &[60, 64], &[Finger::Thumb, Finger::Middle]), 0.0);
-        assert_eq!(
-            model.step(Hand::Right, (&[60], &[Finger::Thumb]), (&[62], &[Finger::Index]), 0.2),
-            0.0
-        );
+        assert_eq!(model.step(Hand::Right, (&[60], &[Finger::Thumb]), (&[62], &[Finger::Index]), 0.2), 0.0);
     }
 
     #[test]

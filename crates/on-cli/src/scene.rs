@@ -111,17 +111,11 @@ fn parse_colour(asked: Option<&str>, hand: usize) -> Result<on_viz::NoteColour> 
 
 impl SceneArgs {
     pub fn settings(&self, model: &ModelArgs) -> Result<SessionSettings> {
-        let note_colours = [
-            parse_colour(self.left_colour.as_deref(), 0)?,
-            parse_colour(self.right_colour.as_deref(), 1)?,
-        ];
+        let note_colours =
+            [parse_colour(self.left_colour.as_deref(), 0)?, parse_colour(self.right_colour.as_deref(), 1)?];
         Ok(SessionSettings {
             fingering: model.options()?,
-            extent: if self.crop_keyboard {
-                Extent::MusicRange
-            } else {
-                Extent::FullKeyboard
-            },
+            extent: if self.crop_keyboard { Extent::MusicRange } else { Extent::FullKeyboard },
             lookahead: self.lookahead.max(0.5),
             assets_root: session::assets_root(self.assets.clone())?,
             soundfont: self.soundfont.clone(),
@@ -148,11 +142,7 @@ pub fn build(input: &Path, settings: &SessionSettings) -> Result<Performance> {
     let performance = session::open(input, settings)?;
     println!(
         "{} — {:.1}s, {} notes.",
-        performance
-            .timeline
-            .title
-            .clone()
-            .unwrap_or_else(|| "untitled".into()),
+        performance.timeline.title.clone().unwrap_or_else(|| "untitled".into()),
         performance.timeline.duration,
         performance.timeline.notes.len()
     );

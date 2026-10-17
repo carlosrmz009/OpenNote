@@ -54,8 +54,7 @@ fn main() -> anyhow::Result<()> {
     let visible: Vec<_> = timeline.visible_notes(at, LOOKAHEAD).collect();
     println!("\n  notes in view over the next {LOOKAHEAD:.0} s: {}", visible.len());
     for note in visible.iter().take(8) {
-        let (x0, x1, bottom, top) =
-            layout.note_rect(note.midi, note.start - at, note.end - note.start);
+        let (x0, x1, bottom, top) = layout.note_rect(note.midi, note.start - at, note.end - note.start);
         println!(
             "    {:3}  {:?}  finger {}  velocity {:3}  rect ({x0:7.1},{bottom:7.1})-({x1:7.1},{top:7.1})",
             note.midi,

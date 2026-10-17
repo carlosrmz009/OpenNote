@@ -66,14 +66,7 @@ impl Voice {
 
         let brightness = 0.75 + 0.85 * loudness;
 
-        let silent = Partial {
-            re: 1.0,
-            im: 0.0,
-            cos_step: 1.0,
-            sin_step: 0.0,
-            amplitude: 0.0,
-            decay: 1.0,
-        };
+        let silent = Partial { re: 1.0, im: 0.0, cos_step: 1.0, sin_step: 0.0, amplitude: 0.0, decay: 1.0 };
         let mut partials = [silent; MAX_PARTIALS];
         let mut used = 0;
         let mut total = 0.0;
@@ -132,10 +125,7 @@ impl Voice {
     }
 
     pub fn finished(&self) -> bool {
-        self.target_gain <= 1.0e-5
-            || self.partials[..self.used]
-                .iter()
-                .all(|p| p.amplitude < 1.0e-5)
+        self.target_gain <= 1.0e-5 || self.partials[..self.used].iter().all(|p| p.amplitude < 1.0e-5)
     }
 
     #[inline]
@@ -178,8 +168,7 @@ mod tests {
         for midi in 21..=108u8 {
             let voice = Voice::strike(midi, 90, 44_100.0);
             for partial in &voice.partials[..voice.used] {
-                let frequency =
-                    partial.sin_step.atan2(partial.cos_step) / std::f32::consts::TAU * 44_100.0;
+                let frequency = partial.sin_step.atan2(partial.cos_step) / std::f32::consts::TAU * 44_100.0;
                 assert!(
                     frequency > 0.0 && frequency < 22_050.0,
                     "midi {midi} has a partial at {frequency} Hz"
@@ -222,10 +211,7 @@ mod tests {
             samples += 1;
         }
         let seconds = samples as f32 / sample_rate;
-        assert!(
-            seconds < 1.0,
-            "the damper took {seconds:.2}s to stop the note"
-        );
+        assert!(seconds < 1.0, "the damper took {seconds:.2}s to stop the note");
     }
 
     #[test]

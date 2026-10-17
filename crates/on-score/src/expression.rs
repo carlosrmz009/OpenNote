@@ -181,9 +181,8 @@ pub fn perform(score: &Score, mood: &Mood, amount: f32) -> Score {
     for i in (0..out.notes.len()).rev() {
         next_same[i] = next_on_key.insert(out.notes[i].midi, out.notes[i].onset);
     }
-    let seconds_to_ticks = |at: Ticks, seconds: f64| -> Ticks {
-        out.tempo.tick_at(out.tempo.seconds_at(at) + seconds) - at
-    };
+    let seconds_to_ticks =
+        |at: Ticks, seconds: f64| -> Ticks { out.tempo.tick_at(out.tempo.seconds_at(at) + seconds) - at };
     let lengths: Vec<Ticks> = out
         .notes
         .iter()
@@ -192,13 +191,18 @@ pub fn perform(score: &Score, mood: &Mood, amount: f32) -> Score {
             let flags = score.marks.articulation(note.source);
             let mut length = note.duration as f64;
             if flags & art::STACCATISSIMO != 0 {
-                length *= 1.0 - (1.0 - STACCATISSIMO_LENGTH) * f64::from(amount.min(1.0)) * f64::from(mood.staccato.recip());
+                length *= 1.0
+                    - (1.0 - STACCATISSIMO_LENGTH)
+                        * f64::from(amount.min(1.0))
+                        * f64::from(mood.staccato.recip());
             } else if flags & art::STACCATO != 0 && flags & art::TENUTO == 0 {
-                length *= 1.0 - (1.0 - STACCATO_LENGTH) * f64::from(amount.min(1.0)) * f64::from(mood.staccato.recip());
+                length *= 1.0
+                    - (1.0 - STACCATO_LENGTH) * f64::from(amount.min(1.0)) * f64::from(mood.staccato.recip());
             } else if slur_ends.contains_key(&note.onset) {
                 length *= 1.0 - (1.0 - SLUR_END_LENGTH) * f64::from(amount.min(1.0));
             } else if in_slur(note.onset) {
-                length += seconds_to_ticks(note.offset(), LEGATO_SECONDS * f64::from(amount * mood.legato)) as f64;
+                length +=
+                    seconds_to_ticks(note.offset(), LEGATO_SECONDS * f64::from(amount * mood.legato)) as f64;
             } else if flags & art::TENUTO == 0 && mood.detach > 0.0 {
                 length *= 1.0 - f64::from(mood.detach * amount.min(1.0));
             }
@@ -303,7 +307,13 @@ pub fn phrases(score: &Score) -> Vec<(Ticks, Ticks)> {
     merged
 }
 
-fn shaped_tempo(score: &Score, mood: &Mood, amount: f32, k_time: f64, phrases: &[(Ticks, Ticks)]) -> crate::TempoMap {
+fn shaped_tempo(
+    score: &Score,
+    mood: &Mood,
+    amount: f32,
+    k_time: f64,
+    phrases: &[(Ticks, Ticks)],
+) -> crate::TempoMap {
     if k_time <= 0.0 {
         return score.tempo.clone();
     }
@@ -344,7 +354,9 @@ fn sounds_human(score: &Score) -> bool {
         return false;
     }
     let mean = score.notes.iter().map(|n| f64::from(n.velocity)).sum::<f64>() / score.notes.len() as f64;
-    let spread = (score.notes.iter().map(|n| (f64::from(n.velocity) - mean).powi(2)).sum::<f64>() / score.notes.len() as f64).sqrt();
+    let spread = (score.notes.iter().map(|n| (f64::from(n.velocity) - mean).powi(2)).sum::<f64>()
+        / score.notes.len() as f64)
+        .sqrt();
     let grid = (TICKS_PER_QUARTER / 8) as Ticks;
     let slack = (grid / 10).max(1);
     let off_grid = score

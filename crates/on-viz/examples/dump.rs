@@ -30,8 +30,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     for hand in on_hand::Hand::ALL {
-        println!("
-{hand:?} grips:");
+        println!(
+            "
+{hand:?} grips:"
+        );
         for event in timeline.hand_grips(hand) {
             if event.time < until - 4.0 || event.time > until {
                 continue;

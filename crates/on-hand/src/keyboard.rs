@@ -5,26 +5,11 @@ pub const MIDI_HIGHEST: u8 = 108;
 pub const KEY_COUNT: usize = (MIDI_HIGHEST - MIDI_LOWEST + 1) as usize;
 
 pub fn name(midi: u8) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-    ];
+    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
     format!("{}{}", NAMES[usize::from(midi) % 12], i32::from(midi) / 12 - 1)
 }
 
-const SEMITONE_STEP_MM: [f32; 12] = [
-    9.5,
-    14.0,
-    14.0,
-    9.5,
-    23.5,
-    8.0,
-    15.5,
-    11.75,
-    11.75,
-    15.5,
-    8.0,
-    23.5,
-];
+const SEMITONE_STEP_MM: [f32; 12] = [9.5, 14.0, 14.0, 9.5, 23.5, 8.0, 15.5, 11.75, 11.75, 15.5, 8.0, 23.5];
 
 pub const WHITE_KEY_WIDTH: f32 = 23.5;
 /// Seven white keys: how far the same key lies one octave up.
@@ -37,9 +22,8 @@ pub const BLACK_KEY_HEIGHT: f32 = 10.0;
 pub const KEY_DIP: f32 = 10.0;
 pub const BLACK_KEY_DIP: f32 = BLACK_KEY_HEIGHT - 3.0;
 
-const IS_BLACK_PC: [bool; 12] = [
-    false, true, false, true, false, false, true, false, true, false, true, false,
-];
+const IS_BLACK_PC: [bool; 12] =
+    [false, true, false, true, false, false, true, false, true, false, true, false];
 
 #[inline]
 pub fn is_black(midi: u8) -> bool {
@@ -98,10 +82,7 @@ impl Keyboard {
         for i in 0..KEY_COUNT {
             let midi = MIDI_LOWEST + i as u8;
             if is_black(midi) {
-                neck[i] = (
-                    centre_x[i] - BLACK_KEY_WIDTH / 2.0,
-                    centre_x[i] + BLACK_KEY_WIDTH / 2.0,
-                );
+                neck[i] = (centre_x[i] - BLACK_KEY_WIDTH / 2.0, centre_x[i] + BLACK_KEY_WIDTH / 2.0);
                 continue;
             }
             let mut lo = centre_x[i] - WHITE_KEY_WIDTH / 2.0;
@@ -120,10 +101,7 @@ impl Keyboard {
 
     #[inline]
     fn index(midi: u8) -> usize {
-        debug_assert!(
-            (MIDI_LOWEST..=MIDI_HIGHEST).contains(&midi),
-            "midi {midi} is off the keyboard"
-        );
+        debug_assert!((MIDI_LOWEST..=MIDI_HIGHEST).contains(&midi), "midi {midi} is off the keyboard");
         (midi.clamp(MIDI_LOWEST, MIDI_HIGHEST) - MIDI_LOWEST) as usize
     }
 
@@ -169,19 +147,9 @@ impl Keyboard {
     pub fn footprint(&self, midi: u8) -> (f32, f32, f32, f32) {
         let cx = self.centre_x(midi);
         if is_black(midi) {
-            (
-                cx - BLACK_KEY_WIDTH / 2.0,
-                cx + BLACK_KEY_WIDTH / 2.0,
-                BLACK_KEY_FRONT_Y,
-                WHITE_KEY_LENGTH,
-            )
+            (cx - BLACK_KEY_WIDTH / 2.0, cx + BLACK_KEY_WIDTH / 2.0, BLACK_KEY_FRONT_Y, WHITE_KEY_LENGTH)
         } else {
-            (
-                cx - WHITE_KEY_WIDTH / 2.0,
-                cx + WHITE_KEY_WIDTH / 2.0,
-                0.0,
-                WHITE_KEY_LENGTH,
-            )
+            (cx - WHITE_KEY_WIDTH / 2.0, cx + WHITE_KEY_WIDTH / 2.0, 0.0, WHITE_KEY_LENGTH)
         }
     }
 
@@ -219,10 +187,7 @@ mod tests {
             let x = kb.centre_x(midi);
             if let Some((was, was_x)) = previous {
                 let step = x - was_x;
-                assert!(
-                    (step - WHITE_KEY_WIDTH).abs() < 1e-3,
-                    "{was} to {midi} was {step} mm"
-                );
+                assert!((step - WHITE_KEY_WIDTH).abs() < 1e-3, "{was} to {midi} was {step} mm");
             }
             previous = Some((midi, x));
         }
@@ -239,10 +204,7 @@ mod tests {
                 continue;
             };
             let d = kb.interval_mm(midi, next);
-            assert!(
-                (23.0..=23.5).contains(&d),
-                "white step {midi} to {next} was {d} mm"
-            );
+            assert!((23.0..=23.5).contains(&d), "white step {midi} to {next} was {d} mm");
         }
     }
 
@@ -282,8 +244,7 @@ mod tests {
 
         let (c, d, e) = (neck(60), neck(62), neck(64));
         let (f, g, a, b) = (neck(65), neck(67), neck(69), neck(71));
-        for (name, width) in [("C", c), ("D", d), ("E", e), ("F", f), ("G", g), ("A", a), ("B", b)]
-        {
+        for (name, width) in [("C", c), ("D", d), ("E", e), ("F", f), ("G", g), ("A", a), ("B", b)] {
             assert!(
                 (12.0..15.0).contains(&width),
                 "the {name} neck is {width} mm, which is not a key width any hand has met"

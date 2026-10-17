@@ -1,8 +1,8 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::prelude::default;
 use bevy::image::Image;
 use bevy::math::Vec3;
 use bevy::mesh::{Indices, Mesh, VertexAttributeValues};
+use bevy::prelude::default;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 const GLOVE_STANDOFF: f32 = 0.0032;
@@ -28,29 +28,17 @@ impl HandFrame {
         if (thumb_tip - wrist).dot(dorsal) > 0.0 {
             dorsal = -dorsal;
         }
-        Self {
-            wrist,
-            along,
-            across,
-            dorsal,
-            palm: (middle - wrist).length().max(1e-6),
-        }
+        Self { wrist, along, across, dorsal, palm: (middle - wrist).length().max(1e-6) }
     }
 
     fn place(&self, point: Vec3) -> (f32, f32, f32) {
         let offset = (point - self.wrist) / self.palm;
-        (
-            offset.dot(self.along),
-            offset.dot(self.across),
-            offset.dot(self.dorsal),
-        )
+        (offset.dot(self.along), offset.dot(self.across), offset.dot(self.dorsal))
     }
 }
 
 pub fn cloth(assets: &std::path::Path) -> Option<Image> {
-    let normal = image::open(assets.join("gloves").join("weave-normal.png"))
-        .ok()?
-        .to_rgba8();
+    let normal = image::open(assets.join("gloves").join("weave-normal.png")).ok()?.to_rgba8();
     let (width, height) = normal.dimensions();
     let mut image = Image::new(
         Extent3d { width, height, depth_or_array_layers: 1 },
@@ -89,9 +77,7 @@ pub fn shell(mesh: &Mesh, on_the_arm: &[bool], frame: &HandFrame) -> Option<Mesh
     };
     let joints: Vec<[u16; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)? {
         VertexAttributeValues::Uint16x4(values) => values.clone(),
-        VertexAttributeValues::Uint8x4(values) => {
-            values.iter().map(|v| v.map(u16::from)).collect()
-        }
+        VertexAttributeValues::Uint8x4(values) => values.iter().map(|v| v.map(u16::from)).collect(),
         _ => return None,
     };
     let indices: Vec<u32> = match mesh.indices()? {
@@ -134,10 +120,7 @@ pub fn shell(mesh: &Mesh, on_the_arm: &[bool], frame: &HandFrame) -> Option<Mesh
         *index = moved[old];
     }
 
-    let mut glove = Mesh::new(
-        bevy::mesh::PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
+    let mut glove = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     glove.insert_attribute(Mesh::ATTRIBUTE_POSITION, out_positions);
     glove.insert_attribute(Mesh::ATTRIBUTE_NORMAL, out_normals);
     glove.insert_attribute(Mesh::ATTRIBUTE_UV_0, out_uvs);
@@ -201,10 +184,7 @@ mod tests {
             let (a, b) = (rung * 2, rung * 2 + 2);
             indices.extend_from_slice(&[a, a + 1, b, a + 1, b + 1, b]);
         }
-        let mut mesh = Mesh::new(
-            bevy::mesh::PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
+        let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -225,19 +205,10 @@ mod tests {
     fn the_glove_covers_the_hand_and_stops_at_the_wrist() {
         let (hand, on_the_arm) = strip();
         let glove = shell(&hand, &on_the_arm, &flat()).expect("a glove");
-        let along: Vec<f32> = positions_of(&glove)
-            .iter()
-            .map(|p| flat().place(Vec3::from(*p)).0)
-            .collect();
+        let along: Vec<f32> = positions_of(&glove).iter().map(|p| flat().place(Vec3::from(*p)).0).collect();
         assert!(!along.is_empty(), "the glove should cover something");
-        assert!(
-            along.iter().all(|a| *a >= GLOVE_CUFF_AT - 0.01),
-            "nothing below the cuff: {along:?}"
-        );
-        assert!(
-            along.iter().any(|a| *a > 0.8),
-            "and it should reach the fingers: {along:?}"
-        );
+        assert!(along.iter().all(|a| *a >= GLOVE_CUFF_AT - 0.01), "nothing below the cuff: {along:?}");
+        assert!(along.iter().any(|a| *a > 0.8), "and it should reach the fingers: {along:?}");
     }
 
     #[test]
@@ -245,10 +216,7 @@ mod tests {
         let (hand, on_the_arm) = strip();
         let glove = shell(&hand, &on_the_arm, &flat()).expect("a glove");
         for point in positions_of(&glove) {
-            assert!(
-                (point[2] - GLOVE_STANDOFF).abs() < 1e-6,
-                "vertex at {point:?} did not stand off"
-            );
+            assert!((point[2] - GLOVE_STANDOFF).abs() < 1e-6, "vertex at {point:?} did not stand off");
         }
     }
 

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context as _, Result};
-use on_fingering::Placement;
 use on_fingering::playability::CHORD_SECONDS;
+use on_fingering::Placement;
 use on_hand::{Finger, Hand};
 use serde::{Deserialize, Serialize};
 
@@ -118,15 +118,14 @@ impl Corpus {
             .collect();
         files.sort();
         for file in files {
-            let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("reading {}", file.display()))?;
+            let text =
+                std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
             for (line_number, line) in text.lines().enumerate() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let piece: Piece = serde_json::from_str(line).with_context(|| {
-                    format!("{}, line {}", file.display(), line_number + 1)
-                })?;
+                let piece: Piece = serde_json::from_str(line)
+                    .with_context(|| format!("{}, line {}", file.display(), line_number + 1))?;
                 pieces.push(piece);
             }
         }
@@ -165,11 +164,7 @@ impl Corpus {
 
         let name = label
             .map(sanitise)
-            .or_else(|| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(sanitise)
-            })
+            .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(sanitise))
             .unwrap_or_else(|| "added".into());
 
         let directory = self.data_dir();
@@ -180,19 +175,11 @@ impl Corpus {
             text.push_str(&serde_json::to_string(piece)?);
             text.push('\n');
         }
-        std::fs::write(&file, text)
-            .with_context(|| format!("writing {}", file.display()))?;
+        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
 
         let notes = pieces.iter().map(|p| p.notes.len()).sum();
-        let distinct: std::collections::BTreeSet<&str> =
-            pieces.iter().map(|p| p.piece.as_str()).collect();
-        Ok(Ingested {
-            file,
-            annotations: pieces.len(),
-            pieces: distinct.len(),
-            notes,
-            skipped,
-        })
+        let distinct: std::collections::BTreeSet<&str> = pieces.iter().map(|p| p.piece.as_str()).collect();
+        Ok(Ingested { file, annotations: pieces.len(), pieces: distinct.len(), notes, skipped })
     }
 }
 
@@ -205,16 +192,13 @@ pub struct Ingested {
 }
 
 fn sanitise(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
-        .collect()
+    name.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).collect()
 }
 
 fn collect(path: &Path, pieces: &mut Vec<Piece>, skipped: &mut Vec<String>) -> Result<()> {
     if path.is_dir() {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(path)?
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .collect();
+        let mut entries: Vec<PathBuf> =
+            std::fs::read_dir(path)?.filter_map(|entry| entry.ok().map(|e| e.path())).collect();
         entries.sort();
         for entry in entries {
             collect(&entry, pieces, skipped)?;
@@ -222,11 +206,7 @@ fn collect(path: &Path, pieces: &mut Vec<Piece>, skipped: &mut Vec<String>) -> R
         return Ok(());
     }
 
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
     let read = match extension.as_str() {
         "txt" => read_pig(path),
         "musicxml" | "mxl" | "xml" => std::panic::catch_unwind(|| read_musicxml(path))
@@ -256,9 +236,7 @@ fn read_pig(path: &Path) -> Result<Option<Piece>> {
         let Ok(onset) = fields[1].parse::<f64>() else {
             continue;
         };
-        let duration = fields[2]
-            .parse::<f64>()
-            .map_or(ASSUMED_DURATION, |offset| (offset - onset).max(0.0));
+        let duration = fields[2].parse::<f64>().map_or(ASSUMED_DURATION, |offset| (offset - onset).max(0.0));
         let Some(midi) = spelled_pitch_to_midi(fields[3]) else {
             continue;
         };
@@ -278,14 +256,7 @@ fn read_pig(path: &Path) -> Result<Option<Piece>> {
             n if n > 0 => HandLabel::Right,
             _ => HandLabel::Left,
         };
-        notes.push(FingeredNote {
-            midi,
-            onset,
-            duration,
-            hand,
-            finger,
-            confidence: None,
-        });
+        notes.push(FingeredNote { midi, onset, duration, hand, finger, confidence: None });
     }
     if notes.is_empty() {
         return Ok(None);
@@ -302,12 +273,7 @@ fn read_pig(path: &Path) -> Result<Option<Piece>> {
         Some((piece, annotator)) => (piece.to_string(), annotator.to_string()),
         None => (stem.clone(), "1".to_string()),
     };
-    Ok(Some(Piece {
-        piece,
-        annotator,
-        source: path.display().to_string(),
-        notes,
-    }))
+    Ok(Some(Piece { piece, annotator, source: path.display().to_string(), notes }))
 }
 
 fn spelled_pitch_to_midi(spelled: &str) -> Option<u8> {
@@ -362,11 +328,7 @@ fn read_musicxml(path: &Path) -> Result<Option<Piece>> {
     if notes.iter().all(|note| note.finger.is_none()) {
         return Ok(None);
     }
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
     Ok(Some(Piece {
         piece: stem.clone(),
         annotator: "edition".into(),
@@ -580,16 +542,11 @@ mod tests {
         assert_eq!(line[0].midi, 67, "the top of the chord is the voice");
         assert_eq!(line[0].finger.number(), 5);
 
-        let arpeggio = Piece {
-            notes: vec![note(60, 1, 0.0), note(64, 3, 0.5), note(67, 5, 1.0)],
-            ..chord.clone()
-        };
+        let arpeggio =
+            Piece { notes: vec![note(60, 1, 0.0), note(64, 3, 0.5), note(67, 5, 1.0)], ..chord.clone() };
         let line = arpeggio.voice(Hand::Right);
         assert_eq!(line.len(), 3, "an arpeggio is three moments");
-        assert_eq!(
-            line.iter().map(|p| p.midi).collect::<Vec<_>>(),
-            vec![60, 64, 67]
-        );
+        assert_eq!(line.iter().map(|p| p.midi).collect::<Vec<_>>(), vec![60, 64, 67]);
     }
 
     #[test]
@@ -634,11 +591,7 @@ mod tests {
         assert_eq!(fingers, vec![None, Some(2), None, Some(4), None]);
 
         let placements = piece.voice(Hand::Right);
-        assert_eq!(
-            placements.len(),
-            2,
-            "only the annotated notes teach the model anything"
-        );
+        assert_eq!(placements.len(), 2, "only the annotated notes teach the model anything");
     }
 
     #[test]

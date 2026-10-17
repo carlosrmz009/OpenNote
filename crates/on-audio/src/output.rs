@@ -50,11 +50,7 @@ impl Player {
             .context("the audio thread stopped before it opened a device")?
             .map_err(|error| anyhow!("{error}"))?;
 
-        Ok(Self {
-            commands,
-            shared,
-            sample_rate,
-        })
+        Ok(Self { commands, shared, sample_rate })
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -149,12 +145,8 @@ fn open_stream(
     shared: Arc<Shared>,
 ) -> Result<(cpal::Stream, u32)> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow!("no audio output device"))?;
-    let config = device
-        .default_output_config()
-        .context("asking the audio device what it supports")?;
+    let device = host.default_output_device().ok_or_else(|| anyhow!("no audio output device"))?;
+    let config = device.default_output_config().context("asking the audio device what it supports")?;
     let sample_rate = config.sample_rate();
     let channels = config.channels() as usize;
     let format = config.sample_format();
@@ -186,9 +178,7 @@ fn open_stream(
         stereo.clear();
         stereo.resize(frames * 2, 0.0);
         synth.render(&mut stereo);
-        shared
-            .position
-            .store(synth.position().to_bits(), Ordering::Relaxed);
+        shared.position.store(synth.position().to_bits(), Ordering::Relaxed);
         shared.silent.store(synth.silent(), Ordering::Relaxed);
 
         for frame in 0..frames {
@@ -209,10 +199,7 @@ fn open_stream(
             &config,
             move |data: &mut [f32], _| {
                 let frames = data.len() / channels;
-                fill(
-                    frames,
-                    Box::new(|frame, channel, sample| data[frame * channels + channel] = sample),
-                );
+                fill(frames, Box::new(|frame, channel, sample| data[frame * channels + channel] = sample));
             },
             on_error,
             None,
@@ -223,9 +210,7 @@ fn open_stream(
                 let frames = data.len() / channels;
                 fill(
                     frames,
-                    Box::new(|frame, channel, sample| {
-                        data[frame * channels + channel] = to_i16(sample)
-                    }),
+                    Box::new(|frame, channel, sample| data[frame * channels + channel] = to_i16(sample)),
                 );
             },
             on_error,
@@ -237,9 +222,7 @@ fn open_stream(
                 let frames = data.len() / channels;
                 fill(
                     frames,
-                    Box::new(|frame, channel, sample| {
-                        data[frame * channels + channel] = to_u16(sample)
-                    }),
+                    Box::new(|frame, channel, sample| data[frame * channels + channel] = to_u16(sample)),
                 );
             },
             on_error,

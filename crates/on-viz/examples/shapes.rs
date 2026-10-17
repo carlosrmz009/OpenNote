@@ -16,10 +16,7 @@ fn main() -> anyhow::Result<()> {
     let options = FingeringOptions::default();
     on_score::assign_hands(
         file.score_mut(),
-        &HandAssignment {
-            profile: options.profile.clone(),
-            ..Default::default()
-        },
+        &HandAssignment { profile: options.profile.clone(), ..Default::default() },
     );
     let score = file.score();
     let solution = on_fingering::finger_score_consensus(score, &options, None);
@@ -29,9 +26,8 @@ fn main() -> anyhow::Result<()> {
         fingers.insert(fingering.note, fingering.finger);
     }
 
-    let reach = options.span_model.table().0[on_hand::Finger::Thumb.index()]
-        [on_hand::Finger::Little.index()]
-    .max_prac;
+    let reach = options.span_model.table().0[on_hand::Finger::Thumb.index()][on_hand::Finger::Little.index()]
+        .max_prac;
     let (mut crossed, mut doubled, mut moments) = (0usize, 0usize, 0usize);
     for note in &score.notes {
         let at = note.onset_seconds + 1e-6;

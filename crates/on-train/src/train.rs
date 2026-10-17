@@ -2,8 +2,8 @@ use on_fingering::{FingeringOptions, NgramPrior};
 use on_hand::Hand;
 
 use crate::corpus::{by_piece, Piece};
-use crate::hash::share;
 use crate::eval::{evaluate, MatchRates};
+use crate::hash::share;
 
 const CANDIDATES: [f32; 7] = [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0];
 
@@ -17,11 +17,7 @@ pub fn split(pieces: &[Piece], held_out: f32) -> Split {
     let mut train = Vec::new();
     let mut test = Vec::new();
     for (name, annotations) in by_piece(pieces) {
-        let bucket = if share(name) < f64::from(held_out) {
-            &mut test
-        } else {
-            &mut train
-        };
+        let bucket = if share(name) < f64::from(held_out) { &mut test } else { &mut train };
         bucket.extend(annotations.into_iter().cloned());
     }
     if test.is_empty() && !train.is_empty() {
@@ -51,18 +47,13 @@ impl TrainReport {
 
     pub fn summary(&self) -> Vec<String> {
         let mut lines = vec![
-            format!(
-                "Learned from {} pieces, held {} back.",
-                self.trained_on, self.held_out
-            ),
+            format!("Learned from {} pieces, held {} back.", self.trained_on, self.held_out),
             format!("  rules only:  {}", self.before),
             format!("  with model:  {}", self.after),
         ];
         let change = (self.after.general - self.before.general) * 100.0;
         lines.push(match change {
-            c if c > 0.5 => format!(
-                "The model helped: agreement went up {c:.1} points. Keep it."
-            ),
+            c if c > 0.5 => format!("The model helped: agreement went up {c:.1} points. Keep it."),
             c if c < -0.5 => format!(
                 "The model made things worse by {:.1} points. That usually means too \
                  little data — add more pieces before relying on it.",
@@ -82,12 +73,7 @@ impl TrainReport {
     }
 }
 
-pub fn train(
-    pieces: &[Piece],
-    base: &FingeringOptions,
-    held_out: f32,
-    tune_weights: bool,
-) -> TrainReport {
+pub fn train(pieces: &[Piece], base: &FingeringOptions, held_out: f32, tune_weights: bool) -> TrainReport {
     let Split { train, test } = split(pieces, held_out);
 
     let mut prior = NgramPrior::new();
@@ -126,11 +112,7 @@ pub fn train(
     }
 }
 
-fn fit_weights(
-    train: &[Piece],
-    base: &FingeringOptions,
-    prior: &NgramPrior,
-) -> FingeringOptions {
+fn fit_weights(train: &[Piece], base: &FingeringOptions, prior: &NgramPrior) -> FingeringOptions {
     let mut best = base.clone();
     let mut score = evaluate(train, &best, Some(prior)).general;
 
@@ -196,16 +178,7 @@ mod tests {
     }
 
     fn scale(name: &str) -> Vec<Piece> {
-        let notes = [
-            (60, 1),
-            (62, 2),
-            (64, 3),
-            (65, 1),
-            (67, 2),
-            (69, 3),
-            (71, 4),
-            (72, 5),
-        ];
+        let notes = [(60, 1), (62, 2), (64, 3), (65, 1), (67, 2), (69, 3), (71, 4), (72, 5)];
         vec![piece(name, "1", &notes), piece(name, "2", &notes)]
     }
 
@@ -217,8 +190,7 @@ mod tests {
         }
         let split = split(&pieces, 0.3);
         for side in [&split.train, &split.test] {
-            let names: std::collections::BTreeSet<&str> =
-                side.iter().map(|p| p.piece.as_str()).collect();
+            let names: std::collections::BTreeSet<&str> = side.iter().map(|p| p.piece.as_str()).collect();
             for name in names {
                 let here = side.iter().filter(|p| p.piece == name).count();
                 let total = pieces.iter().filter(|p| p.piece == name).count();
@@ -234,16 +206,8 @@ mod tests {
         for index in 0..30 {
             pieces.extend(scale(&format!("piece-{index}")));
         }
-        let first: Vec<String> = split(&pieces, 0.25)
-            .test
-            .iter()
-            .map(|p| p.piece.clone())
-            .collect();
-        let second: Vec<String> = split(&pieces, 0.25)
-            .test
-            .iter()
-            .map(|p| p.piece.clone())
-            .collect();
+        let first: Vec<String> = split(&pieces, 0.25).test.iter().map(|p| p.piece.clone()).collect();
+        let second: Vec<String> = split(&pieces, 0.25).test.iter().map(|p| p.piece.clone()).collect();
         assert_eq!(first, second);
     }
 

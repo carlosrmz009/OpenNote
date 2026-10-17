@@ -53,13 +53,7 @@ pub enum Finger {
 }
 
 impl Finger {
-    pub const ALL: [Finger; 5] = [
-        Finger::Thumb,
-        Finger::Index,
-        Finger::Middle,
-        Finger::Ring,
-        Finger::Little,
-    ];
+    pub const ALL: [Finger; 5] = [Finger::Thumb, Finger::Index, Finger::Middle, Finger::Ring, Finger::Little];
 
     #[inline]
     pub fn index(self) -> usize {

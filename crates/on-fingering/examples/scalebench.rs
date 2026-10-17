@@ -60,10 +60,7 @@ fn agreement(
     for f in &solution.fingerings {
         got[f.note.0 as usize] = f.finger.number();
     }
-    let same = want
-        .iter()
-        .filter(|(index, taught)| got[**index] == taught.finger.number())
-        .count();
+    let same = want.iter().filter(|(index, taught)| got[**index] == taught.finger.number()).count();
     (same, want.len())
 }
 
@@ -81,8 +78,11 @@ fn show(tonic: u8, hand: Hand, octaves: usize, options: &FingeringOptions) {
     for f in &solution.fingerings {
         got[f.note.0 as usize] = f.finger.number();
     }
-    println!("{} major, {hand:?} hand
-", NAMES[tonic as usize]);
+    println!(
+        "{} major, {hand:?} hand
+",
+        NAMES[tonic as usize]
+    );
     print!("  note  ");
     for m in &pitches {
         print!("{:>3}", NAMES[(*m % 12) as usize]);
@@ -101,9 +101,11 @@ fn show(tonic: u8, hand: Hand, octaves: usize, options: &FingeringOptions) {
         let agree = want.get(&i).map(|t| t.finger.number() == *g).unwrap_or(true);
         print!("{:>3}", if agree { format!("{g}") } else { format!("{g}*") });
     }
-    println!("
+    println!(
+        "
 
-  (* where the model disagrees with the books)");
+  (* where the model disagrees with the books)"
+    );
 }
 
 fn even_onsets(n: usize) -> Vec<f64> {
@@ -115,10 +117,8 @@ fn main() {
     if let (Some(key), Some(hand)) = (args.next(), args.next()) {
         let tonic = NAMES.iter().position(|n| n.eq_ignore_ascii_case(&key)).unwrap_or(0) as u8;
         let hand = if hand.starts_with('l') { Hand::Left } else { Hand::Right };
-        let bare = FingeringOptions {
-            pattern_scale: 0.0,
-            ..FingeringOptions::for_hand(HandProfile::default())
-        };
+        let bare =
+            FingeringOptions { pattern_scale: 0.0, ..FingeringOptions::for_hand(HandProfile::default()) };
         show(tonic, hand, 2, &bare);
         return;
     }
@@ -171,26 +171,16 @@ fn main() {
             100.0 * a as f64 / b as f64
         }
     };
-    println!(
-        "  right hand   taught {:>5.1}%   model alone {:>5.1}%",
-        pct(totals[0]),
-        pct(totals[1])
-    );
-    println!(
-        "  left hand    taught {:>5.1}%   model alone {:>5.1}%",
-        pct(totals[2]),
-        pct(totals[3])
-    );
+    println!("  right hand   taught {:>5.1}%   model alone {:>5.1}%", pct(totals[0]), pct(totals[1]));
+    println!("  left hand    taught {:>5.1}%   model alone {:>5.1}%", pct(totals[2]), pct(totals[3]));
     let both_taught = (totals[0].0 + totals[2].0, totals[0].1 + totals[2].1);
     let both_model = (totals[1].0 + totals[3].0, totals[1].1 + totals[3].1);
-    println!(
-        "  overall      taught {:>5.1}%   model alone {:>5.1}%",
-        pct(both_taught),
-        pct(both_model)
-    );
+    println!("  overall      taught {:>5.1}%   model alone {:>5.1}%", pct(both_taught), pct(both_model));
 
-    println!("
-  what the taught patterns cost to enforce:");
+    println!(
+        "
+  what the taught patterns cost to enforce:"
+    );
     println!("    {:>8}  {:>9}", "scale", "agreement");
     for scale in [0.0f32, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0] {
         let options = FingeringOptions { pattern_scale: scale, ..taught_options.clone() };

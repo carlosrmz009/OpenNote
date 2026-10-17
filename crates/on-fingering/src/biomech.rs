@@ -29,11 +29,7 @@ pub struct BiomechWeights {
 
 impl Default for BiomechWeights {
     fn default() -> Self {
-        Self {
-            posture: 1.0,
-            motion: 2.5,
-            strain: StrainWeights::default(),
-        }
+        Self { posture: 1.0, motion: 2.5, strain: StrainWeights::default() }
     }
 }
 
@@ -59,10 +55,8 @@ impl Grip {
         let (Some(base), Some(top)) = (self.base(), self.top()) else {
             return 0;
         };
-        let (lowest, highest) = (
-            on_hand::keyboard::MIDI_LOWEST as i32,
-            on_hand::keyboard::MIDI_HIGHEST as i32,
-        );
+        let (lowest, highest) =
+            (on_hand::keyboard::MIDI_LOWEST as i32, on_hand::keyboard::MIDI_HIGHEST as i32);
         let most = (base as i32 - lowest).div_euclid(12);
         let least = (top as i32 - highest + 11).div_euclid(12);
         ((base as i32 - 60).div_euclid(12)).clamp(least, most)
@@ -70,22 +64,12 @@ impl Grip {
 
     fn cache_key(&self) -> GripKey {
         let shift = self.octave_offset() * 12;
-        GripKey(
-            self.keys
-                .iter()
-                .map(|(m, f)| ((*m as i32 - shift) as u8, *f))
-                .collect(),
-        )
+        GripKey(self.keys.iter().map(|(m, f)| ((*m as i32 - shift) as u8, *f)).collect())
     }
 
     fn normalised(&self) -> Grip {
         let shift = self.octave_offset() * 12;
-        Grip::new(
-            self.keys
-                .iter()
-                .map(|(m, f)| ((*m as i32 - shift) as u8, *f))
-                .collect(),
-        )
+        Grip::new(self.keys.iter().map(|(m, f)| ((*m as i32 - shift) as u8, *f)).collect())
     }
 }
 
@@ -158,12 +142,7 @@ pub struct BiomechModel {
 impl BiomechModel {
     pub fn new(profile: HandProfile, hand: Hand, weights: BiomechWeights) -> Self {
         let cache = geometry_for(hand, &profile);
-        Self {
-            skeleton: Skeleton::new(profile, hand),
-            keyboard: Keyboard::new(),
-            weights,
-            cache,
-        }
+        Self { skeleton: Skeleton::new(profile, hand), keyboard: Keyboard::new(), weights, cache }
     }
 
     pub fn hand(&self) -> Hand {
@@ -250,10 +229,16 @@ impl BiomechModel {
         pose
     }
 
-    pub fn grip_pose_near(&self, grip: &Grip, near: &HandPose, weights: [f32; on_hand::skeleton::DOF]) -> (HandPose, f32) {
+    pub fn grip_pose_near(
+        &self,
+        grip: &Grip,
+        near: &HandPose,
+        weights: [f32; on_hand::skeleton::DOF],
+    ) -> (HandPose, f32) {
         let targets = self.targets(grip);
         let cold = self.grip_pose(grip);
-        let outcome = reach(&self.skeleton, &ReachRequest::new(&targets).from_pose(cold).near(*near, weights));
+        let outcome =
+            reach(&self.skeleton, &ReachRequest::new(&targets).from_pose(cold).near(*near, weights));
         (outcome.pose, outcome.max_error_mm)
     }
 
@@ -333,12 +318,7 @@ mod tests {
     }
 
     fn grip(notes: &[(u8, u8)]) -> Grip {
-        Grip::new(
-            notes
-                .iter()
-                .map(|(m, f)| (*m, Finger::from_number(*f).unwrap()))
-                .collect(),
-        )
+        Grip::new(notes.iter().map(|(m, f)| (*m, Finger::from_number(*f).unwrap())).collect())
     }
 
     #[test]
@@ -369,11 +349,8 @@ mod tests {
 
     #[test]
     fn the_same_shape_an_octave_apart_costs_the_same() {
-        let m = BiomechModel::new(
-            HandProfile::from_hand_length(183.5),
-            Hand::Right,
-            BiomechWeights::default(),
-        );
+        let m =
+            BiomechModel::new(HandProfile::from_hand_length(183.5), Hand::Right, BiomechWeights::default());
         let low = m.grip_cost(&grip(&[(48, 1), (52, 3), (55, 5)]));
         let high = m.grip_cost(&grip(&[(60, 1), (64, 3), (67, 5)]));
         assert!((low - high).abs() < 1e-4, "{low} vs {high}");
@@ -451,11 +428,8 @@ mod tests {
                 Hand::Right => vec![1, 2, 3, 4, 5],
                 Hand::Left => vec![5, 4, 3, 2, 1],
             };
-            let notes: Vec<(u8, u8)> = [60u8, 62, 64, 65, 67]
-                .iter()
-                .zip(fingers)
-                .map(|(m, f)| (*m, f))
-                .collect();
+            let notes: Vec<(u8, u8)> =
+                [60u8, 62, 64, 65, 67].iter().zip(fingers).map(|(m, f)| (*m, f)).collect();
             let out = m.grip_outcome(&grip(&notes));
             assert!(out.reachable, "{hand:?} could not reach its own home position");
         }

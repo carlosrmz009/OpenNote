@@ -70,13 +70,18 @@ pub fn per_piece(
     out
 }
 
-pub fn solve(piece: &Piece, options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Option<Vec<Option<u8>>> {
+pub fn solve(
+    piece: &Piece,
+    options: &FingeringOptions,
+    prior: Option<&dyn FingeringPrior>,
+) -> Option<Vec<Option<u8>>> {
     let (score, keys) = rebuild(piece);
     if keys.is_empty() {
         return None;
     }
     let solution = on_fingering::finger_score_with_prior(&score, options, prior);
-    let chosen: HashMap<NoteId, u8> = solution.fingerings.iter().map(|f| (f.note, f.finger.number())).collect();
+    let chosen: HashMap<NoteId, u8> =
+        solution.fingerings.iter().map(|f| (f.note, f.finger.number())).collect();
     Some(keys.iter().map(|id| chosen.get(id).copied()).collect())
 }
 
@@ -134,7 +139,8 @@ pub fn rate_against(name: &str, ours: &[Option<u8>], annotations: &[&Piece]) -> 
             if window.iter().any(|&i| !matches!(ours.get(i), Some(Some(_)))) {
                 continue;
             }
-            let full: Vec<&Vec<Option<u8>>> = truths.iter().filter(|row| window.iter().all(|&i| row[i].is_some())).collect();
+            let full: Vec<&Vec<Option<u8>>> =
+                truths.iter().filter(|row| window.iter().all(|&i| row[i].is_some())).collect();
             if full.is_empty() {
                 continue;
             }
@@ -152,7 +158,8 @@ pub fn human_reference(pieces: &[Piece]) -> Vec<PieceRates> {
             continue;
         }
         for (k, left_out) in annotations.iter().enumerate() {
-            let rest: Vec<&Piece> = annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
+            let rest: Vec<&Piece> =
+                annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
             let theirs: Vec<Option<u8>> = left_out.notes.iter().map(|n| n.finger).collect();
             if let Some(rates) = rate_against(&format!("{name}#{k}"), &theirs, &rest) {
                 out.push(rates);
@@ -162,7 +169,11 @@ pub fn human_reference(pieces: &[Piece]) -> Vec<PieceRates> {
     out
 }
 
-pub fn per_piece_loo(pieces: &[Piece], options: &FingeringOptions, prior: Option<&dyn FingeringPrior>) -> Vec<PieceRates> {
+pub fn per_piece_loo(
+    pieces: &[Piece],
+    options: &FingeringOptions,
+    prior: Option<&dyn FingeringPrior>,
+) -> Vec<PieceRates> {
     let mut out = Vec::new();
     for (name, annotations) in by_piece(pieces) {
         if annotations.len() < 2 {
@@ -170,7 +181,8 @@ pub fn per_piece_loo(pieces: &[Piece], options: &FingeringOptions, prior: Option
         }
         let Some(ours) = solve(annotations[0], options, prior) else { continue };
         for k in 0..annotations.len() {
-            let rest: Vec<&Piece> = annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
+            let rest: Vec<&Piece> =
+                annotations.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, a)| *a).collect();
             if let Some(rates) = rate_against(&format!("{name}#{k}"), &ours, &rest) {
                 out.push(rates);
             }
@@ -217,13 +229,7 @@ pub struct Interval {
 
 impl std::fmt::Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:.1}% ({:.1}-{:.1})",
-            self.point * 100.0,
-            self.low * 100.0,
-            self.high * 100.0
-        )
+        write!(f, "{:.1}% ({:.1}-{:.1})", self.point * 100.0, self.low * 100.0, self.high * 100.0)
     }
 }
 
@@ -249,7 +255,8 @@ impl std::fmt::Display for Confidence {
 }
 
 pub fn paired(ours: &[PieceRates], theirs: &[PieceRates], rounds: usize) -> Interval {
-    paired_by(ours, theirs, rounds, false, |r| combine(r).general).expect("the two were measured on different pieces")
+    paired_by(ours, theirs, rounds, false, |r| combine(r).general)
+        .expect("the two were measured on different pieces")
 }
 
 pub fn paired_by(
@@ -269,7 +276,8 @@ pub fn paired_by(
             })
             .collect::<Vec<_>>()
     };
-    let theirs_at: HashMap<(String, usize), usize> = key(theirs).into_iter().enumerate().map(|(i, k)| (k, i)).collect();
+    let theirs_at: HashMap<(String, usize), usize> =
+        key(theirs).into_iter().enumerate().map(|(i, k)| (k, i)).collect();
     let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(ours.len());
     for (i, k) in key(ours).into_iter().enumerate() {
         match theirs_at.get(&k) {
@@ -352,10 +360,8 @@ pub fn recombined(truths: &[Vec<u8>], ours: &[u8]) -> f32 {
     const RECOMBINATION: f32 = 1.0;
     const SUBSTITUTION: f32 = 1.0;
 
-    let mut cost: Vec<f32> = truths
-        .iter()
-        .map(|t| if t[0] == ours[0] { 0.0 } else { SUBSTITUTION })
-        .collect();
+    let mut cost: Vec<f32> =
+        truths.iter().map(|t| if t[0] == ours[0] { 0.0 } else { SUBSTITUTION }).collect();
 
     for n in 1..notes {
         let previous = cost.clone();
@@ -517,10 +523,7 @@ mod tests {
 
         let stitched = recombined(&truths, &coherent);
         let shuffle = recombined(&truths, &shuffled);
-        assert!(
-            stitched > shuffle,
-            "one crossing scored {stitched}, four scored {shuffle}"
-        );
+        assert!(stitched > shuffle, "one crossing scored {stitched}, four scored {shuffle}");
         assert!((stitched - 0.8).abs() < 1e-6, "{stitched}");
     }
 
@@ -551,10 +554,7 @@ mod tests {
     fn the_recombined_rate_sits_between_the_highest_and_the_soft() {
         let notes: Vec<(u8, u8)> = vec![(60, 1), (62, 2), (64, 3), (65, 1), (67, 2)];
         let other: Vec<(u8, u8)> = vec![(60, 1), (62, 3), (64, 4), (65, 1), (67, 2)];
-        let pieces = vec![
-            piece("c-major", "1", &notes),
-            piece("c-major", "2", &other),
-        ];
+        let pieces = vec![piece("c-major", "1", &notes), piece("c-major", "2", &other)];
         let rates = evaluate(&pieces, &FingeringOptions::default(), None);
         assert!(rates.recombined >= rates.highest - 1e-6, "{rates}");
         assert!(rates.soft >= rates.recombined - 1e-6, "{rates}");
@@ -562,20 +562,8 @@ mod tests {
 
     #[test]
     fn a_textbook_scale_agrees_completely() {
-        let scale = piece(
-            "c-major",
-            "1",
-            &[
-                (60, 1),
-                (62, 2),
-                (64, 3),
-                (65, 1),
-                (67, 2),
-                (69, 3),
-                (71, 4),
-                (72, 5),
-            ],
-        );
+        let scale =
+            piece("c-major", "1", &[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2), (69, 3), (71, 4), (72, 5)]);
         let rates = evaluate(&[scale], &FingeringOptions::default(), None);
         assert_eq!(rates.pieces, 1);
         assert!(rates.general > 0.99, "{rates}");
@@ -586,10 +574,7 @@ mod tests {
     fn the_three_rates_are_ordered() {
         let notes: Vec<(u8, u8)> = vec![(60, 1), (62, 2), (64, 3), (65, 1), (67, 2)];
         let other: Vec<(u8, u8)> = vec![(60, 1), (62, 3), (64, 4), (65, 1), (67, 2)];
-        let pieces = vec![
-            piece("c-major", "1", &notes),
-            piece("c-major", "2", &other),
-        ];
+        let pieces = vec![piece("c-major", "1", &notes), piece("c-major", "2", &other)];
         let rates = evaluate(&pieces, &FingeringOptions::default(), None);
         assert!(rates.soft >= rates.highest - 1e-6, "{rates}");
         assert!(rates.highest >= rates.general - 1e-6, "{rates}");
@@ -603,13 +588,21 @@ mod tests {
     }
 
     fn named(name: &str, group: &str, general: f32) -> PieceRates {
-        PieceRates { name: name.into(), group: group.into(), general: vec![general], highest: general, ..Default::default() }
+        PieceRates {
+            name: name.into(),
+            group: group.into(),
+            general: vec![general],
+            highest: general,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn pieces_are_paired_by_name_not_by_order() {
-        let ours: Vec<PieceRates> = (0..30).map(|i| named(&format!("p{i}"), "g", 0.5 + i as f32 / 100.0)).collect();
-        let theirs: Vec<PieceRates> = (0..30).map(|i| named(&format!("p{i}"), "g", 0.48 + i as f32 / 100.0)).collect();
+        let ours: Vec<PieceRates> =
+            (0..30).map(|i| named(&format!("p{i}"), "g", 0.5 + i as f32 / 100.0)).collect();
+        let theirs: Vec<PieceRates> =
+            (0..30).map(|i| named(&format!("p{i}"), "g", 0.48 + i as f32 / 100.0)).collect();
         let mut shuffled = theirs.clone();
         shuffled.reverse();
         let general = |r: &[PieceRates]| combine(r).general;

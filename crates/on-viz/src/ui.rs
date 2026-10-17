@@ -21,12 +21,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(settings: SessionSettings, path: Option<PathBuf>) -> Self {
-        Self {
-            settings,
-            path,
-            message: String::new(),
-            task: None,
-        }
+        Self { settings, path, message: String::new(), task: None }
     }
 
     fn busy(&self) -> bool {
@@ -88,9 +83,7 @@ fn draw_menus(
     let mut root = egui::Ui::new(
         ctx.clone(),
         "opennote-chrome".into(),
-        egui::UiBuilder::new()
-            .layer_id(egui::LayerId::background())
-            .max_rect(ctx.viewport_rect()),
+        egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
     let busy = session.busy();
@@ -106,29 +99,19 @@ fn draw_menus(
                         choose_score(&mut session);
                         ui.close();
                     }
-                    if ui
-                        .add_enabled(
-                            session.path.is_some(),
-                            egui::Button::new("Reload from disk"),
-                        )
-                        .clicked()
+                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Reload from disk")).clicked()
                     {
                         reload.resolve();
                         ui.close();
                     }
                     ui.separator();
-                    if ui
-                        .add_enabled(session.path.is_some(), egui::Button::new("Export video…"))
-                        .clicked()
+                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Export video…")).clicked()
                     {
                         export_video(&mut session);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(
-                            session.path.is_some(),
-                            egui::Button::new("Save fingered score…"),
-                        )
+                        .add_enabled(session.path.is_some(), egui::Button::new("Save fingered score…"))
                         .clicked()
                     {
                         annotate_score(&mut session);
@@ -154,14 +137,9 @@ fn draw_menus(
                     ui.checkbox(&mut transport.looping, "Loop");
                     ui.separator();
                     ui.label("Speed");
-                    for (label, speed) in
-                        [("Half", 0.5), ("Three quarters", 0.75), ("Full", 1.0)]
-                    {
+                    for (label, speed) in [("Half", 0.5), ("Three quarters", 0.75), ("Full", 1.0)] {
                         if ui
-                            .radio(
-                                (transport.speed - speed).abs() < 1e-6,
-                                format!("{label} ({speed:.2}×)"),
-                            )
+                            .radio((transport.speed - speed).abs() < 1e-6, format!("{label} ({speed:.2}×)"))
                             .clicked()
                         {
                             transport.speed = speed;
@@ -182,9 +160,7 @@ fn draw_menus(
                     ] {
                         if ui.radio(current == size, hand_size_label(size)).clicked() {
                             session.settings.fingering =
-                                on_fingering::FingeringOptions::for_hand(HandProfile::from_size(
-                                    size,
-                                ));
+                                on_fingering::FingeringOptions::for_hand(HandProfile::from_size(size));
                             reload.resolve();
                         }
                     }
@@ -240,10 +216,7 @@ fn draw_menus(
                     ui.separator();
                     let mut lookahead = session.settings.lookahead as f32;
                     if ui
-                        .add(
-                            egui::Slider::new(&mut lookahead, 1.0..=8.0)
-                                .text("Seconds of notes ahead"),
-                        )
+                        .add(egui::Slider::new(&mut lookahead, 1.0..=8.0).text("Seconds of notes ahead"))
                         .changed()
                     {
                         session.settings.lookahead = f64::from(lookahead);
@@ -252,11 +225,7 @@ fn draw_menus(
                 });
 
                 ui.separator();
-                let title = performance
-                    .timeline
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| "no score open".into());
+                let title = performance.timeline.title.clone().unwrap_or_else(|| "no score open".into());
                 ui.label(egui::RichText::new(title).strong());
                 let note = match &session.task {
                     Some(task) => format!("{}…", task.what),
@@ -268,16 +237,11 @@ fn draw_menus(
                 }
 
                 if capture.is_none() {
-                    if let Some(fps) = diagnostics
-                        .get(&FrameTimeDiagnosticsPlugin::FPS)
-                        .and_then(|fps| fps.smoothed())
+                    if let Some(fps) =
+                        diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|fps| fps.smoothed())
                     {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{fps:.0} fps"))
-                                    .monospace()
-                                    .weak(),
-                            );
+                            ui.label(egui::RichText::new(format!("{fps:.0} fps")).monospace().weak());
                         });
                     }
                 }
@@ -306,11 +270,7 @@ fn draw_menus(
             if slider.changed() {
                 jump = Some(position);
             }
-            ui.label(format!(
-                "{} / {}",
-                clock(transport.position.max(0.0)),
-                clock(duration)
-            ));
+            ui.label(format!("{} / {}", clock(transport.position.max(0.0)), clock(duration)));
         });
     });
     inset.bottom = bottom.response.rect.height();
@@ -352,10 +312,7 @@ fn hand_size_label(size: HandSize) -> &'static str {
 }
 
 fn soundfont_label(path: &std::path::Path) -> String {
-    path.file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("SoundFont")
-        .to_owned()
+    path.file_stem().and_then(|name| name.to_str()).unwrap_or("SoundFont").to_owned()
 }
 
 fn choose_score(session: &mut Session) {
@@ -363,10 +320,7 @@ fn choose_score(session: &mut Session) {
     let done = Arc::new(AtomicBool::new(false));
     let outcome = Arc::new(Mutex::new(String::new()));
 
-    let start = session
-        .path
-        .as_ref()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let start = session.path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
     let (result, finished) = (Arc::clone(&chosen), Arc::clone(&done));
     std::thread::spawn(move || {
         let mut dialog = rfd::FileDialog::new()
@@ -382,12 +336,7 @@ fn choose_score(session: &mut Session) {
         finished.store(true, Ordering::Release);
     });
 
-    session.task = Some(Task {
-        what: "opening",
-        done,
-        chosen,
-        outcome,
-    });
+    session.task = Some(Task { what: "opening", done, chosen, outcome });
 }
 
 fn export_video(session: &mut Session) {
@@ -403,12 +352,7 @@ fn export_video(session: &mut Session) {
     std::thread::spawn(move || {
         let chosen = rfd::FileDialog::new()
             .set_title("Export video")
-            .set_file_name(
-                suggestion
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("opennote.mp4"),
-            )
+            .set_file_name(suggestion.file_name().and_then(|n| n.to_str()).unwrap_or("opennote.mp4"))
             .add_filter("MP4 video", &["mp4"])
             .save_file();
         if let Some(output) = chosen {
@@ -418,12 +362,7 @@ fn export_video(session: &mut Session) {
         finished.store(true, Ordering::Release);
     });
 
-    session.task = Some(Task {
-        what: "exporting",
-        done,
-        chosen: Arc::new(Mutex::new(None)),
-        outcome,
-    });
+    session.task = Some(Task { what: "exporting", done, chosen: Arc::new(Mutex::new(None)), outcome });
 }
 
 fn annotate_score(session: &mut Session) {
@@ -439,12 +378,7 @@ fn annotate_score(session: &mut Session) {
     std::thread::spawn(move || {
         let chosen = rfd::FileDialog::new()
             .set_title("Save the fingered score")
-            .set_file_name(
-                suggestion
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("fingered.musicxml"),
-            )
+            .set_file_name(suggestion.file_name().and_then(|n| n.to_str()).unwrap_or("fingered.musicxml"))
             .add_filter("MusicXML", &["musicxml", "mxl"])
             .save_file();
         if let Some(output) = chosen {
@@ -454,12 +388,7 @@ fn annotate_score(session: &mut Session) {
         finished.store(true, Ordering::Release);
     });
 
-    session.task = Some(Task {
-        what: "saving",
-        done,
-        chosen: Arc::new(Mutex::new(None)),
-        outcome,
-    });
+    session.task = Some(Task { what: "saving", done, chosen: Arc::new(Mutex::new(None)), outcome });
 }
 
 /// The `opennote` command line that does what the viewer is showing: the same hand and
@@ -493,7 +422,12 @@ fn command_line(subcommand: &str, settings: &SessionSettings) -> Vec<String> {
     arguments
 }
 
-fn run_self(arguments: &[String], input: &std::path::Path, output: &std::path::Path, success: &str) -> String {
+fn run_self(
+    arguments: &[String],
+    input: &std::path::Path,
+    output: &std::path::Path,
+    success: &str,
+) -> String {
     let Ok(program) = std::env::current_exe() else {
         return "could not work out where this program lives".into();
     };
@@ -537,10 +471,7 @@ fn apply_reload(world: &mut World) {
     let (path, settings) = {
         let reload = world.resource::<Reload>();
         let session = world.resource::<Session>();
-        (
-            reload.path.clone().or_else(|| session.path.clone()),
-            session.settings.clone(),
-        )
+        (reload.path.clone().or_else(|| session.path.clone()), session.settings.clone())
     };
     world.resource_mut::<Reload>().wanted = false;
     world.resource_mut::<Reload>().path = None;

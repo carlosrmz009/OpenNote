@@ -51,17 +51,10 @@ impl Context {
             ("-", _) => Some(Context::Empty),
             ("p", [f]) => Some(Context::Previous(finger(f)?)),
             ("i", [f, d]) => Some(Context::Interval(finger(f)?, d.parse().ok()?)),
-            ("c", [f, d, c]) => Some(Context::Coloured(
-                finger(f)?,
-                d.parse().ok()?,
-                c.parse().ok()?,
-            )),
-            ("t", [f, d, c, g]) => Some(Context::Trigram(
-                finger(f)?,
-                d.parse().ok()?,
-                c.parse().ok()?,
-                finger(g)?,
-            )),
+            ("c", [f, d, c]) => Some(Context::Coloured(finger(f)?, d.parse().ok()?, c.parse().ok()?)),
+            ("t", [f, d, c, g]) => {
+                Some(Context::Trigram(finger(f)?, d.parse().ok()?, c.parse().ok()?, finger(g)?))
+            }
             _ => None,
         }
     }
@@ -103,10 +96,7 @@ impl HandCounts {
     }
 
     fn observations(&self) -> u32 {
-        self.tallies
-            .get(&Context::Empty)
-            .map(|t| t.iter().sum())
-            .unwrap_or(0)
+        self.tallies.get(&Context::Empty).map(|t| t.iter().sum()).unwrap_or(0)
     }
 }
 
@@ -154,10 +144,8 @@ impl NgramPrior {
             Hand::Right => Hand::Left,
             Hand::Left => Hand::Right,
         };
-        let mirrored: Vec<Placement> = placements
-            .iter()
-            .map(|p| Placement::new(reflect(p.midi), p.finger))
-            .collect();
+        let mirrored: Vec<Placement> =
+            placements.iter().map(|p| Placement::new(reflect(p.midi), p.finger)).collect();
         let mut mirrored_backwards = mirrored.clone();
         mirrored_backwards.reverse();
         Self::count(&mut self.pooled[other as usize], &mirrored);
@@ -174,15 +162,10 @@ impl NgramPrior {
             let colour = colours(previous.midi, current.midi);
             counts.observe(Context::Previous(previous.finger), current.finger);
             counts.observe(Context::Interval(previous.finger, step), current.finger);
-            counts.observe(
-                Context::Coloured(previous.finger, step, colour),
-                current.finger,
-            );
+            counts.observe(Context::Coloured(previous.finger, step, colour), current.finger);
             if let Some(before) = index.checked_sub(2).map(|i| placements[i]) {
-                counts.observe(
-                    Context::Trigram(previous.finger, step, colour, before.finger),
-                    current.finger,
-                );
+                counts
+                    .observe(Context::Trigram(previous.finger, step, colour, before.finger), current.finger);
             }
         }
     }
@@ -356,16 +339,12 @@ impl FingeringPrior for NgramPrior {
                 let step = bucket(i32::from(current.midi) - i32::from(previous.midi));
                 let colour = colours(previous.midi, current.midi);
                 match before {
-                    Some(before) => {
-                        Context::Trigram(previous.finger, step, colour, before.finger)
-                    }
+                    Some(before) => Context::Trigram(previous.finger, step, colour, before.finger),
                     None => Context::Coloured(previous.finger, step, colour),
                 }
             }
         };
-        self.probability(hand, &context, current.finger)
-            .max(1e-4)
-            .ln()
+        self.probability(hand, &context, current.finger).max(1e-4).ln()
     }
 
     fn chord_cost(&self, hand: Hand, notes: &[u8], fingers: &[Finger]) -> f32 {
@@ -380,13 +359,7 @@ impl FingeringPrior for NgramPrior {
         self.known.suggest(score)
     }
 
-    fn step_cost(
-        &self,
-        hand: Hand,
-        from: (&[u8], &[Finger]),
-        to: (&[u8], &[Finger]),
-        seconds: f64,
-    ) -> f32 {
+    fn step_cost(&self, hand: Hand, from: (&[u8], &[Finger]), to: (&[u8], &[Finger]), seconds: f64) -> f32 {
         self.learned.as_ref().map_or(0.0, |l| l.step(hand, from, to, seconds))
     }
 
@@ -417,11 +390,7 @@ struct StoredModel {
 }
 
 fn serialize_hand(counts: &HandCounts) -> HashMap<String, Tally> {
-    counts
-        .tallies
-        .iter()
-        .map(|(context, tally)| (context.key(), *tally))
-        .collect()
+    counts.tallies.iter().map(|(context, tally)| (context.key(), *tally)).collect()
 }
 
 fn deserialize_hand(stored: &HashMap<String, Tally>) -> HandCounts {
@@ -450,11 +419,7 @@ mod tests {
         use on_hand::keyboard::is_black;
         for midi in 21..=108u8 {
             assert_eq!(reflect(reflect(midi)), midi, "midi {midi}");
-            assert_eq!(
-                is_black(reflect(midi)),
-                is_black(midi),
-                "reflecting {midi} changed its colour"
-            );
+            assert_eq!(is_black(reflect(midi)), is_black(midi), "reflecting {midi} changed its colour");
         }
         for (low, high) in [(60u8, 64u8), (61, 66), (70, 71)] {
             let forward = i32::from(high) - i32::from(low);
@@ -512,18 +477,9 @@ mod tests {
         prior.observe(Hand::Left, &contrary);
 
         let previous = Some(Placement::new(60, Finger::Thumb));
-        let shown = prior.log_probability(
-            Hand::Right,
-            None,
-            previous,
-            Placement::new(62, Finger::Index),
-        );
-        let mirrored_only = prior.log_probability(
-            Hand::Right,
-            None,
-            previous,
-            Placement::new(62, Finger::Ring),
-        );
+        let shown = prior.log_probability(Hand::Right, None, previous, Placement::new(62, Finger::Index));
+        let mirrored_only =
+            prior.log_probability(Hand::Right, None, previous, Placement::new(62, Finger::Ring));
         assert!(
             shown > mirrored_only,
             "the mirror overruled two hundred observations: {shown} vs {mirrored_only}"
@@ -533,10 +489,7 @@ mod tests {
     #[test]
     fn an_octave_is_already_the_same_passage() {
         let low = run(&[(60, 1), (62, 2), (64, 3), (65, 1)]);
-        let high: Vec<Placement> = low
-            .iter()
-            .map(|p| Placement::new(p.midi + 12, p.finger))
-            .collect();
+        let high: Vec<Placement> = low.iter().map(|p| Placement::new(p.midi + 12, p.finger)).collect();
 
         let mut from_low = NgramPrior::new();
         from_low.observe(Hand::Right, &low);
@@ -545,19 +498,11 @@ mod tests {
 
         for finger in Finger::ALL {
             let asked_high = Placement::new(76, finger);
-            let taught_by_low = from_low.log_probability(
-                Hand::Right,
-                Some(high[1]),
-                Some(high[2]),
-                asked_high,
-            );
+            let taught_by_low =
+                from_low.log_probability(Hand::Right, Some(high[1]), Some(high[2]), asked_high);
             let asked_low = Placement::new(64, finger);
-            let taught_by_high = from_high.log_probability(
-                Hand::Right,
-                Some(low[1]),
-                Some(low[2]),
-                asked_low,
-            );
+            let taught_by_high =
+                from_high.log_probability(Hand::Right, Some(low[1]), Some(low[2]), asked_low);
             assert!(
                 (taught_by_low - taught_by_high).abs() < 1e-6,
                 "{finger:?}: {taught_by_low} vs {taught_by_high}"
@@ -582,38 +527,17 @@ mod tests {
 
     #[test]
     fn it_learns_a_habit_it_is_shown() {
-        let scale = run(&[
-            (60, 1),
-            (62, 2),
-            (64, 3),
-            (65, 1),
-            (67, 2),
-            (69, 3),
-            (71, 4),
-            (72, 5),
-        ]);
+        let scale = run(&[(60, 1), (62, 2), (64, 3), (65, 1), (67, 2), (69, 3), (71, 4), (72, 5)]);
         let mut prior = NgramPrior::new();
         for _ in 0..20 {
             prior.observe(Hand::Right, &scale);
         }
 
         let previous = Some(Placement::new(60, Finger::Thumb));
-        let expected = prior.log_probability(
-            Hand::Right,
-            None,
-            previous,
-            Placement::new(62, Finger::Index),
-        );
-        let unexpected = prior.log_probability(
-            Hand::Right,
-            None,
-            previous,
-            Placement::new(62, Finger::Little),
-        );
-        assert!(
-            expected > unexpected + 1.0,
-            "expected {expected}, unexpected {unexpected}"
-        );
+        let expected = prior.log_probability(Hand::Right, None, previous, Placement::new(62, Finger::Index));
+        let unexpected =
+            prior.log_probability(Hand::Right, None, previous, Placement::new(62, Finger::Little));
+        assert!(expected > unexpected + 1.0, "expected {expected}, unexpected {unexpected}");
         assert_eq!(prior.observations(), 160);
     }
 

@@ -28,13 +28,9 @@ pub struct Homography {
 impl Homography {
     pub fn fit(correspondences: &[(Pixel, Millimetres)]) -> Result<Self> {
         if correspondences.len() < 4 {
-            bail!(
-                "a homography needs at least four points, and {} were given",
-                correspondences.len()
-            );
+            bail!("a homography needs at least four points, and {} were given", correspondences.len());
         }
-        let (from, to): (Vec<Pixel>, Vec<Millimetres>) =
-            correspondences.iter().copied().unzip();
+        let (from, to): (Vec<Pixel>, Vec<Millimetres>) = correspondences.iter().copied().unzip();
         let norm_from = normalising(&from);
         let norm_to = normalising(&to);
         let inverse_to = invert(&norm_to)?;
@@ -58,20 +54,12 @@ impl Homography {
             }
         }
         let h = solve(ata, atb).context("the calibration points are degenerate")?;
-        let normalised = [
-            [h[0], h[1], h[2]],
-            [h[3], h[4], h[5]],
-            [h[6], h[7], 1.0],
-        ];
+        let normalised = [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1.0]];
         let m = multiply(&multiply(&inverse_to, &normalised), &norm_from);
         Ok(Self { m: rescale(m) })
     }
 
-    pub fn from_keyboard_corners(
-        corners: [Pixel; 4],
-        lowest_white: u8,
-        highest_white: u8,
-    ) -> Result<Self> {
+    pub fn from_keyboard_corners(corners: [Pixel; 4], lowest_white: u8, highest_white: u8) -> Result<Self> {
         if is_black(lowest_white) || is_black(highest_white) {
             bail!("the corners of a keyboard are white keys; {lowest_white} and {highest_white} are not both white");
         }
@@ -95,10 +83,8 @@ impl Homography {
     }
 
     pub fn read(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("{} is not a calibration", path.display()))
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("{} is not a calibration", path.display()))
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
@@ -120,8 +106,7 @@ pub struct Corners {
 
 impl Corners {
     pub fn read(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&text).with_context(|| {
             format!(
                 "{} is not a corners file, as the hand-tracking tool writes when the \
@@ -139,31 +124,16 @@ impl Corners {
 fn apply(m: &[[f64; 3]; 3], p: (f64, f64)) -> (f64, f64) {
     let w = m[2][0] * p.0 + m[2][1] * p.1 + m[2][2];
     let w = if w.abs() < 1e-12 { 1e-12 } else { w };
-    (
-        (m[0][0] * p.0 + m[0][1] * p.1 + m[0][2]) / w,
-        (m[1][0] * p.0 + m[1][1] * p.1 + m[1][2]) / w,
-    )
+    ((m[0][0] * p.0 + m[0][1] * p.1 + m[0][2]) / w, (m[1][0] * p.0 + m[1][1] * p.1 + m[1][2]) / w)
 }
 
 fn normalising(points: &[(f64, f64)]) -> [[f64; 3]; 3] {
     let n = points.len() as f64;
     let cx = points.iter().map(|p| p.0).sum::<f64>() / n;
     let cy = points.iter().map(|p| p.1).sum::<f64>() / n;
-    let spread = points
-        .iter()
-        .map(|p| ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt())
-        .sum::<f64>()
-        / n;
-    let scale = if spread > 1e-12 {
-        std::f64::consts::SQRT_2 / spread
-    } else {
-        1.0
-    };
-    [
-        [scale, 0.0, -scale * cx],
-        [0.0, scale, -scale * cy],
-        [0.0, 0.0, 1.0],
-    ]
+    let spread = points.iter().map(|p| ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()).sum::<f64>() / n;
+    let scale = if spread > 1e-12 { std::f64::consts::SQRT_2 / spread } else { 1.0 };
+    [[scale, 0.0, -scale * cx], [0.0, scale, -scale * cy], [0.0, 0.0, 1.0]]
 }
 
 fn multiply(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
@@ -257,8 +227,7 @@ pub struct Watched {
 
 impl Watched {
     pub fn read(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let watched: Self = serde_json::from_str(&text)
             .with_context(|| format!("{} is not a landmark file", path.display()))?;
         if watched.frames.is_empty() {
@@ -443,11 +412,7 @@ fn vote(
     let mut tally: BTreeMap<u8, BTreeMap<u8, (f32, HandLabel)>> = BTreeMap::new();
     for frame in frames {
         for (midi, finger, hand, confidence) in assign(keyboard, keys, frame, homography) {
-            let entry = tally
-                .entry(midi)
-                .or_default()
-                .entry(finger.number())
-                .or_insert((0.0, hand));
+            let entry = tally.entry(midi).or_default().entry(finger.number()).or_insert((0.0, hand));
             entry.0 += confidence;
         }
     }
@@ -456,9 +421,8 @@ fn vote(
     let mut chosen = Vec::new();
     let mut trust = Vec::new();
     for (midi, fingers) in tally {
-        let Some((number, (weight, hand))) = fingers
-            .into_iter()
-            .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0).then(b.0.cmp(&a.0)))
+        let Some((number, (weight, hand))) =
+            fingers.into_iter().max_by(|a, b| a.1 .0.total_cmp(&b.1 .0).then(b.0.cmp(&a.0)))
         else {
             continue;
         };
@@ -482,16 +446,12 @@ fn fingertips(frame: &Frame, homography: &Homography) -> Vec<Tip> {
     let mut hands: Vec<&SeenHand> = frame.hands.iter().collect();
     if hands.len() == 2 {
         let thumb_left = |seen: &SeenHand| {
-            homography.to_keyboard(seen.fingertips[0]).0
-                < homography.to_keyboard(seen.fingertips[4]).0
+            homography.to_keyboard(seen.fingertips[0]).0 < homography.to_keyboard(seen.fingertips[4]).0
         };
         let left_first = match (thumb_left(hands[0]), thumb_left(hands[1])) {
             (false, true) => true,
             (true, false) => false,
-            _ => {
-                homography.to_keyboard(hands[0].wrist).0
-                    <= homography.to_keyboard(hands[1].wrist).0
-            }
+            _ => homography.to_keyboard(hands[0].wrist).0 <= homography.to_keyboard(hands[1].wrist).0,
         };
         let (a, b) = if left_first { (0, 1) } else { (1, 0) };
         let ordered = vec![hands[a], hands[b]];
@@ -511,12 +471,7 @@ fn fingertips(frame: &Frame, homography: &Homography) -> Vec<Tip> {
         };
         for (slot, pixel) in seen.fingertips.iter().enumerate() {
             let (x, y) = homography.to_keyboard(*pixel);
-            tips.push(Tip {
-                hand,
-                finger: Finger::from_index(slot),
-                x,
-                y,
-            });
+            tips.push(Tip { hand, finger: Finger::from_index(slot), x, y });
         }
     }
     tips
@@ -649,14 +604,8 @@ mod tests {
         ])
         .unwrap();
         let (x, y) = homography.to_keyboard((980.0, 40.0));
-        assert!(
-            (x - (left + right) / 2.0).abs() < 1.0,
-            "the centre came out at {x}"
-        );
-        assert!(
-            (y - f64::from(WHITE_KEY_LENGTH)).abs() < 1.0,
-            "the far edge came out at {y}"
-        );
+        assert!((x - (left + right) / 2.0).abs() < 1.0, "the centre came out at {x}");
+        assert!((y - f64::from(WHITE_KEY_LENGTH)).abs() < 1.0, "the far edge came out at {y}");
     }
 
     #[test]
@@ -667,25 +616,15 @@ mod tests {
 
     fn hand_at(homography: &Homography, hand: HandLabel, keys: [u8; 5]) -> SeenHand {
         let tips = keys.map(|midi| pixel_of(homography, midi, 40.0));
-        SeenHand {
-            hand,
-            fingertips: tips,
-            wrist: pixel_of(homography, keys[2], 0.0),
-        }
+        SeenHand { hand, fingertips: tips, wrist: pixel_of(homography, keys[2], 0.0) }
     }
 
     #[test]
     fn it_credits_the_finger_that_was_over_the_key() {
         let homography = overhead();
-        let frame = Frame {
-            time: 1.0,
-            hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])],
-        };
-        let watched = Watched {
-            source: "test".into(),
-            offset: 0.0,
-            frames: vec![frame],
-        };
+        let frame =
+            Frame { time: 1.0, hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])] };
+        let watched = Watched { source: "test".into(), offset: 0.0, frames: vec![frame] };
         let onsets = vec![Onset { midi: 64, time: 1.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 1);
@@ -699,12 +638,13 @@ mod tests {
         let watched = Watched {
             source: "test".into(),
             offset: 0.0,
-            frames: vec![Frame { time: 1.0, hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])] }],
+            frames: vec![Frame {
+                time: 1.0,
+                hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])],
+            }],
         };
-        let onsets = vec![
-            Onset { midi: 60, time: 1.0, duration: 2.0 },
-            Onset { midi: 67, time: 1.0, duration: 0.1 },
-        ];
+        let onsets =
+            vec![Onset { midi: 60, time: 1.0, duration: 2.0 }, Onset { midi: 67, time: 1.0, duration: 0.1 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         let held: Vec<(u8, f64)> = piece.notes.iter().map(|n| (n.midi, n.duration)).collect();
         assert_eq!(held, vec![(60, 2.0), (67, 0.1)]);
@@ -737,7 +677,8 @@ mod tests {
             offset: 0.0,
             frames: vec![Frame { time: 1.0, hands: vec![hand] }],
         };
-        let piece = extract(&watched, &[Onset { midi: 61, time: 1.0, duration: 0.25 }], &homography, "test", "1");
+        let piece =
+            extract(&watched, &[Onset { midi: 61, time: 1.0, duration: 0.25 }], &homography, "test", "1");
         assert_eq!(piece.notes[0].finger, Some(2), "the thumb was credited from in front");
     }
 
@@ -751,12 +692,11 @@ mod tests {
                 hand_at(&homography, HandLabel::Right, [79, 77, 76, 74, 72]),
             ],
         };
-        let watched = Watched {
-            source: "test".into(),
-            offset: 0.0,
-            frames: vec![frame],
-        };
-        let onsets = vec![Onset { midi: 52, time: 1.0, duration: 0.25 }, Onset { midi: 76, time: 1.0, duration: 0.25 }];
+        let watched = Watched { source: "test".into(), offset: 0.0, frames: vec![frame] };
+        let onsets = vec![
+            Onset { midi: 52, time: 1.0, duration: 0.25 },
+            Onset { midi: 76, time: 1.0, duration: 0.25 },
+        ];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         let bass = piece.notes.iter().find(|n| n.midi == 52).expect("the bass note was read");
         let treble = piece.notes.iter().find(|n| n.midi == 76).expect("the treble note was read");
@@ -767,15 +707,9 @@ mod tests {
     #[test]
     fn one_finger_cannot_play_two_keys_at_once() {
         let homography = overhead();
-        let frame = Frame {
-            time: 0.0,
-            hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])],
-        };
-        let watched = Watched {
-            source: "test".into(),
-            offset: 0.0,
-            frames: vec![frame],
-        };
+        let frame =
+            Frame { time: 0.0, hands: vec![hand_at(&homography, HandLabel::Right, [60, 62, 64, 65, 67])] };
+        let watched = Watched { source: "test".into(), offset: 0.0, frames: vec![frame] };
         let onsets = vec![
             Onset { midi: 60, time: 0.0, duration: 0.25 },
             Onset { midi: 64, time: 0.0, duration: 0.25 },
@@ -783,7 +717,8 @@ mod tests {
         ];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert_eq!(piece.notes.len(), 3);
-        let mut fingers: Vec<u8> = piece.notes.iter().map(|n| n.finger.expect("video extraction always names a finger")).collect();
+        let mut fingers: Vec<u8> =
+            piece.notes.iter().map(|n| n.finger.expect("video extraction always names a finger")).collect();
         fingers.sort_unstable();
         fingers.dedup();
         assert_eq!(fingers.len(), 3, "a finger was used twice");
@@ -796,17 +731,9 @@ mod tests {
         let off = (below.0, below.1 + 200.0);
         let frame = Frame {
             time: 0.0,
-            hands: vec![SeenHand {
-                hand: HandLabel::Right,
-                fingertips: [off; 5],
-                wrist: off,
-            }],
+            hands: vec![SeenHand { hand: HandLabel::Right, fingertips: [off; 5], wrist: off }],
         };
-        let watched = Watched {
-            source: "test".into(),
-            offset: 0.0,
-            frames: vec![frame],
-        };
+        let watched = Watched { source: "test".into(), offset: 0.0, frames: vec![frame] };
         let onsets = vec![Onset { midi: 60, time: 0.0, duration: 0.25 }];
         let piece = extract(&watched, &onsets, &homography, "test", "1");
         assert!(piece.notes.is_empty(), "{:?}", piece.notes);
@@ -824,10 +751,7 @@ mod tests {
         let fingers: Vec<u8> = chosen.iter().map(|c| c.1.number()).collect();
         assert_eq!(fingers, vec![1, 3, 5], "right hand rises with pitch");
 
-        let mut left = vec![
-            (48, Finger::Thumb, HandLabel::Left),
-            (55, Finger::Little, HandLabel::Left),
-        ];
+        let mut left = vec![(48, Finger::Thumb, HandLabel::Left), (55, Finger::Little, HandLabel::Left)];
         enforce_ordering(&mut left);
         left.sort_by_key(|c| c.0);
         let fingers: Vec<u8> = left.iter().map(|c| c.1.number()).collect();
@@ -857,10 +781,7 @@ mod tests {
         let confidence = piece.notes[0].confidence.expect("a machine reading carries one");
         assert!((0.6..0.7).contains(&confidence), "two of three frames agreed: {confidence}");
 
-        let alone = Watched {
-            frames: vec![Frame { time: 1.0, hands: vec![good()] }],
-            ..watched.clone()
-        };
+        let alone = Watched { frames: vec![Frame { time: 1.0, hands: vec![good()] }], ..watched.clone() };
         let unanimous = Watched {
             frames: vec![
                 Frame { time: 1.0, hands: vec![good()] },
@@ -870,8 +791,7 @@ mod tests {
             ..watched
         };
         let one = extract(&alone, &onsets, &homography, "test", "1").notes[0].confidence.unwrap();
-        let three =
-            extract(&unanimous, &onsets, &homography, "test", "1").notes[0].confidence.unwrap();
+        let three = extract(&unanimous, &onsets, &homography, "test", "1").notes[0].confidence.unwrap();
         assert!((one - three).abs() < 1e-5, "three agreeing frames gave {three}, one gave {one}");
         assert!(one > 0.95, "a clean reading should be well believed: {one}");
         assert!(confidence < one, "a split vote has to be believed less than a clean one");

@@ -1,7 +1,9 @@
 use glam::{Vec2, Vec3};
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::playability::HAND_SPEED_MM_PER_SECOND;
-use on_hand::keyboard::{is_black, Keyboard, BLACK_KEY_DIP, BLACK_KEY_FRONT_Y, BLACK_KEY_HEIGHT, KEY_DIP, WHITE_KEY_LENGTH};
+use on_hand::keyboard::{
+    is_black, Keyboard, BLACK_KEY_DIP, BLACK_KEY_FRONT_Y, BLACK_KEY_HEIGHT, KEY_DIP, WHITE_KEY_LENGTH,
+};
 use on_hand::skeleton::{dof, HandPose, Posture, Skeleton, DOF};
 use on_hand::{Finger, Hand};
 
@@ -104,7 +106,6 @@ const STROKE_RECOVER: (f64, f64) = (0.12, 0.35);
 
 const STROKE_ROOM: (f64, f64) = (0.15, 0.3);
 
-
 const HOP_ROOM: (f64, f64) = (0.08, 0.2);
 
 pub fn minimum_jerk(s: f64) -> f64 {
@@ -161,7 +162,11 @@ fn settled(event: &GripEvent) -> f64 {
 pub const REST_GAP_SECONDS: f64 = 1.5;
 
 impl Track {
-    pub fn new(events: &[GripEvent], poses: &[HandPose], rest: &dyn Fn(f64, f64, &HandPose) -> HandPose) -> Self {
+    pub fn new(
+        events: &[GripEvent],
+        poses: &[HandPose],
+        rest: &dyn Fn(f64, f64, &HandPose) -> HandPose,
+    ) -> Self {
         let mut points: Vec<f64> = Vec::with_capacity(events.len());
         for event in events {
             let last = points.last().map_or(f64::MIN, |t| t + MIN_KNOT_GAP);
@@ -200,7 +205,12 @@ impl Track {
         let mut knots = Vec::with_capacity(2 * events.len() + 2);
         if let (Some(stay), Some(pose)) = (stays.first(), poses.first()) {
             let rest = rest(f64::NEG_INFINITY, stay.arrive, pose);
-            knots.push(Knot { time: stay.arrive - move_seconds(&rest, pose), pose: rest, still: true, event: 0 });
+            knots.push(Knot {
+                time: stay.arrive - move_seconds(&rest, pose),
+                pose: rest,
+                still: true,
+                event: 0,
+            });
         }
         for (i, stay) in stays.iter().enumerate() {
             let held = stay.leave > stay.arrive + 1e-3 || i == 0 || i + 1 == stays.len();
@@ -267,7 +277,11 @@ impl Track {
 
     pub fn at(&self, time: f64) -> HandPose {
         let Some((k, s)) = self.segment(time) else {
-            return if time <= self.knots[0].time { self.knots[0].pose } else { self.knots[self.knots.len() - 1].pose };
+            return if time <= self.knots[0].time {
+                self.knots[0].pose
+            } else {
+                self.knots[self.knots.len() - 1].pose
+            };
         };
         let (a, b) = (&self.knots[k], &self.knots[k + 1]);
         let span = b.time - a.time;
@@ -355,10 +369,8 @@ pub fn digit_of(index: usize) -> Finger {
 pub fn smooth_wrists(events: &[GripEvent], poses: &[HandPose], model: &BiomechModel) -> Vec<HandPose> {
     let reach = 3.0 * SMOOTH_SIGMA;
     let times: Vec<f64> = events.iter().map(arrival).collect();
-    let weights: Vec<f64> = events
-        .iter()
-        .map(|e| 1.0 + SMOOTH_HOLD_WEIGHT * (e.release - e.time).clamp(0.0, 0.5))
-        .collect();
+    let weights: Vec<f64> =
+        events.iter().map(|e| 1.0 + SMOOTH_HOLD_WEIGHT * (e.release - e.time).clamp(0.0, 0.5)).collect();
     let mut out = poses.to_vec();
     for i in 0..events.len() {
         if events[i].grip.keys.is_empty() {
@@ -401,8 +413,20 @@ const IDLE_CURL_DEG: (f32, f32) = (25.0, 50.0);
 
 fn five_fingers(hand: Hand) -> Grip {
     Grip::new(match hand {
-        Hand::Right => vec![(60, Finger::Thumb), (62, Finger::Index), (64, Finger::Middle), (65, Finger::Ring), (67, Finger::Little)],
-        Hand::Left => vec![(48, Finger::Little), (50, Finger::Ring), (52, Finger::Middle), (53, Finger::Index), (55, Finger::Thumb)],
+        Hand::Right => vec![
+            (60, Finger::Thumb),
+            (62, Finger::Index),
+            (64, Finger::Middle),
+            (65, Finger::Ring),
+            (67, Finger::Little),
+        ],
+        Hand::Left => vec![
+            (48, Finger::Little),
+            (50, Finger::Ring),
+            (52, Finger::Middle),
+            (53, Finger::Index),
+            (55, Finger::Thumb),
+        ],
     })
 }
 
@@ -503,14 +527,16 @@ pub fn stroke(events: &[GripEvent], strikes: &Strikes, time: f64) -> (f32, f32) 
         let moves = event.time - KEY_LEAD * key;
         let bottom = event.time + KEY_TRAIL * key;
         let prepare = HAND_PREPARE.min(0.6 * before);
-        let full = (hand_share(events, i) * (HAND_LIFT_MM.0 + HAND_LIFT_MM.1 * loud)).min((before * HAND_LIFT_RATE) as f32);
+        let full = (hand_share(events, i) * (HAND_LIFT_MM.0 + HAND_LIFT_MM.1 * loud))
+            .min((before * HAND_LIFT_RATE) as f32);
         let start = (moves - prepare).max(strikes.free_after(moves - TOGETHER));
         let open = moves - start;
         let recover = (0.8 * after).clamp(STROKE_RECOVER.0, STROKE_RECOVER.1);
         if time >= moves - prepare && time < moves {
             let mut lifted = full.min(HELD_LIFT_MM) * bump((time - moves + prepare) / prepare);
             if open > LEAST_STRIKE && time >= start {
-                lifted = lifted.max(full.min((open / 0.6 * HAND_LIFT_RATE) as f32) * bump((time - start) / open));
+                lifted =
+                    lifted.max(full.min((open / 0.6 * HAND_LIFT_RATE) as f32) * bump((time - start) / open));
             }
             up += lifted;
         } else if time >= moves && time < bottom {
@@ -600,7 +626,8 @@ impl Strikes {
             list.sort_by(|a, b| a.note.key_moves.total_cmp(&b.note.key_moves));
             for i in 1..list.len() {
                 let next = list[i].note.key_moves;
-                let travel = f64::from(list[i].reach.distance(list[i - 1].reach)) / FINGER_TRAVEL_MM_PER_SECOND;
+                let travel =
+                    f64::from(list[i].reach.distance(list[i - 1].reach)) / FINGER_TRAVEL_MM_PER_SECOND;
                 let between = list[i].note.start - list[i - 1].note.start;
                 let lifted = f64::from(list[i].share) * HAND_RELEASE * HAND_PREPARE.min(0.6 * between);
                 let gap = travel.clamp(SAME_FINGER_GAP.0, SAME_FINGER_GAP.1).max(lifted - LET_GO_SECONDS);
@@ -636,8 +663,10 @@ impl Strikes {
             return alone;
         }
         let window = (next.key_moves - from) as f32;
-        let height = (strike_lift(next.velocity) * (1.0 - *share) * self.lift).min(0.5 * window * FINGER_SPEED_MM);
-        let contact = (1.5 * if is_black(next.midi) { BLACK_KEY_DIP } else { KEY_DIP }) as f64 / key_seconds(next.velocity);
+        let height =
+            (strike_lift(next.velocity) * (1.0 - *share) * self.lift).min(0.5 * window * FINGER_SPEED_MM);
+        let contact = (1.5 * if is_black(next.midi) { BLACK_KEY_DIP } else { KEY_DIP }) as f64
+            / key_seconds(next.velocity);
         let peak = from + 0.55 * (next.key_moves - from);
         let (top, _) = surface(next.midi);
         let span = next.key_moves - from;
@@ -650,7 +679,11 @@ impl Strikes {
             let (s2, s3) = (s * s, s * s * s);
             f64::from(height) * (2.0 * s3 - 3.0 * s2 + 1.0) - contact * span * (s3 - s2)
         };
-        let floor = if time < peak { 1.0 } else { 1.0 - minimum_jerk((time - peak) / (next.key_moves - peak)) as f32 };
+        let floor = if time < peak {
+            1.0
+        } else {
+            1.0 - minimum_jerk((time - peak) / (next.key_moves - peak)) as f32
+        };
         let striking = Want { z: top + raised as f32, weight: 1.0, floor, aim: (*aim, 1.0 - floor) };
         Some(Plan { going, striking: Some(striking), taking, own: [held, Some((next.midi, taking))] })
     }
@@ -713,7 +746,11 @@ struct Plan {
 impl Plan {
     fn weight(&self) -> f32 {
         let going = self.going.map_or(0.0, |w| w.weight);
-        if self.striking.is_some() { going.max(self.taking) } else { going }
+        if self.striking.is_some() {
+            going.max(self.taking)
+        } else {
+            going
+        }
     }
 
     fn target(&self, free: Vec3) -> Vec3 {
@@ -741,7 +778,8 @@ fn clear_of_keys(tip: Vec3, own: [Option<(u8, f32)>; 2]) -> f32 {
     if tip.y < 0.0 || tip.y > WHITE_KEY_LENGTH {
         return f32::MIN;
     }
-    let behind = minimum_jerk(f64::from((tip.y - BLACK_KEY_FRONT_Y + KEY_EDGE_INWARD_MM) / KEY_EDGE_INWARD_MM)) as f32;
+    let behind =
+        minimum_jerk(f64::from((tip.y - BLACK_KEY_FRONT_Y + KEY_EDGE_INWARD_MM) / KEY_EDGE_INWARD_MM)) as f32;
     let floor = KEY_CLEAR_MM + behind * BLACK_KEY_HEIGHT;
     let inside_own = own
         .iter()
@@ -757,10 +795,15 @@ fn clear_of_keys(tip: Vec3, own: [Option<(u8, f32)>; 2]) -> f32 {
 
 fn above_the_keys(tip: Vec3, engaged: f32) -> Vec3 {
     let over = minimum_jerk(f64::from((tip.y + KEY_EDGE_MM) / KEY_EDGE_MM)) as f32;
-    let black = minimum_jerk(f64::from((tip.y - BLACK_KEY_FRONT_Y + 2.0 * KEY_EDGE_MM) / (2.0 * KEY_EDGE_MM))) as f32;
+    let black =
+        minimum_jerk(f64::from((tip.y - BLACK_KEY_FRONT_Y + 2.0 * KEY_EDGE_MM) / (2.0 * KEY_EDGE_MM))) as f32;
     let clear = black * BLACK_KEY_HEIGHT + KEY_CLEAR_MM;
     let below = (clear - tip.z).max(0.0) * over * (1.0 - engaged);
-    if below > 1e-3 { tip + Vec3::Z * below } else { tip }
+    if below > 1e-3 {
+        tip + Vec3::Z * below
+    } else {
+        tip
+    }
 }
 
 fn stiffness(j: usize) -> f32 {
@@ -783,7 +826,8 @@ fn is_spread(j: usize) -> bool {
 }
 
 fn digit_dofs(finger: Finger) -> &'static [usize] {
-    const THUMB: [usize; 4] = [dof::THUMB_CMC_FLEX, dof::THUMB_CMC_ABD, dof::THUMB_MCP_FLEX, dof::THUMB_IP_FLEX];
+    const THUMB: [usize; 4] =
+        [dof::THUMB_CMC_FLEX, dof::THUMB_CMC_ABD, dof::THUMB_MCP_FLEX, dof::THUMB_IP_FLEX];
     const FINGERS: [[usize; 3]; 4] = {
         let mut out = [[0; 3]; 4];
         let mut slot = 0;
@@ -814,12 +858,16 @@ fn reach_step(skeleton: &Skeleton, posture: &Posture, pose: &mut HandPose, finge
             minimum_jerk(f64::from((column.length() - LEVER_MM.0) / LEVER_MM.1)) as f32
         })
         .collect();
-    let columns: Vec<Vec3> =
-        joints.iter().zip(&levers).map(|(j, lever)| skeleton.tip_jacobian(posture, finger, *j) * *lever).collect();
+    let columns: Vec<Vec3> = joints
+        .iter()
+        .zip(&levers)
+        .map(|(j, lever)| skeleton.tip_jacobian(posture, finger, *j) * *lever)
+        .collect();
     let mut a = [[0.0f32; 5]; 4];
     for r in 0..n {
         for c in 0..n {
-            a[r][c] = (columns[r] * REACH_AXES).dot(columns[c]) + if r == c { REACH_DAMPING * stiffness(joints[r]) } else { 0.0 };
+            a[r][c] = (columns[r] * REACH_AXES).dot(columns[c])
+                + if r == c { REACH_DAMPING * stiffness(joints[r]) } else { 0.0 };
         }
         a[r][n] = columns[r].dot(error);
     }
