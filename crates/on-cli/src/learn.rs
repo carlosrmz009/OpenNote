@@ -115,7 +115,7 @@ pub struct TrainArgs {
     pub out: PathBuf,
 
     /// The fraction of pieces held back to measure on, rather than learned from.
-    #[arg(long, default_value_t = 0.2)]
+    #[arg(long, default_value_t = 0.2, value_parser = crate::between(0.0f32, 0.9))]
     pub held_out: f32,
 
     /// Also fit how far the model, the published rules and the standard chord shapes
@@ -165,7 +165,7 @@ pub struct EvalArgs {
 
     /// The fraction held back. Has to match what training used, or the pieces
     /// measured on are not the ones that were held back.
-    #[arg(long, default_value_t = 0.2)]
+    #[arg(long, default_value_t = 0.2, value_parser = crate::between(0.0f32, 0.9))]
     pub held_out: f32,
 
     #[command(flatten)]
@@ -209,7 +209,7 @@ pub struct RerankArgs {
     pub min_confidence: f32,
 
     /// The fraction of pieces held back to measure on.
-    #[arg(long, default_value_t = 0.2)]
+    #[arg(long, default_value_t = 0.2, value_parser = crate::between(0.0f32, 0.9))]
     pub held_out: f32,
 
     /// Pieces each pass learns from, drawn afresh; 0 for all of them.

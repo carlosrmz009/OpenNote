@@ -93,7 +93,7 @@ pub struct ModelArgs {
 
     /// How far the trained model is trusted against the rules. Ignored without
     /// `--model`.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, value_parser = between(0.0f32, 100.0))]
     pub prior_scale: f32,
 
     /// Weights found by `opennote tune`, to try them before they become the defaults.
@@ -116,7 +116,7 @@ impl ModelArgs {
             options.ruler = on_fingering::Ruler::Chromatic;
         }
         if self.model.is_some() {
-            options.prior_scale = self.prior_scale.max(0.0);
+            options.prior_scale = self.prior_scale;
         }
         if let Some(weights) = self.weights()? {
             weights.apply_to_fingering(&mut options);
@@ -148,6 +148,25 @@ impl ModelArgs {
             learned.style = self.style.into();
         }
         Ok(Some(std::sync::Arc::new(prior)))
+    }
+}
+
+/// A command-line number that must lie within a range, refused with a clear message
+/// rather than quietly moved into it.
+pub fn between<T>(
+    low: T,
+    high: T,
+) -> impl Fn(&str) -> std::result::Result<T, String> + Clone + Send + Sync + 'static
+where
+    T: std::str::FromStr + PartialOrd + std::fmt::Display + Copy + Send + Sync + 'static,
+{
+    move |text: &str| {
+        let value: T = text.trim().parse().map_err(|_| format!("{text} is not a number"))?;
+        if value >= low && value <= high {
+            Ok(value)
+        } else {
+            Err(format!("{value} is outside {low} to {high}"))
+        }
     }
 }
 
@@ -264,5 +283,24 @@ fn main() -> Result<()> {
         Command::Benchmark(args) => learn::benchmark(args),
         Command::Models(args) => models::run(args),
         Command::Rerank(args) => learn::rerank(args),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_line_is_well_formed() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn a_number_out_of_range_is_refused_not_moved() {
+        let expression = between(0.0f32, 2.0);
+        assert_eq!(expression("1.5"), Ok(1.5));
+        assert!(expression("2.5").is_err());
+        assert!(expression("lots").is_err());
     }
 }

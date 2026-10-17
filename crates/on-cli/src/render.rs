@@ -17,25 +17,25 @@ pub struct RenderArgs {
     pub out: PathBuf,
 
     /// Frame width in pixels.
-    #[arg(long, default_value_t = 1920)]
+    #[arg(long, default_value_t = 1920, value_parser = even_pixels)]
     pub width: u32,
 
     /// Frame height in pixels.
-    #[arg(long, default_value_t = 1080)]
+    #[arg(long, default_value_t = 1080, value_parser = even_pixels)]
     pub height: u32,
 
     /// Frames per second.
-    #[arg(long, default_value_t = 60)]
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..=240))]
     pub fps: u32,
 
     /// Playback rate, where 1.0 is the score's own tempo. Useful for a slow practice
     /// video of a fast piece.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, value_parser = crate::between(0.05, 4.0))]
     pub speed: f64,
 
     /// Quality, as x264's constant rate factor: 0 is lossless, 18 is very good, 28 is
     /// small. Lower means a bigger file.
-    #[arg(long, default_value_t = 18)]
+    #[arg(long, default_value_t = 18, value_parser = clap::value_parser!(u8).range(0..=51))]
     pub crf: u8,
 
     /// The ffmpeg executable, if it is not on PATH.
@@ -59,10 +59,21 @@ pub fn run(args: RenderArgs) -> Result<()> {
             width: args.width,
             height: args.height,
             fps: args.fps,
-            speed: args.speed.max(0.05),
+            speed: args.speed,
             ffmpeg: args.ffmpeg,
             crf: args.crf,
             note_colours: settings.note_colours,
         },
     )
+}
+
+/// The encoder stores colour at half resolution, so a frame must be an even number of
+/// pixels each way.
+fn even_pixels(text: &str) -> std::result::Result<u32, String> {
+    let pixels = crate::between(16u32, 8192)(text)?;
+    if pixels % 2 == 0 {
+        Ok(pixels)
+    } else {
+        Err(format!("{pixels} is odd; the video encoder needs an even number of pixels"))
+    }
 }

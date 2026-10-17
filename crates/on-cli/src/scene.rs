@@ -17,7 +17,7 @@ pub struct SceneArgs {
     pub crop_keyboard: bool,
 
     /// How far ahead the falling notes reach, in seconds.
-    #[arg(long, default_value_t = 3.0)]
+    #[arg(long, default_value_t = 3.0, value_parser = crate::between(0.5, 30.0))]
     pub lookahead: f64,
 
     /// The assets directory, if it is not `./assets`. The hand models are expected
@@ -47,7 +47,7 @@ pub struct SceneArgs {
 
     /// How much expression to add, from 0 (off: exactly as written, the default) to 2.
     /// Shapes dynamics, timing and articulation, and the hands with them.
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 0.0, value_parser = crate::between(0.0f32, 2.0))]
     pub expression: f32,
 }
 
@@ -116,13 +116,13 @@ impl SceneArgs {
         Ok(SessionSettings {
             fingering: model.options()?,
             extent: if self.crop_keyboard { Extent::MusicRange } else { Extent::FullKeyboard },
-            lookahead: self.lookahead.max(0.5),
+            lookahead: self.lookahead,
             assets_root: session::assets_root(self.assets.clone())?,
             soundfont: self.soundfont.clone(),
             note_colours,
             prior: model.prior()?,
             mood: self.mood.into(),
-            expression: self.expression.clamp(0.0, 2.0),
+            expression: self.expression,
         })
     }
 }
