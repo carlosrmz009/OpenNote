@@ -48,9 +48,14 @@ pub const LEAD_IN: f64 = -1.0;
 
 pub(crate) const KEYBOARD_Y_MM: f32 = -WHITE_KEY_LENGTH;
 
-const HAND_COLOURS: [Color; 2] = [Color::srgb(0.85, 0.012, 0.012), Color::srgb(0.045, 0.88, 1.0)];
+pub(crate) const HAND_COLOURS: [Color; 2] = [Color::srgb(0.85, 0.012, 0.012), Color::srgb(0.045, 0.88, 1.0)];
 
-#[derive(Resource, Debug, Clone, Copy)]
+/// Orange and sky blue from Okabe and Ito's palette, which stay apart for the common kinds
+/// of colour blindness, as red and cyan may not.
+pub(crate) const CLEAR_HAND_COLOURS: [Color; 2] =
+    [Color::srgb(0.90, 0.45, 0.0), Color::srgb(0.34, 0.71, 0.91)];
+
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct NoteColours(pub [Color; 2]);
 
 impl Default for NoteColours {
@@ -292,6 +297,7 @@ impl Plugin for VisualizerPlugin {
                 (
                     advance_transport,
                     handle_input,
+                    recolour_sparks,
                     (
                         fit_camera_viewport,
                         move_notes,

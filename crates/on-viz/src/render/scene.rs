@@ -299,21 +299,28 @@ pub(crate) fn press_keys(
         let depth = states.depth_of(key.midi);
         let black = is_black(key.midi);
         let dip = if black { BLACK_KEY_DIP } else { KEY_DIP };
-        transform.translation = key.rest - Vec3::new(0.0, 0.0, depth * dip);
+        let at = key.rest - Vec3::new(0.0, 0.0, depth * dip);
+        // Written only when they change: touching a transform or a material marks it
+        // changed, and a changed material is uploaded to the GPU again.
+        if transform.translation != at {
+            transform.translation = at;
+        }
 
-        let handle = material.0.clone();
-        if let Some(mut material) = materials.get_mut(&handle) {
-            match states.hand_on(key.midi) {
-                Some(hand) => {
-                    let tint = note_colours.0[hand as usize];
-                    let glow = if black { BLACK_KEY_GLOW } else { KEY_GLOW };
-                    material.base.base_color = mix(Color::WHITE, tint, depth);
-                    material.base.emissive = tint.to_linear() * (depth * glow);
-                }
-                None => {
-                    material.base.base_color = Color::WHITE;
-                    material.base.emissive = LinearRgba::BLACK;
-                }
+        let (base, emissive) = match states.hand_on(key.midi) {
+            Some(hand) => {
+                let tint = note_colours.0[hand as usize];
+                let glow = if black { BLACK_KEY_GLOW } else { KEY_GLOW };
+                (mix(Color::WHITE, tint, depth), tint.to_linear() * (depth * glow))
+            }
+            None => (Color::WHITE, LinearRgba::BLACK),
+        };
+        let unchanged = materials
+            .get(&material.0)
+            .is_some_and(|current| current.base.base_color == base && current.base.emissive == emissive);
+        if !unchanged {
+            if let Some(mut current) = materials.get_mut(&material.0) {
+                current.base.base_color = base;
+                current.base.emissive = emissive;
             }
         }
     }

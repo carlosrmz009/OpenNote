@@ -226,6 +226,17 @@ fn draw_menus(
                         session.settings.lookahead = f64::from(lookahead);
                         reload.relayout = true;
                     }
+                    ui.separator();
+                    ui.label("Hand colours");
+                    for (colours, label) in [
+                        (crate::render::HAND_COLOURS, "Red and cyan"),
+                        (crate::render::CLEAR_HAND_COLOURS, "Orange and blue, for colour blindness"),
+                    ] {
+                        if ui.radio(session.settings.note_colours == colours, label).clicked() {
+                            session.settings.note_colours = colours;
+                            reload.relayout = true;
+                        }
+                    }
                 });
 
                 ui.menu_button("Help", |ui| {
@@ -531,6 +542,8 @@ fn apply_reload(world: &mut World) {
         if std::mem::take(&mut world.resource_mut::<Reload>().relayout) {
             let lookahead = world.resource::<Session>().settings.lookahead;
             world.resource_mut::<Performance>().layout.lookahead = lookahead.max(0.5);
+            let colours = crate::render::NoteColours(world.resource::<Session>().settings.note_colours);
+            world.resource_mut::<crate::render::NoteColours>().set_if_neq(colours);
             crate::render::rebuild_scene(world);
         }
         return;

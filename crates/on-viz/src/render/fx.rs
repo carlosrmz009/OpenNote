@@ -20,6 +20,38 @@ pub(crate) struct Flash {
 pub(crate) struct SparkColours {
     pub(crate) hot: [Handle<StandardMaterial>; 2],
     pub(crate) cool: [Handle<StandardMaterial>; 2],
+    pub(crate) texture: Handle<Image>,
+}
+
+impl SparkColours {
+    fn new(materials: &mut Assets<StandardMaterial>, texture: Handle<Image>, colours: [Color; 2]) -> Self {
+        let mut dust = |colour: Color, whiteness: f32, glow: f32| {
+            materials.add(StandardMaterial {
+                base_color: glowing(mix(colour, Color::WHITE, whiteness), glow),
+                base_color_texture: Some(texture.clone()),
+                unlit: true,
+                alpha_mode: AlphaMode::Add,
+                ..default()
+            })
+        };
+        Self {
+            hot: colours.map(|colour| dust(colour, 0.70, SPARK_GLOW * 2.6)),
+            cool: colours.map(|colour| dust(colour, 0.06, SPARK_GLOW)),
+            texture,
+        }
+    }
+}
+
+/// The sparks' materials are made from the hand colours, so they are made again when those
+/// change; everything else reads the colours as it draws or is rebuilt with the scene.
+pub(crate) fn recolour_sparks(
+    note_colours: Res<NoteColours>,
+    mut sparks: ResMut<SparkColours>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if note_colours.is_changed() && !note_colours.is_added() {
+        *sparks = SparkColours::new(&mut materials, sparks.texture.clone(), note_colours.0);
+    }
 }
 
 pub(crate) fn setup_sparks(
@@ -31,19 +63,7 @@ pub(crate) fn setup_sparks(
 ) {
     let texture = images.add(skin::spark());
     let mesh = meshes.add(Rectangle::new(1.0, 1.0));
-    let mut dust = |colour: Color, whiteness: f32, glow: f32| {
-        materials.add(StandardMaterial {
-            base_color: glowing(mix(colour, Color::WHITE, whiteness), glow),
-            base_color_texture: Some(texture.clone()),
-            unlit: true,
-            alpha_mode: AlphaMode::Add,
-            ..default()
-        })
-    };
-    let colours = SparkColours {
-        hot: note_colours.0.map(|colour| dust(colour, 0.70, SPARK_GLOW * 2.6)),
-        cool: note_colours.0.map(|colour| dust(colour, 0.06, SPARK_GLOW)),
-    };
+    let colours = SparkColours::new(&mut materials, texture, note_colours.0);
 
     for _ in 0..MAX_SPARKS {
         commands.spawn((
