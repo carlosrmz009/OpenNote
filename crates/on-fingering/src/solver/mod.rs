@@ -157,8 +157,13 @@ pub struct Solution {
 }
 
 impl Solution {
+    /// The fingerings come back sorted by note, so this is a binary search; a solution
+    /// put together some other way is still searched in full.
     pub fn finger_of(&self, note: NoteId) -> Option<Finger> {
-        self.fingerings.iter().find(|f| f.note == note).map(|f| f.finger)
+        match self.fingerings.binary_search_by_key(&note, |f| f.note) {
+            Ok(at) => Some(self.fingerings[at].finger),
+            Err(_) => self.fingerings.iter().find(|f| f.note == note).map(|f| f.finger),
+        }
     }
 }
 
