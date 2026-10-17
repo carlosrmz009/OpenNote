@@ -1,0 +1,388 @@
+use super::*;
+
+pub(crate) fn rebuild_scene(world: &mut World) {
+    let doomed: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<KeyTop>, With<Backdrop>, With<NoteBar>, With<FingerLabel>, With<Flash>)>>()
+        .iter(world)
+        .collect();
+    for entity in doomed {
+        world.entity_mut(entity).despawn();
+    }
+    let _ = world.run_system_cached(setup_keyboard);
+    let _ = world.run_system_cached(setup_notes);
+    let _ = world.run_system_cached(setup_flashes);
+    let _ = world.run_system_cached(place_camera);
+}
+
+/// Everything around the keys that `setup_keyboard` lays down with them, and so takes
+/// away with them when the scene is rebuilt.
+#[derive(Component)]
+pub(crate) struct Backdrop;
+
+#[derive(Component)]
+pub(crate) struct KeyTop {
+    pub(crate) midi: u8,
+    pub(crate) rest: Vec3,
+}
+
+#[derive(Component)]
+pub(crate) struct NoteBar {
+    pub(crate) start: f64,
+    pub(crate) duration: f64,
+    pub(crate) hand: Hand,
+    pub(crate) finger: Option<u8>,
+}
+
+#[derive(Component)]
+pub(crate) struct FingerLabel;
+
+pub(crate) fn setup_keyboard(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut lacquers: ResMut<Assets<Lacquered>>,
+    mut images: ResMut<Assets<Image>>,
+    performance: Res<Performance>,
+) {
+    let layout = &performance.layout;
+    let white_texture = images.add(skin::white_key());
+    let black_texture = images.add(skin::black_key());
+    let (cx, cy) = layout.centre_mm();
+    let tilt = CAMERA_TILT_DEG.to_radians();
+    let eye = Vec3::new(cx, cy - LACQUER_EYE_MM * tilt.sin(), LACQUER_EYE_MM * tilt.cos());
+
+    for midi in layout.keys() {
+        let (x0, x1, y0, y1) = layout.key_rect(midi);
+        let (width, length) = (x1 - x0, y1 - y0);
+        let black = is_black(midi);
+
+        let material = lacquers.add(key_material(
+            if black { black_texture.clone() } else { white_texture.clone() },
+            black,
+            eye,
+        ));
+
+        let (mesh, z) = if black {
+            (
+                meshes.add(key_mesh(
+                    Vec3::new(width, length, BLACK_KEY_HEIGHT),
+                    BLACK_KEY_EDGE_MM,
+                    BLACK_KEY_NARROWING_MM,
+                    BLACK_KEY_RECESS_MM,
+                )),
+                BLACK_KEY_HEIGHT / 2.0,
+            )
+        } else {
+            (
+                meshes.add(key_mesh(
+                    Vec3::new(width - KEY_GAP_MM, length, WHITE_KEY_DEPTH_MM),
+                    WHITE_KEY_EDGE_MM,
+                    0.0,
+                    0.0,
+                )),
+                -WHITE_KEY_DEPTH_MM / 2.0,
+            )
+        };
+        let rest = Vec3::new((x0 + x1) / 2.0, (y0 + y1) / 2.0, z);
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::from_translation(rest),
+            KeyTop { midi, rest },
+        ));
+    }
+
+    let centre_x = (layout.left_mm() + layout.right_mm()) / 2.0;
+
+    let octave = materials.add(painted(
+        images.add(skin::octave_line()),
+        glowing(Color::srgb(0.62, 0.72, 0.95), OCTAVE_LINE_GLOW),
+        AlphaMode::Add,
+    ));
+    let line = meshes.add(Rectangle::new(OCTAVE_LINE_WIDTH_MM, layout.lane_height));
+    for midi in layout.keys() {
+        if midi % 12 != 0 {
+            continue;
+        }
+        let (left, _, _, _) = layout.key_rect(midi);
+        commands.spawn((
+            Mesh3d(line.clone()),
+            MeshMaterial3d(octave.clone()),
+            Transform::from_xyz(left, layout.lane_height / 2.0, OCTAVE_LINE_Z),
+            Backdrop,
+        ));
+    }
+
+    let case_depth = -layout.bottom_mm() * 1.4;
+    commands.spawn((
+        Mesh3d(meshes.add(Rectangle::new(layout.width_mm(), case_depth))),
+        MeshMaterial3d(materials.add(painted(images.add(skin::case()), Color::WHITE, AlphaMode::Opaque))),
+        Transform::from_xyz(centre_x, -case_depth / 2.0, CASE_Z),
+        Backdrop,
+    ));
+
+    commands.spawn((
+        Mesh3d(meshes.add(Rectangle::new(layout.width_mm(), BACK_GLOW_DEPTH_MM))),
+        MeshMaterial3d(materials.add(painted(
+            images.add(skin::back_glow()),
+            glowing(Color::srgb(0.0, 0.14, 1.0), BACK_GLOW_GLOW),
+            AlphaMode::Add,
+        ))),
+        Transform::from_xyz(centre_x, BACK_GLOW_DEPTH_MM / 2.0, LANE_Z - 1.0),
+        Backdrop,
+    ));
+
+    let hit = materials.add(painted(
+        images.add(skin::hit_line()),
+        glowing(Color::srgb(0.40, 1.0, 1.0), HIT_LINE_GLOW),
+        AlphaMode::Add,
+    ));
+    commands.spawn((
+        Mesh3d(meshes.add(Rectangle::new(layout.width_mm(), HIT_LINE_DEPTH_MM))),
+        MeshMaterial3d(hit),
+        Transform::from_xyz(centre_x, 0.0, LANE_Z - 1.0),
+        Backdrop,
+    ));
+}
+
+pub(crate) fn setup_notes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<NoteMaterial>>,
+    performance: Res<Performance>,
+    note_colours: Res<NoteColours>,
+) {
+    let layout = &performance.layout;
+    let colours: Vec<Handle<NoteMaterial>> =
+        note_colours.0.iter().map(|colour| materials.add(note_material(*colour))).collect();
+
+    for note in &performance.timeline.notes {
+        if !layout.shows(note.midi) {
+            continue;
+        }
+        let (x0, x1, _, _) = layout.note_rect(note.midi, 0.0, 0.0);
+        let width = (x1 - x0) * NOTE_WIDTH;
+        let mesh = meshes.add(note_mesh(width, layout.note_height(note.end - note.start).max(6.0)));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(colours[note.hand as usize].clone()),
+            Transform::from_xyz((x0 + x1) / 2.0, 0.0, NOTE_Z),
+            Visibility::Hidden,
+            NoteBar {
+                start: note.start,
+                duration: note.end - note.start,
+                hand: note.hand,
+                finger: note.finger.map(|f| f.number()),
+            },
+        ));
+    }
+}
+
+pub(crate) fn key_mesh(size: Vec3, radius: f32, narrowing: f32, recess: f32) -> Mesh {
+    let half = size / 2.0;
+    let inner = half - Vec3::splat(radius);
+    let samples = |h: f32| -> Vec<f32> {
+        let arc: Vec<f32> = (0..=KEY_EDGE_SEGMENTS)
+            .map(|k| {
+                let angle = std::f32::consts::FRAC_PI_4 * k as f32 / KEY_EDGE_SEGMENTS as f32;
+                (h - radius) + radius * angle.tan()
+            })
+            .collect();
+        arc.iter().rev().map(|t| -t).chain(arc.iter().copied()).collect()
+    };
+    let narrow = narrowing / size.x;
+    let pull = recess / size.y;
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+    for (normal, across, along) in [
+        (Vec3::Z, Vec3::X, Vec3::Y),
+        (Vec3::NEG_Z, Vec3::Y, Vec3::X),
+        (Vec3::X, Vec3::Y, Vec3::Z),
+        (Vec3::NEG_X, Vec3::Z, Vec3::Y),
+        (Vec3::Y, Vec3::Z, Vec3::X),
+        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
+    ] {
+        let (us, vs) = (samples(half.dot(across)), samples(half.dot(along)));
+        let base = positions.len() as u32;
+        for &v in &vs {
+            for &u in &us {
+                let flat = normal * half + across * u + along * v;
+                let core = flat.clamp(-inner, inner);
+                let outward = (flat - core).normalize();
+                let p = core + outward * radius;
+                let rise = (p.z + half.z) / size.z;
+                let jacobian = Mat3::from_cols(
+                    Vec3::new(1.0 - narrow * rise, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0 - pull * rise, 0.0),
+                    Vec3::new(-p.x * narrow / size.z, (half.y - p.y) * pull / size.z, 1.0),
+                );
+                positions.push([p.x * (1.0 - narrow * rise), p.y + (half.y - p.y) * pull * rise, p.z]);
+                normals.push((jacobian.inverse().transpose() * outward).normalize().to_array());
+                uvs.push([(p.x + half.x) / size.x, (half.y - p.y) / size.y]);
+            }
+        }
+        let row = us.len() as u32;
+        for j in 0..vs.len() as u32 - 1 {
+            for i in 0..row - 1 {
+                let a = base + j * row + i;
+                indices.extend([a, a + 1, a + row + 1, a, a + row + 1, a + row]);
+            }
+        }
+    }
+
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+}
+
+pub(crate) fn note_mesh(width: f32, height: f32) -> Mesh {
+    let half = [width / 2.0, height / 2.0];
+    let corners = [[-1.0, 1.0], [1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]];
+    let positions: Vec<[f32; 3]> = corners.iter().map(|[x, y]| [x * half[0], y * half[1], 0.0]).collect();
+    let local: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, local)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![half; 4])
+    .with_inserted_indices(bevy::mesh::Indices::U32(vec![0, 2, 3, 0, 3, 1]))
+}
+
+pub(crate) fn bar_extent(layout: &Layout, bar: &NoteBar, now: f64) -> (f32, f32) {
+    let bottom = layout.note_y(bar.start - now);
+    let height = layout.note_height(bar.duration).max(6.0);
+    (bottom, height)
+}
+
+pub(crate) fn move_notes(
+    transport: Res<Transport>,
+    performance: Res<Performance>,
+    bars: Query<(&NoteBar, &mut Transform, &mut Visibility)>,
+) {
+    let layout = &performance.layout;
+    let now = transport.position;
+    for (bar, mut transform, mut visibility) in bars {
+        let (bottom, height) = bar_extent(layout, bar, now);
+        let top = bottom + height;
+
+        transform.translation.y =
+            bottom + height / 2.0 + (LANE_Z + 1.0 - NOTE_Z) * CAMERA_TILT_DEG.to_radians().tan();
+
+        *visibility =
+            if top > 0.0 && bottom < layout.lane_height { Visibility::Visible } else { Visibility::Hidden };
+    }
+}
+
+pub(crate) fn press_keys(
+    transport: Res<Transport>,
+    performance: Res<Performance>,
+    note_colours: Res<NoteColours>,
+    mut materials: ResMut<Assets<Lacquered>>,
+    keys: Query<(&KeyTop, &mut Transform, &MeshMaterial3d<Lacquered>)>,
+) {
+    let states = performance.timeline.key_depression(transport.position);
+    for (key, mut transform, material) in keys {
+        let depth = states.depth_of(key.midi);
+        let black = is_black(key.midi);
+        let dip = if black { BLACK_KEY_DIP } else { KEY_DIP };
+        transform.translation = key.rest - Vec3::new(0.0, 0.0, depth * dip);
+
+        let handle = material.0.clone();
+        if let Some(mut material) = materials.get_mut(&handle) {
+            match states.hand_on(key.midi) {
+                Some(hand) => {
+                    let tint = note_colours.0[hand as usize];
+                    let glow = if black { BLACK_KEY_GLOW } else { KEY_GLOW };
+                    material.base.base_color = mix(Color::WHITE, tint, depth);
+                    material.base.emissive = tint.to_linear() * (depth * glow);
+                }
+                None => {
+                    material.base.base_color = Color::WHITE;
+                    material.base.emissive = LinearRgba::BLACK;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn update_labels(
+    mut commands: Commands,
+    transport: Res<Transport>,
+    performance: Res<Performance>,
+    camera: Query<(&Camera, &GlobalTransform)>,
+    bars: Query<(&NoteBar, &Transform)>,
+    labels: Query<(&mut Node, &mut Text, &mut TextColor), With<FingerLabel>>,
+) {
+    let Ok((camera, camera_transform)) = camera.single() else {
+        return;
+    };
+    let inset = camera.logical_viewport_rect().map(|rect| rect.min).unwrap_or(Vec2::ZERO);
+    let layout = &performance.layout;
+    let now = transport.position;
+
+    let mut wanted: Vec<(f32, u8, Hand, Vec3)> = Vec::new();
+    for (bar, transform) in &bars {
+        let Some(finger) = bar.finger else { continue };
+        let (bottom, height) = bar_extent(layout, bar, now);
+        let top = bottom + height;
+        let visible_bottom = bottom.max(0.0);
+        let visible_height = top - visible_bottom;
+        if visible_height < MIN_LABELLED_HEIGHT_MM || bottom > layout.lane_height {
+            continue;
+        }
+        let anchor = Vec3::new(
+            transform.translation.x,
+            visible_bottom + (visible_height / 2.0).min(13.0),
+            LANE_Z + 1.0,
+        );
+        wanted.push((visible_bottom, finger, bar.hand, anchor));
+    }
+    wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    wanted.truncate(MAX_LABELS);
+
+    let mut slot = 0;
+    for (mut node, mut text, mut colour) in labels {
+        match wanted.get(slot) {
+            Some((_, finger, hand, anchor)) => match camera.world_to_viewport(camera_transform, *anchor) {
+                Ok(screen) => {
+                    let screen = screen - inset;
+                    node.display = Display::Flex;
+                    node.left = Val::Px(screen.x - LABEL_FONT_PX * 0.28);
+                    node.top = Val::Px(screen.y - LABEL_FONT_PX * 0.62);
+                    let digit = finger.to_string();
+                    if text.0 != digit {
+                        text.0 = digit;
+                    }
+                    colour.0 = match hand {
+                        Hand::Left => Color::srgb(0.03, 0.11, 0.22),
+                        Hand::Right => Color::srgb(0.20, 0.08, 0.01),
+                    };
+                }
+                Err(_) => node.display = Display::None,
+            },
+            None => node.display = Display::None,
+        }
+        slot += 1;
+    }
+
+    for _ in slot..wanted.len().min(slot + 16) {
+        commands.spawn((
+            Text::new(""),
+            TextFont { font_size: bevy::text::FontSize::Px(LABEL_FONT_PX), ..default() },
+            TextColor(Color::WHITE),
+            Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
+            FingerLabel,
+        ));
+    }
+}
