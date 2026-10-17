@@ -56,6 +56,9 @@ impl Plugin for MenuPlugin {
 pub struct Reload {
     pub path: Option<PathBuf>,
     pub wanted: bool,
+    /// Only how the piece is laid out has changed: redraw it, without reading,
+    /// fingering or rewinding it again.
+    pub relayout: bool,
 }
 
 impl Reload {
@@ -244,7 +247,7 @@ fn draw_menus(
                         .changed()
                     {
                         session.settings.lookahead = f64::from(lookahead);
-                        reload.resolve();
+                        reload.relayout = true;
                     }
                 });
 
@@ -395,9 +398,7 @@ fn export_video(session: &mut Session) {
     let outcome = Arc::new(Mutex::new(String::new()));
     let (finished, report) = (Arc::clone(&done), Arc::clone(&outcome));
     let suggestion = input.with_extension("mp4");
-    let extent = session.settings.extent;
-    let mood = session.settings.mood.name;
-    let amount = session.settings.expression.to_string();
+    let arguments = command_line("render", &session.settings);
 
     std::thread::spawn(move || {
         let chosen = rfd::FileDialog::new()
@@ -411,13 +412,8 @@ fn export_video(session: &mut Session) {
             .add_filter("MP4 video", &["mp4"])
             .save_file();
         if let Some(output) = chosen {
-            *report.lock().unwrap() = run_self(
-                &["render", "--mood", mood, "--expression", &amount],
-                &input,
-                &output,
-                extent,
-                &format!("exported {}", output.display()),
-            );
+            *report.lock().unwrap() =
+                run_self(&arguments, &input, &output, &format!("exported {}", output.display()));
         }
         finished.store(true, Ordering::Release);
     });
@@ -438,7 +434,7 @@ fn annotate_score(session: &mut Session) {
     let outcome = Arc::new(Mutex::new(String::new()));
     let (finished, report) = (Arc::clone(&done), Arc::clone(&outcome));
     let suggestion = input.with_extension("fingered.musicxml");
-    let extent = session.settings.extent;
+    let arguments = command_line("annotate", &session.settings);
 
     std::thread::spawn(move || {
         let chosen = rfd::FileDialog::new()
@@ -452,13 +448,8 @@ fn annotate_score(session: &mut Session) {
             .add_filter("MusicXML", &["musicxml", "mxl"])
             .save_file();
         if let Some(output) = chosen {
-            *report.lock().unwrap() = run_self(
-                &["annotate"],
-                &input,
-                &output,
-                extent,
-                &format!("saved {}", output.display()),
-            );
+            *report.lock().unwrap() =
+                run_self(&arguments, &input, &output, &format!("saved {}", output.display()));
         }
         finished.store(true, Ordering::Release);
     });
@@ -471,21 +462,43 @@ fn annotate_score(session: &mut Session) {
     });
 }
 
-fn run_self(
-    subcommand: &[&str],
-    input: &std::path::Path,
-    output: &std::path::Path,
-    extent: Extent,
-    success: &str,
-) -> String {
+/// The `opennote` command line that does what the viewer is showing: the same hand and
+/// rules for both, and for a video the same look and sound as well.
+fn command_line(subcommand: &str, settings: &SessionSettings) -> Vec<String> {
+    let mut arguments = vec![subcommand.to_string()];
+    let fingering = &settings.fingering;
+    let mut flag = |name: &str, value: String| arguments.extend([format!("--{name}"), value]);
+    flag("hand-length", format!("{}", fingering.profile.hand_length));
+    flag("rules", format!("{:?}", fingering.rule_set).to_lowercase());
+    if subcommand == "render" {
+        flag("lookahead", format!("{}", settings.lookahead));
+        flag("mood", settings.mood.name.to_string());
+        flag("expression", format!("{}", settings.expression));
+        let hex = |colour: Color| {
+            let [r, g, b, _] = colour.to_srgba().to_u8_array();
+            format!("#{r:02x}{g:02x}{b:02x}")
+        };
+        flag("left-colour", hex(settings.note_colours[0]));
+        flag("right-colour", hex(settings.note_colours[1]));
+        if let Some(soundfont) = &settings.soundfont {
+            flag("soundfont", soundfont.display().to_string());
+        }
+    }
+    if fingering.ruler == on_fingering::Ruler::Chromatic {
+        arguments.push("--chromatic".into());
+    }
+    if subcommand == "render" && settings.extent == Extent::MusicRange {
+        arguments.push("--crop-keyboard".into());
+    }
+    arguments
+}
+
+fn run_self(arguments: &[String], input: &std::path::Path, output: &std::path::Path, success: &str) -> String {
     let Ok(program) = std::env::current_exe() else {
         return "could not work out where this program lives".into();
     };
     let mut command = std::process::Command::new(program);
-    command.args(subcommand).arg(input).arg("--out").arg(output);
-    if extent == Extent::MusicRange {
-        command.arg("--crop-keyboard");
-    }
+    command.args(arguments).arg(input).arg("-o").arg(output);
     match command.status() {
         Ok(status) if status.success() => success.to_string(),
         Ok(status) => format!("that did not work ({status})"),
@@ -513,8 +526,14 @@ fn finish_tasks(mut session: ResMut<Session>, mut reload: ResMut<Reload>) {
 
 fn apply_reload(world: &mut World) {
     if !world.resource::<Reload>().wanted {
+        if std::mem::take(&mut world.resource_mut::<Reload>().relayout) {
+            let lookahead = world.resource::<Session>().settings.lookahead;
+            world.resource_mut::<Performance>().layout.lookahead = lookahead.max(0.5);
+            crate::render::rebuild_scene(world);
+        }
         return;
     }
+    world.resource_mut::<Reload>().relayout = false;
     let (path, settings) = {
         let reload = world.resource::<Reload>();
         let session = world.resource::<Session>();
@@ -565,4 +584,27 @@ fn apply_reload(world: &mut World) {
     audio.seek(start);
     audio.set_speed(speed);
     audio.set_playing(playing);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saving_the_score_asks_only_for_what_annotate_understands() {
+        let mut settings = SessionSettings::new(PathBuf::from("assets"));
+        settings.extent = Extent::MusicRange;
+        settings.soundfont = Some(PathBuf::from("piano.sf2"));
+        let annotate = command_line("annotate", &settings);
+        assert_eq!(annotate[0], "annotate");
+        for render_only in ["--crop-keyboard", "--soundfont", "--mood", "--lookahead", "--left-colour"] {
+            assert!(!annotate.iter().any(|a| a == render_only), "{render_only} in {annotate:?}");
+        }
+        assert!(annotate.windows(2).any(|w| w[0] == "--rules" && w[1] == "consensus"), "{annotate:?}");
+
+        let render = command_line("render", &settings);
+        for wanted in ["--crop-keyboard", "--soundfont", "--hand-length", "--left-colour"] {
+            assert!(render.iter().any(|a| a == wanted), "{wanted} missing from {render:?}");
+        }
+    }
 }

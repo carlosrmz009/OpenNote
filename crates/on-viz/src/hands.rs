@@ -85,6 +85,9 @@ pub struct HandRig {
     wrist_offset: Vec3,
     wrist_rotation: Quat,
     scale: f32,
+    /// How long the model's palm is, wrist to middle knuckle, so that the hand can be
+    /// scaled again when the pianist's hand size changes.
+    palm: f32,
     digits: Vec<Digit>,
     forearm: Option<Forearm>,
 }
@@ -141,15 +144,15 @@ impl Plugin for HandsPlugin {
         bevy::asset::embedded_asset!(app, "hand.wgsl");
         app.add_plugins(MaterialPlugin::<Skin>::default())
             .add_systems(Startup, setup_hands)
-            .add_systems(Update, (rig_loaded_hands, prepare_hand_meshes));
+            .add_systems(Update, (rig_loaded_hands, prepare_hand_meshes, rescale_hands.before(pose_hands)));
     }
 }
 
 fn setup_hands(mut commands: Commands, assets: Res<AssetServer>, performance: Res<Performance>) {
     if !performance.hands_available {
         warn!(
-            "no rigged hand models found, so the keyboard will play without hands. \
-             See assets/hands/README.md."
+            "no rigged hand models found, so the keyboard will play without hands; \
+             they ship in the repository's assets/hands folder"
         );
         return;
     }
@@ -168,6 +171,7 @@ fn setup_hands(mut commands: Commands, assets: Res<AssetServer>, performance: Re
                 wrist_offset: Vec3::ZERO,
                 wrist_rotation: Quat::IDENTITY,
                 scale: 1.0,
+                palm: 0.0,
                 digits: Vec::new(),
                 forearm: None,
             },
@@ -274,6 +278,7 @@ fn rig_loaded_hands(
             rig.wrist_offset = fit.wrist_offset;
             rig.wrist_rotation = fit.wrist_rotation;
             rig.scale = fit.scale;
+            rig.palm = fit.palm;
             rig.digits = digits;
             rig.forearm = find_forearm(&survey, wrist);
         }
@@ -375,6 +380,28 @@ struct RigFit {
     wrist_offset: Vec3,
     wrist_rotation: Quat,
     scale: f32,
+    palm: f32,
+}
+
+fn palm_length(skeleton: &on_hand::Skeleton) -> f32 {
+    let posture = skeleton.forward(&skeleton.rest_pose(glam::Vec3::ZERO));
+    (posture.joint(Joint::Base(Finger::Middle)) - posture.wrist).length()
+}
+
+/// The hands are scaled to the pianist's hand when they are rigged; a different hand
+/// size chosen later rescales them to match.
+fn rescale_hands(performance: Res<Performance>, mut rigs: Query<&mut HandRig>) {
+    if !performance.is_changed() {
+        return;
+    }
+    for mut rig in &mut rigs {
+        if rig.palm > 1e-6 {
+            let scale = palm_length(performance.animators[rig.hand as usize].skeleton()) / rig.palm;
+            if (scale - rig.scale).abs() > 1e-6 {
+                rig.scale = scale;
+            }
+        }
+    }
 }
 
 fn measure_fit(
@@ -398,12 +425,7 @@ fn measure_fit(
     let correction = rig::rest_correction(hand, wrist, tip, index, little)?;
 
     let measured = (middle_knuckle - wrist).length();
-    let skeleton = performance.animators[hand as usize].skeleton();
-    let wanted = {
-        let rest = skeleton.rest_pose(glam::Vec3::ZERO);
-        let posture = skeleton.forward(&rest);
-        (posture.joint(Joint::Base(Finger::Middle)) - posture.wrist).length()
-    };
+    let wanted = palm_length(performance.animators[hand as usize].skeleton());
     let scale = if measured > 1e-6 { wanted / measured } else { 1.0 };
 
     let wrist_entity = *survey.roles.get(&BoneRole::Wrist)?;
@@ -421,6 +443,7 @@ fn measure_fit(
         wrist_offset,
         wrist_rotation,
         scale,
+        palm: measured,
     })
 }
 

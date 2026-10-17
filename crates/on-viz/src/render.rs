@@ -276,7 +276,7 @@ impl Audio {
 
 pub(crate) fn rebuild_scene(world: &mut World) {
     let doomed: Vec<Entity> = world
-        .query_filtered::<Entity, Or<(With<KeyTop>, With<NoteBar>, With<FingerLabel>)>>()
+        .query_filtered::<Entity, Or<(With<KeyTop>, With<Backdrop>, With<NoteBar>, With<FingerLabel>, With<Flash>)>>()
         .iter(world)
         .collect();
     for entity in doomed {
@@ -284,8 +284,14 @@ pub(crate) fn rebuild_scene(world: &mut World) {
     }
     let _ = world.run_system_cached(setup_keyboard);
     let _ = world.run_system_cached(setup_notes);
+    let _ = world.run_system_cached(setup_flashes);
     let _ = world.run_system_cached(place_camera);
 }
+
+/// Everything around the keys that `setup_keyboard` lays down with them, and so takes
+/// away with them when the scene is rebuilt.
+#[derive(Component)]
+struct Backdrop;
 
 #[derive(Component)]
 struct KeyTop {
@@ -616,6 +622,7 @@ fn setup_keyboard(
             Mesh3d(line.clone()),
             MeshMaterial3d(octave.clone()),
             Transform::from_xyz(left, layout.lane_height / 2.0, OCTAVE_LINE_Z),
+            Backdrop,
         ));
     }
 
@@ -628,6 +635,7 @@ fn setup_keyboard(
             AlphaMode::Opaque,
         ))),
         Transform::from_xyz(centre_x, -case_depth / 2.0, CASE_Z),
+        Backdrop,
     ));
 
     commands.spawn((
@@ -638,6 +646,7 @@ fn setup_keyboard(
             AlphaMode::Add,
         ))),
         Transform::from_xyz(centre_x, BACK_GLOW_DEPTH_MM / 2.0, LANE_Z - 1.0),
+        Backdrop,
     ));
 
     let hit = materials.add(painted(
@@ -649,6 +658,7 @@ fn setup_keyboard(
         Mesh3d(meshes.add(Rectangle::new(layout.width_mm(), HIT_LINE_DEPTH_MM))),
         MeshMaterial3d(hit),
         Transform::from_xyz(centre_x, 0.0, LANE_Z - 1.0),
+        Backdrop,
     ));
 }
 
@@ -1143,7 +1153,11 @@ fn handle_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut transport: ResMut<Transport>,
     audio: Res<Audio>,
+    menus: Option<Res<bevy_egui::input::EguiWantsInput>>,
 ) {
+    if menus.is_some_and(|menus| menus.wants_any_keyboard_input()) {
+        return;
+    }
     let before = (transport.playing, transport.speed);
     let mut jump = None;
 
