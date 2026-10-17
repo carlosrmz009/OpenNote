@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 include!("src/seal.rs");
 
@@ -16,19 +15,42 @@ fn main() {
             bytes
         }
         Err(_) => {
-            println!("cargo:rerun-if-changed=build.rs");
+            // Cargo treats a missing file as always changed, which would rebuild this crate
+            // every time; the folder it would go in is watched instead, when there is one.
+            match model.parent().filter(|folder| folder.is_dir()) {
+                Some(folder) => println!("cargo:rerun-if-changed={}", folder.display()),
+                None => println!("cargo:rerun-if-changed=build.rs"),
+            }
+            println!(
+                "cargo:warning=no model at {}, so this build fingers with the rules alone \
+                 (set OPENNOTE_MODEL, or add the file and run `cargo clean -p on-cli`)",
+                model.display()
+            );
             Vec::new()
         }
     };
-    let key = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 ^ 0x5DEE_CE66_D1CE_4E5B;
+    // Derived from the model, so the same model always seals the same way and two builds
+    // of the same commit are identical.
+    let key = fnv(&bytes) ^ 0x5DEE_CE66_D1CE_4E5B;
     std::fs::write(out.join("model.bin"), seal(&bytes, key)).unwrap();
     std::fs::write(out.join("model_key.rs"), format!("{key}u64")).unwrap();
     let release = std::env::var("OPENNOTE_RELEASE_KEY")
         .ok()
         .or_else(|| std::fs::read_to_string(manifest.join("../../models/release-key.txt")).ok())
-        .and_then(|k| k.trim().parse::<u64>().ok());
+        .and_then(|k| match k.trim().parse::<u64>() {
+            Ok(key) => Some(key),
+            Err(_) => {
+                println!(
+                    "cargo:warning=the release key is not a number, so this build cannot open published models"
+                );
+                None
+            }
+        });
     println!("cargo:rerun-if-env-changed=OPENNOTE_RELEASE_KEY");
-    println!("cargo:rerun-if-changed={}", manifest.join("../../models/release-key.txt").display());
+    let release_file = manifest.join("../../models/release-key.txt");
+    if release_file.exists() {
+        println!("cargo:rerun-if-changed={}", release_file.display());
+    }
     std::fs::write(
         out.join("release_key.rs"),
         match release {
@@ -39,4 +61,10 @@ fn main() {
     .unwrap();
     let name = model.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     println!("cargo:rustc-env=OPENNOTE_MODEL_NAME={}", if bytes.is_empty() { String::new() } else { name });
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3))
 }
