@@ -295,6 +295,26 @@ pub fn measure_model(
         .collect()
 }
 
+/// Splits each style's held-back pieces in two by a stable hash of their names: one half to
+/// choose by, the other to report on. A style with too few pieces to split uses the same
+/// pieces for both, as before.
+fn choose_and_report(held: Vec<(Style, Vec<Piece>)>) -> (Vec<(Style, Vec<Piece>)>, Vec<(Style, Vec<Piece>)>) {
+    let mut choose = Vec::new();
+    let mut report = Vec::new();
+    for (style, pieces) in held {
+        let (a, b): (Vec<Piece>, Vec<Piece>) =
+            pieces.iter().cloned().partition(|p| crate::hash::fnv(&format!("choose:{}", p.piece)) % 2 == 0);
+        if a.is_empty() || b.is_empty() {
+            choose.push((style, pieces.clone()));
+            report.push((style, pieces));
+        } else {
+            choose.push((style, a));
+            report.push((style, b));
+        }
+    }
+    (choose, report)
+}
+
 pub fn train(
     pieces: &[Piece],
     options: &FingeringOptions,
@@ -323,16 +343,22 @@ pub fn train(
         })
         .filter(|(_, pieces)| !pieces.is_empty())
         .collect();
+    // The pass to keep is chosen on half the held-back pieces and the gain reported on the
+    // other half, so the number reported was not also the number chosen by.
+    let (validation, test) = choose_and_report(test);
     let examples: Vec<Example> = split.train.iter().filter_map(|p| example(p, config.floor)).collect();
     for style in STYLES {
+        let count =
+            |sets: &[(Style, Vec<Piece>)]| sets.iter().find(|(s, _)| *s == style).map_or(0, |(_, p)| p.len());
         say(&format!(
-            "{style:?}: {} pieces to learn from, {} held back to measure on.",
+            "{style:?}: {} pieces to learn from, {} held back to choose the pass by and {} to report on.",
             examples.iter().filter(|e| e.style == style).count(),
-            test.iter().find(|(s, _)| *s == style).map_or(0, |(_, p)| p.len())
+            count(&validation),
+            count(&test),
         ));
     }
 
-    let before = measure_styles(&test, &options, None, config.threads, config.unified);
+    let before = measure_styles(&validation, &options, None, config.threads, config.unified);
     for (style, rates) in &before {
         say(&format!("rules alone, {style:?}: {rates}"));
     }
@@ -432,7 +458,7 @@ pub fn train(
             .map(|(fact, w)| (*fact, w - total.get(fact).copied().unwrap_or(0.0) / batches))
             .filter(|(_, w)| w.abs() > 1e-6)
             .collect();
-        let rates = measure_styles(&test, &options, Some(&averaged), config.threads, config.unified);
+        let rates = measure_styles(&validation, &options, Some(&averaged), config.threads, config.unified);
         say(&format!("after pass {}: {}", pass + 1, describe_rates(&rates)));
         if overall(&rates) > best.0 {
             best = (overall(&rates), Some(averaged), pass + 1);
@@ -472,6 +498,23 @@ pub fn train(
 mod tests {
     use super::*;
     use crate::corpus::FingeredNote;
+
+    #[test]
+    fn the_pass_is_chosen_on_other_pieces_than_the_gain_is_reported_on() {
+        let style = STYLES[0];
+        let pieces: Vec<Piece> = (0..20).map(|i| quirky(&format!("piece-{i}"))).collect();
+        let (choose, report) = choose_and_report(vec![(style, pieces)]);
+        let names = |sets: &[(Style, Vec<Piece>)]| -> Vec<String> {
+            sets[0].1.iter().map(|p| p.piece.clone()).collect()
+        };
+        let (chosen, reported) = (names(&choose), names(&report));
+        assert!(!chosen.is_empty() && !reported.is_empty());
+        assert_eq!(chosen.len() + reported.len(), 20);
+        assert!(chosen.iter().all(|name| !reported.contains(name)), "the halves overlap");
+
+        let (choose, report) = choose_and_report(vec![(style, vec![quirky("alone")])]);
+        assert_eq!(names(&choose), names(&report), "one piece cannot be split, so it serves for both");
+    }
 
     fn quirky(name: &str) -> Piece {
         let line = [(60u8, 2u8), (64, 4), (60, 2), (64, 4), (62, 3), (65, 5)];
