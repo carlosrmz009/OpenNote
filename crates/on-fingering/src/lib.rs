@@ -1,3 +1,7 @@
+//! The fingering engine. A Viterbi search over each hand's chords weighs the published rule
+//! sets, a biomechanical model of the hand and, optionally, a trained model, and explains
+//! what it chose.
+
 pub mod biomech;
 pub mod known;
 pub mod learned;

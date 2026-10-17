@@ -1,3 +1,6 @@
+//! The corpus: expert fingerings normalised to JSON lines, read from PIG files and fingered
+//! MusicXML.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

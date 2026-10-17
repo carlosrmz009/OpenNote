@@ -1,3 +1,6 @@
+//! `opennote annotate`: fingers a score and writes the fingering into a copy of it, and
+//! optionally engraves that copy.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};

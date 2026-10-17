@@ -1,3 +1,6 @@
+//! Sound for the viewer and the videos: a modelled piano, SoundFont playback, live output
+//! and rendering to WAV.
+
 pub mod sampled;
 pub mod synth;
 pub mod voice;

@@ -1,3 +1,6 @@
+//! The performance in time: which keys are down, the grips each hand makes, and the hand
+//! poses between them, including how the two hands keep out of each other's way.
+
 use std::collections::BTreeMap;
 
 use on_fingering::biomech::{BiomechModel, Grip};

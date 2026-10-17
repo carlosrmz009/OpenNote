@@ -1,3 +1,6 @@
+//! The effects that follow struck keys: sparks, flashes, light beams and the lights that tint
+//! what is near.
+
 use super::*;
 
 #[derive(Component)]

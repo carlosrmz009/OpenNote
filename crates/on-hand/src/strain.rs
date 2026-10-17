@@ -1,3 +1,6 @@
+//! How strained a posture is, as a weighted sum of named components, and the residuals the
+//! inverse kinematics minimises.
+
 use crate::skeleton::{dof, HandPose, Posture, Skeleton, DOF, LIMITS};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

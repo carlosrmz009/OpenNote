@@ -1,3 +1,6 @@
+//! Measures fingerings against expert annotations, with bootstrap confidence intervals and
+//! paired comparisons between systems.
+
 use std::collections::{BTreeMap, HashMap};
 
 use on_fingering::{FingeringOptions, FingeringPrior};

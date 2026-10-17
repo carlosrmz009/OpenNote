@@ -1,3 +1,6 @@
+//! Reads fingerings out of overhead video of a pianist: hand landmarks mapped onto the
+//! keyboard and matched to the notes of the same performance.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

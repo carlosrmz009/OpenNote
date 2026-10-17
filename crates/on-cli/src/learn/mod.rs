@@ -1,3 +1,5 @@
+//! The commands that collect fingerings, train and tune the engine, and measure it.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};

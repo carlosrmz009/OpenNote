@@ -1,3 +1,6 @@
+//! The piano keyboard in millimetres: where each key is, how wide, and where a finger strikes
+//! it.
+
 use glam::Vec3;
 
 pub const MIDI_LOWEST: u8 = 21;

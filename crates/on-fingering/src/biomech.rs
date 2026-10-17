@@ -1,3 +1,7 @@
+//! The biomechanical cost: how hard a grip is to hold, from the hand's inverse kinematics,
+//! and how much work it is to move from one grip to the next in the time allowed. Results
+//! are cached per hand geometry, since the search asks for the same grips many times.
+
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock, RwLock};

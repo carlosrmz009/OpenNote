@@ -1,3 +1,6 @@
+//! Playback position, speed, looping and the practice section, kept in step with the audio,
+//! and the keyboard shortcuts that drive them.
+
 use super::*;
 
 #[derive(Resource, Debug, Clone)]

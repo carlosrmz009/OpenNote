@@ -1,3 +1,7 @@
+//! The viewer: a keyboard with falling notes and two animated 3D hands, live with sound or
+//! exported as a video. The timeline and hand motion work without the `render` feature;
+//! the Bevy app needs it.
+
 #[cfg(feature = "render")]
 pub mod export;
 #[cfg(feature = "render")]

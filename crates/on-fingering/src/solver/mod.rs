@@ -1,3 +1,6 @@
+//! Fingering a score: the options, the solution and its explanations, and how the two hands
+//! and the four published rule sets are put together.
+
 use on_hand::{Finger, Hand, HandProfile};
 use on_score::{Fingering, NoteId, Score};
 

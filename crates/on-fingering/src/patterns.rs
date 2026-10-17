@@ -1,3 +1,6 @@
+//! Chord shapes a hand plays by habit, such as triads and sixths, and what the search saves
+//! by using the taught fingering for them.
+
 use on_hand::{Finger, Hand};
 
 pub const CANONICAL_BONUS: f32 = 1.1;

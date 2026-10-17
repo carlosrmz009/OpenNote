@@ -1,3 +1,6 @@
+//! Writes fingerings back into a MusicXML score and engraves it with Verovio as PDF, SVG or
+//! PNG pages.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};

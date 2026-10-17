@@ -1,3 +1,6 @@
+//! Finds scales, arpeggios and chromatic runs in a hand's line, and the fingerings pianists
+//! are taught for them.
+
 use std::collections::HashMap;
 
 use on_hand::keyboard::is_black;

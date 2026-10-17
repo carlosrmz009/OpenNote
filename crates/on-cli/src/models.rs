@@ -1,3 +1,6 @@
+//! `opennote models`: the trained models published on GitHub, downloaded and opened here,
+//! and sealing one for publishing.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

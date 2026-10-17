@@ -1,3 +1,5 @@
+//! The bones of a hand of a given size, scaled from anthropometric tables.
+
 use serde::{Deserialize, Serialize};
 
 use crate::Finger;

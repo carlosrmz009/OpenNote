@@ -1,3 +1,6 @@
+//! Where everything sits: the keys, the falling-note lane, and how seconds map to
+//! millimetres of lane.
+
 use on_hand::keyboard::{Keyboard, MIDI_HIGHEST, MIDI_LOWEST, WHITE_KEY_LENGTH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

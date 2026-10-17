@@ -1,3 +1,6 @@
+//! The weights a reranker learns: costs on chord shapes, steps and trigrams of fingers,
+//! unified or kept apart by style.
+
 use std::collections::HashMap;
 
 use on_hand::keyboard::is_black;

@@ -1,3 +1,5 @@
+//! Procedural textures for the keys, case and glows.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};

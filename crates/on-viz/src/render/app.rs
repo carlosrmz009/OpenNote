@@ -1,3 +1,5 @@
+//! Running the viewer, and capturing a single frame of it.
+
 use super::*;
 
 #[derive(Resource, Debug, Clone)]

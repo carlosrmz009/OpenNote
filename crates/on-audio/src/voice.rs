@@ -1,3 +1,6 @@
+//! One struck string of the modelled piano: its partials, their decay and the hammer's
+//! attack.
+
 const RENORMALIZE_EVERY: u32 = 2_048;
 
 const MAX_PARTIALS: usize = 14;

@@ -1,3 +1,6 @@
+//! Trains the reranker: averaged perceptron updates that teach the search to prefer the
+//! candidates pianists chose.
+
 use std::collections::HashMap;
 
 use on_fingering::learned::{chord_features, step_features, trigram_features, weight_limit, Learned, Style};

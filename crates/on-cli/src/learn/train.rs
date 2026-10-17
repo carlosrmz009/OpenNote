@@ -1,3 +1,6 @@
+//! `opennote train` and `opennote eval`: fit the n-gram model to the corpus, and measure a
+//! model or a single score.
+
 use super::*;
 
 /// Fit the statistical model to the corpus.

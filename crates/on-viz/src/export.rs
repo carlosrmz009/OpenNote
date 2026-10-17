@@ -1,3 +1,6 @@
+//! Renders the performance offscreen, frame by frame, and pipes it to ffmpeg with the
+//! soundtrack.
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

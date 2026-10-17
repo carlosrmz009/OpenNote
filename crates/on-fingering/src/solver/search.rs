@@ -1,3 +1,6 @@
+//! The search for one hand: a second-order Viterbi over each chord's possible fingerings,
+//! scored by the rules, the hand model and the trained model.
+
 use super::*;
 
 pub(crate) const SUBSTITUTION_COST: f32 = 800.0;

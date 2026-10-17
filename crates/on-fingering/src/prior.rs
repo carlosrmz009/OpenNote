@@ -1,3 +1,6 @@
+//! The n-gram model of how pianists finger: counts of fingers in context, backed off from
+//! trigrams to single fingers, and pooled across hands by the keyboard's reflection about D.
+
 use std::collections::HashMap;
 
 use on_hand::{Finger, Hand};

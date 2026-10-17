@@ -1,3 +1,6 @@
+//! The options shared by `play` and `render`: the keyboard's range, the lookahead, colours,
+//! sound and expression.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};

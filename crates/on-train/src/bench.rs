@@ -1,3 +1,6 @@
+//! OpenNote's own benchmark: tiers of datasets checked against a manifest, measured into a
+//! scorecard with a headline score.
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 

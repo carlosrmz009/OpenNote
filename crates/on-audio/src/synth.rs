@@ -1,3 +1,6 @@
+//! The synthesiser: the notes of a performance, mixed from their voices at any position and
+//! speed, with a soft limiter on the modelled piano.
+
 use crate::sampled::SampledPiano;
 use crate::voice::Voice;
 

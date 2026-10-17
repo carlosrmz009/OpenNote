@@ -1,3 +1,5 @@
+//! Turns a score into the chords each hand plays, with the notes it is still holding.
+
 use super::*;
 
 #[derive(Debug, Clone)]

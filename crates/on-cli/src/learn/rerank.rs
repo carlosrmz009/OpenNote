@@ -1,3 +1,6 @@
+//! `opennote rerank`: teaches the search to choose between the rules' candidates the way the
+//! pianists in the corpus did.
+
 use super::*;
 
 /// Teach the search to finger like the pianists in the corpus.

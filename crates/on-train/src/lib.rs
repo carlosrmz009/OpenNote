@@ -1,3 +1,5 @@
+//! Corpora of expert fingerings, and training, evaluating and tuning the engine on them.
+
 pub mod bench;
 pub mod corpus;
 pub mod eval;

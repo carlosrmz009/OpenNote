@@ -1,3 +1,5 @@
+//! Renders a performance to a 16-bit WAV file, as the soundtrack of an exported video.
+
 use std::io::Write;
 use std::path::Path;
 

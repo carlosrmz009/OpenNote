@@ -1,3 +1,5 @@
+//! The tempo map: converts between ticks and seconds across tempo changes.
+
 use crate::Ticks;
 
 pub const DEFAULT_MICROS_PER_QUARTER: u32 = 500_000;

@@ -1,3 +1,5 @@
+//! `opennote render`: the performance as a video file, with sound, through ffmpeg.
+
 use std::path::PathBuf;
 
 use anyhow::Result;

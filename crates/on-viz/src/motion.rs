@@ -1,3 +1,6 @@
+//! How the hands move between grips: splines through where they rest, timed by Fitts' law,
+//! with each finger's strike planned and its follow-through damped.
+
 use glam::{Vec2, Vec3};
 use on_fingering::biomech::{BiomechModel, Grip};
 use on_fingering::playability::HAND_SPEED_MM_PER_SECOND;

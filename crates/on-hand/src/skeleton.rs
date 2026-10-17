@@ -1,3 +1,6 @@
+//! A 22-joint hand and forearm: forward kinematics, joint limits and the Jacobians of the
+//! fingertips.
+
 use std::f32::consts::PI;
 
 use glam::{Quat, Vec3};

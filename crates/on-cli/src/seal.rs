@@ -1,3 +1,6 @@
+// The keystream that seals models: SplitMix64, XORed over the bytes, so sealing and
+// unsealing are the same function. It hides a model from casual reading; it is not
+// encryption. Shared with build.rs through include!, so it has no module docs.
 #[allow(dead_code)]
 pub fn seal(bytes: &[u8], key: u64) -> Vec<u8> {
     let mut state = key;

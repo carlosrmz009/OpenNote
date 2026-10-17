@@ -1,3 +1,6 @@
+//! `opennote bench` and `opennote benchmark`: measure the fingering on a dataset, and on
+//! OpenNote's own tiered benchmark into a scorecard.
+
 use super::*;
 
 /// Measure a model, and the rules it is built on, on OpenNote's own benchmark.

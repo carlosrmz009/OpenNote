@@ -1,3 +1,6 @@
+//! Fits the n-gram model on the training share of a corpus, optionally with a grid search
+//! over how far it is trusted.
+
 use on_fingering::{FingeringOptions, NgramPrior};
 use on_hand::Hand;
 

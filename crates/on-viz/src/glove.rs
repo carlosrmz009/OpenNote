@@ -1,3 +1,5 @@
+//! The frame a hand mesh is measured in, and a glove material that is not in use yet.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::math::Vec3;

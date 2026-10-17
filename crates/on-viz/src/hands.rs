@@ -1,3 +1,6 @@
+//! Loads and rigs the two hand models, colours their skin, and poses them every frame from
+//! the timeline.
+
 use std::collections::HashMap;
 
 use bevy::camera::visibility::NoFrustumCulling;

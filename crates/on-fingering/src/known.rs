@@ -1,3 +1,7 @@
+//! Pieces the model has been taught: recognised from runs of pitches, so that a documented
+//! piece is fingered as documented, and passages fingered alike suggest a fingering for an
+//! unknown piece.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::playability::CHORD_SECONDS;

@@ -1,3 +1,6 @@
+//! The shoulders and torso: how far each arm reaches along the keyboard, and the lean that
+//! takes.
+
 use glam::Vec3;
 
 use crate::profile::HandProfile;

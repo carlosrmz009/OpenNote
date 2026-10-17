@@ -1,3 +1,5 @@
+//! A biomechanical model of the pianist's hand and arm, and of the keyboard it plays.
+
 pub mod ik;
 pub mod keyboard;
 pub mod profile;

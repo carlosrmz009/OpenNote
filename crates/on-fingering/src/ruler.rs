@@ -1,3 +1,6 @@
+//! How intervals are measured: in semitones, as the original papers do, or in millimetres
+//! along a real keyboard.
+
 use on_hand::keyboard::Keyboard;
 use serde::{Deserialize, Serialize};
 

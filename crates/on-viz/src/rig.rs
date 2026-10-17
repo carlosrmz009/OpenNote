@@ -1,3 +1,5 @@
+//! Matches a hand model's bones to the skeleton's joints by name.
+
 use glam::{Quat, Vec3};
 use on_hand::{Finger, Hand};
 

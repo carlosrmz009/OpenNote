@@ -1,3 +1,6 @@
+//! The score as OpenNote sees it: notes with their timing, hand and given fingering, tempo,
+//! pedal and marks, read from and written back to MusicXML and MIDI.
+
 pub mod expression;
 pub mod hands;
 pub mod midi_io;

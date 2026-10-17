@@ -1,3 +1,5 @@
+//! `opennote play`: the interactive viewer, or a single screenshot of it.
+
 use std::path::PathBuf;
 
 use anyhow::Result;

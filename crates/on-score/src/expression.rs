@@ -1,3 +1,6 @@
+//! Plays a score with expression: dynamics, rubato and articulation shaped by a mood, for
+//! the sound and the hands.
+
 use std::collections::HashMap;
 
 use crate::{art, Score, SourceRef, Ticks, TICKS_PER_QUARTER};

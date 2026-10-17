@@ -1,3 +1,6 @@
+//! Measures a finished fingering: what cannot be played in time, repeated fingers, position
+//! changes, crossings, travel and stretch. It does not steer the search.
+
 use on_hand::keyboard::Keyboard;
 use on_hand::{Finger, Hand};
 use on_score::Score;

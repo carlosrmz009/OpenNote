@@ -1,3 +1,6 @@
+//! Decides which hand plays each note: from the staves, from two MIDI tracks, or by a search
+//! for where to split the keyboard at each moment.
+
 use on_hand::keyboard::Keyboard;
 use on_hand::profile::HandProfile;
 use on_hand::Hand;

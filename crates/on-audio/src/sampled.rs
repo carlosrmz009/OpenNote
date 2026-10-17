@@ -1,3 +1,5 @@
+//! A SoundFont piano, played through rustysynth from the first preset of an `.sf2`.
+
 use std::path::Path;
 use std::sync::Arc;
 

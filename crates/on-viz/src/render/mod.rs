@@ -1,3 +1,6 @@
+//! The scene: the plugin that draws the keyboard, notes, effects and hands, the tuning
+//! constants for how they look, and the shared resources.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use on_fingering::biomech::BiomechWeights;

@@ -1,3 +1,6 @@
+//! The tilted orthographic camera, its lights, and fitting the view between the menu and
+//! transport bars.
+
 use super::*;
 
 pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>) {

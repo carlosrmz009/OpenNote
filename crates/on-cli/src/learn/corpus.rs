@@ -1,3 +1,6 @@
+//! `opennote corpus`: adds expert fingerings to the corpus, from PIG files, fingered
+//! MusicXML or video of a pianist, and lists what it holds.
+
 use super::*;
 
 /// Manage the collection of expert fingerings to learn from.

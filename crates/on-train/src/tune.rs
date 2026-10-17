@@ -1,3 +1,6 @@
+//! An evolutionary search over the engine's weights, resumable, that promotes a setting only
+//! when it beats the best so far again on a second, fresh draw of the training pieces.
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};

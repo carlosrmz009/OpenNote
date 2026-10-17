@@ -1,3 +1,6 @@
+//! Reads MusicXML (`.musicxml`, `.xml` and compressed `.mxl`) into a score, and writes
+//! fingerings back into the document it came from.
+
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};

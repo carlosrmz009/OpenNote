@@ -1,3 +1,6 @@
+//! The menus, the transport bar and the shortcuts window, and the background tasks they
+//! start.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

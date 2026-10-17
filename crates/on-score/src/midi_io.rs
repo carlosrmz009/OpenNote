@@ -1,3 +1,5 @@
+//! Reads Standard MIDI Files into a score, and writes scores and fingerings back out.
+
 use std::collections::HashMap;
 use std::path::Path;
 

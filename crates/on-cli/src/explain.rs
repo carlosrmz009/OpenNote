@@ -1,3 +1,6 @@
+//! `opennote explain`: says, note by note, why each finger was chosen and how close the
+//! alternative came.
+
 use std::path::PathBuf;
 
 use anyhow::Result;

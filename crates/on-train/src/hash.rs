@@ -1,3 +1,6 @@
+//! Stable hashing and a seeded random step, so that splits and resampling are the same on
+//! every run.
+
 pub fn fnv(text: &str) -> u64 {
     fnv_bytes(text.as_bytes())
 }

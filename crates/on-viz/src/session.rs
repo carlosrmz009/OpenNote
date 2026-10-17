@@ -1,3 +1,6 @@
+//! Opening a score for the viewer: fingering it with the session's settings and building the
+//! timeline and animators.
+
 use std::path::{Path, PathBuf};
 
 use std::sync::Arc;

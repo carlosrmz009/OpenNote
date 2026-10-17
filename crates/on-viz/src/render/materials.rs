@@ -1,3 +1,5 @@
+//! The lacquered key material, the glowing note material, and colour helpers.
+
 use super::*;
 
 pub(crate) type Lacquered = bevy::pbr::ExtendedMaterial<StandardMaterial, Lacquer>;

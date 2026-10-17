@@ -1,3 +1,6 @@
+//! Inverse kinematics: a damped least-squares search for a posture that puts given fingers on
+//! given keys, from several starting poses.
+
 use glam::Vec3;
 
 use crate::skeleton::{dof, HandPose, Posture, Skeleton, DOF};

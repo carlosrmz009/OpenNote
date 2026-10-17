@@ -1,3 +1,6 @@
+//! The keyboard and the falling notes: building their meshes, pressing keys, moving bars and
+//! labelling fingers.
+
 use super::*;
 
 pub(crate) fn rebuild_scene(world: &mut World) {

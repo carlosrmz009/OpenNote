@@ -1,3 +1,6 @@
+//! The `opennote` command line: the subcommands, and the hand, rules and model options they
+//! share.
+
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

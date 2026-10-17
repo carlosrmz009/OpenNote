@@ -1,3 +1,6 @@
+//! Live playback through the default audio device, on a thread of its own that the viewer
+//! steers with play, seek, speed and instrument commands.
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};

@@ -1,3 +1,6 @@
+//! `opennote tune`: searches the engine's weights for as long as it is left running,
+//! resuming where it stopped.
+
 use super::*;
 
 /// Arguments to `opennote tune`.
