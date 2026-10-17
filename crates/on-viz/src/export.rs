@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -53,7 +53,7 @@ struct Export {
     total: u32,
     warmup: u32,
     in_flight: bool,
-    frames: Sender<Vec<u8>>,
+    frames: SyncSender<Vec<u8>>,
     trouble: Arc<AtomicBool>,
     start: f64,
 }
@@ -80,6 +80,7 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
         performance.soundfont.as_deref(),
     )
     .context("rendering the soundtrack")?;
+    let _soundtrack = Scratch(audio_path.clone());
 
     let seconds = (last - LEAD_IN + TAIL_SECONDS) / options.speed.max(1e-6);
     let total = (seconds * f64::from(options.fps)).ceil() as u32;
@@ -87,7 +88,9 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
     let mut encoder = start_ffmpeg(&ffmpeg, &options, &audio_path)?;
     let stdin = encoder.stdin.take().context("ffmpeg did not give us anywhere to write frames")?;
 
-    let (frames, incoming) = mpsc::channel::<Vec<u8>>();
+    // Bounded, so that rendering waits for the encoder rather than holding every frame
+    // it has not yet taken in memory.
+    let (frames, incoming) = mpsc::sync_channel::<Vec<u8>>(FRAMES_IN_FLIGHT);
     let trouble = Arc::new(AtomicBool::new(false));
     let report = Arc::clone(&trouble);
     let writer = std::thread::Builder::new()
@@ -145,7 +148,6 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
     drop(app);
     let _ = writer.join();
     let status = encoder.wait().context("waiting for ffmpeg")?;
-    let _ = std::fs::remove_file(&audio_path);
     if !status.success() {
         bail!("ffmpeg failed: {status}");
     }
@@ -156,11 +158,22 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
 #[derive(Resource, Deref)]
 struct ExportTarget(Handle<Image>);
 
+const FRAMES_IN_FLIGHT: usize = 8;
+
+/// A temporary file, removed however the export ends.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[derive(Resource)]
 struct PendingExport {
     options: VideoOptions,
     total: u32,
-    frames: Sender<Vec<u8>>,
+    frames: SyncSender<Vec<u8>>,
     trouble: Arc<AtomicBool>,
     start: f64,
 }
