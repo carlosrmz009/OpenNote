@@ -4714,6 +4714,7 @@ dependencies = [
  "on-score",
  "on-train",
  "on-viz",
+ "serde_json",
  "tracing-subscriber",
 ]
 

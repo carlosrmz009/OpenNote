@@ -28,8 +28,18 @@ pub struct ExplainArgs {
     #[arg(long)]
     pub close_calls: bool,
 
+    /// How to print it: as sentences, or as JSON for another program to read.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+
     #[command(flatten)]
     pub model: ModelArgs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Format {
+    Text,
+    Json,
 }
 
 const CLOSE_CALL: f32 = 0.25;
@@ -37,6 +47,41 @@ const CLOSE_CALL: f32 = 0.25;
 pub fn run(args: ExplainArgs) -> Result<()> {
     let crate::Fingered { document: input, solution, .. } = args.model.finger(&args.input)?;
     let score = input.score();
+    let chosen = solution.explanations.iter().filter(|explanation| {
+        let note = score.note(explanation.note);
+        note.onset_seconds >= args.from && !(args.close_calls && explanation.margin > CLOSE_CALL)
+    });
+
+    if args.format == Format::Json {
+        let notes: Vec<serde_json::Value> = chosen
+            .take(args.limit)
+            .map(|explanation| {
+                let note = score.note(explanation.note);
+                serde_json::json!({
+                    "seconds": note.onset_seconds,
+                    "hand": match note.hand { Some(Hand::Left) => "left", Some(Hand::Right) => "right", None => "none" },
+                    "key": on_hand::keyboard::name(note.midi),
+                    "midi": note.midi,
+                    "finger": explanation.finger.number(),
+                    "margin": explanation.margin,
+                    "reachable": explanation.reachable,
+                    "posture_strain": explanation.posture_strain,
+                    "rules": explanation.rules.iter().map(|(rule, cost)| serde_json::json!({
+                        "rule": rule.tag(),
+                        "cost": cost,
+                        "why": rule.describe(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "title": score.title,
+            "cost": solution.cost,
+            "notes": notes,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
 
     println!(
         "{} — total cost {:.2} over {} notes",
@@ -56,17 +101,8 @@ pub fn run(args: ExplainArgs) -> Result<()> {
     println!();
 
     let mut shown = 0;
-    for explanation in &solution.explanations {
-        if shown >= args.limit {
-            break;
-        }
+    for explanation in chosen.take(args.limit) {
         let note = score.note(explanation.note);
-        if note.onset_seconds < args.from {
-            continue;
-        }
-        if args.close_calls && explanation.margin > CLOSE_CALL {
-            continue;
-        }
         shown += 1;
 
         let hand = match note.hand {
