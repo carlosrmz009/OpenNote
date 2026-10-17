@@ -4709,6 +4709,7 @@ dependencies = [
  "resvg 0.46.0",
  "serde_json",
  "svg2pdf",
+ "tempfile",
  "tracing",
  "verovioxide",
 ]

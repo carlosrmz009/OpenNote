@@ -16,3 +16,6 @@ verovioxide = { version = "0.3", default-features = false, features = ["bundled-
 svg2pdf = "0.13"
 pdf-writer = "0.12"
 resvg = "0.46"
+
+[dev-dependencies]
+tempfile.workspace = true

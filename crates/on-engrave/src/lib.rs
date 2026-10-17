@@ -101,6 +101,9 @@ pub fn engrave(
     }
 }
 
+/// Every compressed MusicXML (`.mxl`) file is a zip archive, which starts with these bytes.
+const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
+
 pub fn render_pages(musicxml: &Path, options: &EngraveOptions) -> Result<Vec<String>> {
     let mut toolkit = verovioxide::Toolkit::new()
         .map_err(|e| anyhow!("starting Verovio: {e}"))?;
@@ -119,11 +122,15 @@ pub fn render_pages(musicxml: &Path, options: &EngraveOptions) -> Result<Vec<Str
         .set_options(&parsed)
         .map_err(|e| anyhow!("configuring Verovio: {e}"))?;
 
-    let data = std::fs::read_to_string(musicxml)
-        .with_context(|| format!("reading {}", musicxml.display()))?;
-    toolkit
-        .load_data(&data)
-        .map_err(|e| anyhow!("Verovio could not read {}: {e}", musicxml.display()))?;
+    let data = std::fs::read(musicxml).with_context(|| format!("reading {}", musicxml.display()))?;
+    let loaded = if data.starts_with(ZIP_MAGIC) {
+        toolkit.load_zip_data_buffer(&data)
+    } else {
+        let text = String::from_utf8(data)
+            .with_context(|| format!("{} is neither MusicXML text nor a compressed .mxl", musicxml.display()))?;
+        toolkit.load_data(&text)
+    };
+    loaded.map_err(|e| anyhow!("Verovio could not read {}: {e}", musicxml.display()))?;
 
     toolkit
         .render_all_pages()
@@ -265,6 +272,21 @@ mod tests {
         assert_eq!(PageFormat::from_path(Path::new("a.png")), Some(PageFormat::Png));
         assert_eq!(PageFormat::from_path(Path::new("a.txt")), None);
         assert_eq!(PageFormat::from_path(Path::new("a")), None);
+    }
+
+    #[test]
+    fn a_compressed_score_engraves_like_the_plain_one() {
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/scales-and-chords.musicxml");
+        let scratch = tempfile::tempdir().unwrap();
+        let compressed = scratch.path().join("scales.mxl");
+        MusicXmlDocument::read(&sample).unwrap().write(&compressed, true).unwrap();
+        assert!(std::fs::read(&compressed).unwrap().starts_with(ZIP_MAGIC));
+
+        let options = EngraveOptions::default();
+        let plain = render_pages(&sample, &options).unwrap();
+        let zipped = render_pages(&compressed, &options).unwrap();
+        assert!(!zipped.is_empty());
+        assert_eq!(zipped.len(), plain.len());
     }
 
     #[test]
