@@ -76,8 +76,8 @@ fn main() {
     options.rule_set = set;
     let scorer = RuleScorer::new(set, RuleWeights::default(), options.span_model.table(), options.ruler);
 
-    let mut taught_total = vec![0.0f32; 32];
-    let mut model_total = vec![0.0f32; 32];
+    let mut taught_total = [0.0f32; 32];
+    let mut model_total = [0.0f32; 32];
     let mut graded = 0usize;
 
     for tonic in 0..12u8 {

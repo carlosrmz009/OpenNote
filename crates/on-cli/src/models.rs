@@ -58,7 +58,7 @@ pub fn open(name: &str) -> Result<Option<String>> {
 }
 
 fn unseal(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     ensure!(bytes.starts_with(MAGIC), "{} is not an opennote model", path.display());
     let Some(key) = RELEASE_KEY else {
         bail!("this copy of opennote was not built to open published models; use an official build");

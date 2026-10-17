@@ -43,7 +43,7 @@ pub struct KnownNote {
 
 impl Known {
     pub fn add(&mut self, mut notes: Vec<KnownNote>) {
-        notes.sort_by(|a, b| order(a.onset, a.midi).cmp(&order(b.onset, b.midi)));
+        notes.sort_by_key(|a| order(a.onset, a.midi));
         let mut last = [f64::NEG_INFINITY; 2];
         let packed = notes
             .iter()
@@ -172,7 +172,7 @@ impl Known {
         for hand in Hand::ALL {
             let mut played: Vec<&on_score::Note> =
                 score.notes.iter().filter(|n| n.hand == Some(hand) && !n.tie.is_continuation()).collect();
-            played.sort_by(|a, b| order(a.onset_seconds, a.midi).cmp(&order(b.onset_seconds, b.midi)));
+            played.sort_by_key(|a| order(a.onset_seconds, a.midi));
             let shapes: Vec<u64> = played
                 .iter()
                 .enumerate()

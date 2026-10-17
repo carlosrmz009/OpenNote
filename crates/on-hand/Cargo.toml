@@ -10,3 +10,6 @@ description = "Biomechanical model of the pianist's hand: keyboard geometry, kin
 glam.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

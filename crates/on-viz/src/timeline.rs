@@ -772,7 +772,7 @@ impl HandAnimator {
     fn sink_into_note(&self, pose: &mut HandPose, index: usize, time: f64) {
         let current = &self.events[index];
         let since = time - current.time;
-        if since < 0.0 || since >= WRIST_SETTLE_SECONDS {
+        if !(0.0..WRIST_SETTLE_SECONDS).contains(&since) {
             return;
         }
         let Some(hardest) = current.struck.iter().map(|(_, v)| *v).max() else {
@@ -1232,7 +1232,7 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
         pose.q[dof::WRIST_Z] += height;
         return;
     }
-    let raised = |height: f32| {
+    let raised = {
         let mut trial = *pose;
         let middle = |p: &HandPose| -> glam::Vec3 {
             let posture = animator.skeleton.forward(p);
@@ -1260,7 +1260,7 @@ fn raise_by(animator: &HandAnimator, pose: &mut HandPose, grip: &Grip, height: f
         trial.q[dof::WRIST_Y] += held.y - now.y;
         trial
     };
-    *pose = raised(height);
+    *pose = raised;
 }
 
 fn swing_angle(animator: &HandAnimator, pose: &HandPose, grip: &Grip, away_from: f32, urgency: f32) -> f32 {

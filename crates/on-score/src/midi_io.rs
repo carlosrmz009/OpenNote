@@ -424,22 +424,23 @@ mod tests {
         let mut bytes = Vec::new();
         let mut smf =
             Smf::new(Header::new(Format::SingleTrack, Timing::Metrical((TICKS_PER_QUARTER as u16).into())));
-        let mut track = Track::new();
-        track.push(TrackEvent {
-            delta: 0.into(),
-            kind: TrackEventKind::Midi {
-                channel: 0.into(),
-                message: MidiMessage::NoteOn { key: 60.into(), vel: 100.into() },
+        let track: Track = vec![
+            TrackEvent {
+                delta: 0.into(),
+                kind: TrackEventKind::Midi {
+                    channel: 0.into(),
+                    message: MidiMessage::NoteOn { key: 60.into(), vel: 100.into() },
+                },
             },
-        });
-        track.push(TrackEvent {
-            delta: 480.into(),
-            kind: TrackEventKind::Midi {
-                channel: 0.into(),
-                message: MidiMessage::NoteOn { key: 60.into(), vel: 0.into() },
+            TrackEvent {
+                delta: 480.into(),
+                kind: TrackEventKind::Midi {
+                    channel: 0.into(),
+                    message: MidiMessage::NoteOn { key: 60.into(), vel: 0.into() },
+                },
             },
-        });
-        track.push(TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) });
+            TrackEvent { delta: 0.into(), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) },
+        ];
         smf.tracks.push(track);
         smf.write(&mut bytes).unwrap();
 
@@ -450,7 +451,7 @@ mod tests {
 
     #[test]
     fn the_damper_pedal_is_read_and_holds_notes_past_their_keys() {
-        let q = TICKS_PER_QUARTER as u32;
+        let q = TICKS_PER_QUARTER;
         let mut track = Track::new();
         let mut push = |delta: u32, kind: TrackEventKind<'static>| {
             track.push(TrackEvent { delta: delta.into(), kind });

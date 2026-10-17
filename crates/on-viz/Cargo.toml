@@ -24,3 +24,6 @@ rfd = { version = "0.17", optional = true }
 [features]
 default = ["render"]
 render = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:image", "on-audio/playback"]
+
+[lints]
+workspace = true

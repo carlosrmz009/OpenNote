@@ -775,6 +775,6 @@ mod tests {
             !scale_fingerings(Hand::Right, &five, &onsets).is_empty(),
             "a five-note chromatic fragment should take the taught fingering"
         );
-        assert!(MIN_CHROMATIC_RUN < MIN_SCALE_RUN);
+        const { assert!(MIN_CHROMATIC_RUN < MIN_SCALE_RUN) };
     }
 }

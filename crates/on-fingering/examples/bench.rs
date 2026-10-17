@@ -162,7 +162,7 @@ fn main() {
     let mut bare = base.clone();
     bare.pattern_scale = 0.0;
     let octaves = vec![60u8, 72, 62, 74, 64, 76, 65, 77, 67, 79];
-    println!("  {:>8}  {:>9} {:>9} {:>9}  {}", "notes/s", "rules", "motion", "motion %", "fingering");
+    println!("  {:>8}  {:>9} {:>9} {:>9}  fingering", "notes/s", "rules", "motion", "motion %");
     for rate in [0.5f64, 1.0, 2.0, 4.0, 8.0, 16.0, 24.0] {
         let score = melody(&octaves, Hand::Right, rate);
         let solution = finger_score_with_prior(&score, &bare, None);
@@ -193,7 +193,7 @@ fn main() {
 "
     );
     let spread = vec![60u8, 76, 62, 77, 64, 79, 65, 81, 67, 83];
-    println!("  {:<14} {:>12}  {}", "hand", "differs by", "fingering");
+    println!("  {:<14} {:>12}  fingering", "hand", "differs by");
     let medium = {
         let mut o = FingeringOptions::for_hand(HandProfile::from_size(HandSize::Medium));
         o.pattern_scale = 0.0;

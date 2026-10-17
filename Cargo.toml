@@ -39,6 +39,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
+# Lints CI holds the workspace to. The numeric code indexes in loops over joints, fingers
+# and keys, and its solvers pass their state as arguments; those lints are relaxed.
+[workspace.lints.clippy]
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+large_enum_variant = "allow"
+
 [profile.dev.package."*"]
 opt-level = 3
 
