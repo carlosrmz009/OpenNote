@@ -237,10 +237,10 @@ fn build_rows(
     for (finger, target) in req.targets {
         let tip = posture.tip(*finger);
         let error = tip - *target;
+        let jacobian: [Vec3; DOF] = std::array::from_fn(|j| sk.tip_jacobian(posture, *finger, j));
         for axis in 0..3 {
             let mut grad = Vec::with_capacity(10);
-            for j in 0..DOF {
-                let d = sk.tip_jacobian(posture, *finger, j);
+            for (j, d) in jacobian.iter().enumerate() {
                 let g = k * d[axis];
                 if g != 0.0 {
                     grad.push((j, g));
