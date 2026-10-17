@@ -69,7 +69,15 @@ const BEAM_HEIGHT_MM: f32 = 150.0;
 
 const BEAM_GLOW: f32 = 0.9;
 
-const NOTE_LIGHT_LUMENS: f32 = 5_400.0;
+/// How brightly a struck key's glow lights what is near it: this many lux at
+/// `NOTE_LIGHT_REACH_MM` from the key. The scene is in millimetres while Bevy's point
+/// lights fall off with the square of distance, so the power is worked out from that.
+const NOTE_LIGHT_LUX: f32 = 30_000.0;
+
+const NOTE_LIGHT_REACH_MM: f32 = 40.0;
+
+const NOTE_LIGHT_LUMENS: f32 =
+    NOTE_LIGHT_LUX * 4.0 * std::f32::consts::PI * NOTE_LIGHT_REACH_MM * NOTE_LIGHT_REACH_MM;
 
 const NOTE_LIGHT_RANGE_MM: f32 = 175.0;
 
