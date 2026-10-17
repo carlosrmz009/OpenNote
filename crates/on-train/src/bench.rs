@@ -307,7 +307,8 @@ pub fn excerpts(
         if let Some(floor) = spec.min_confidence {
             pieces = pieces.iter().map(|p| p.trusted(floor)).collect();
         }
-        let mut order: Vec<Vec<&Piece>> = by_piece(&pieces).into_values().collect();
+        let mut order: Vec<Vec<&Piece>> =
+            by_piece(&pieces).into_values().map(crate::eval::comparable).collect();
         order.sort_by_key(|a| crate::hash::fnv_bytes(a[0].piece.as_bytes()));
         let (mut against_rules, mut against_people) = (0, 0);
         for annotations in order {

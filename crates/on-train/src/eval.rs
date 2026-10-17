@@ -58,6 +58,26 @@ pub struct PieceRates {
 
 pub const NGRAM: usize = 4;
 
+/// The annotations of one piece that can be compared note for note with the first: those
+/// with the same notes in the same order. Two sources sharing a piece's name but not its
+/// notes would otherwise be compared position by position, silently out of step.
+pub fn comparable(annotations: Vec<&Piece>) -> Vec<&Piece> {
+    let Some(first) = annotations.first().copied() else { return annotations };
+    let pitches = |p: &Piece| p.notes.iter().map(|n| n.midi).collect::<Vec<u8>>();
+    let wanted = pitches(first);
+    let (alike, other): (Vec<&Piece>, Vec<&Piece>) =
+        annotations.into_iter().partition(|p| pitches(p) == wanted);
+    for piece in other {
+        tracing::warn!(
+            "{} from {} has different notes from {}; leaving it out of the comparison",
+            piece.piece,
+            piece.source,
+            first.source
+        );
+    }
+    alike
+}
+
 pub fn per_piece(
     pieces: &[Piece],
     options: &FingeringOptions,
@@ -65,6 +85,7 @@ pub fn per_piece(
 ) -> Vec<PieceRates> {
     let mut out = Vec::new();
     for (name, annotations) in by_piece(pieces) {
+        let annotations = comparable(annotations);
         let Some(ours) = solve(annotations[0], options, prior) else { continue };
         if let Some(rates) = rate_against(name, &ours, &annotations) {
             out.push(rates);
@@ -157,6 +178,7 @@ pub fn rate_against(name: &str, ours: &[Option<u8>], annotations: &[&Piece]) -> 
 pub fn human_reference(pieces: &[Piece]) -> Vec<PieceRates> {
     let mut out = Vec::new();
     for (name, annotations) in by_piece(pieces) {
+        let annotations = comparable(annotations);
         if annotations.len() < 2 {
             continue;
         }
@@ -179,6 +201,7 @@ pub fn per_piece_loo(
 ) -> Vec<PieceRates> {
     let mut out = Vec::new();
     for (name, annotations) in by_piece(pieces) {
+        let annotations = comparable(annotations);
         if annotations.len() < 2 {
             continue;
         }
@@ -421,6 +444,27 @@ pub fn rebuild(piece: &Piece) -> (Score, Vec<NoteId>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_annotation_of_other_notes_is_left_out_rather_than_misaligned() {
+        let note = |midi| crate::corpus::FingeredNote {
+            midi,
+            onset: 0.0,
+            duration: 0.5,
+            hand: crate::corpus::HandLabel::Right,
+            finger: Some(1),
+            confidence: None,
+        };
+        let piece = |source: &str, pitches: &[u8]| Piece {
+            piece: "001".into(),
+            annotator: "1".into(),
+            source: source.into(),
+            notes: pitches.iter().map(|m| note(*m)).collect(),
+        };
+        let (a, b, c) = (piece("a", &[60, 62, 64]), piece("b", &[60, 62, 64]), piece("c", &[60, 64, 67]));
+        let kept = comparable(vec![&a, &b, &c]);
+        assert_eq!(kept.iter().map(|p| p.source.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    }
     use crate::corpus::FingeredNote;
 
     fn rates(general: f32) -> PieceRates {
