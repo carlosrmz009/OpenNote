@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use on_hand::keyboard::is_black;
 use on_hand::{Finger, Hand};
 
 pub const SCALE_BONUS: f32 = 7.5;
@@ -103,10 +104,6 @@ impl Mode {
             Mode::HarmonicMinor => HARMONIC_MINOR_SCALES[tonic as usize % 12].as_ref(),
         }
     }
-}
-
-fn is_black(pitch: u8) -> bool {
-    matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
 }
 
 fn chromatic_finger(hand: Hand, pitch: u8) -> u8 {
@@ -586,7 +583,7 @@ mod tests {
                     }
                     let pitch = (tonic + mode.degrees()[degree]) % 12;
                     assert!(
-                        !on_hand::keyboard::is_black(60 + pitch),
+                        !is_black(60 + pitch),
                         "{hand:?} puts the thumb on a black key in the {mode:?} scale on {tonic}"
                     );
                 }

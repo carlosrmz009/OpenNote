@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::playability::CHORD_SECONDS;
 use on_hand::{Finger, Hand};
 use on_score::{NoteId, Score};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -19,8 +20,6 @@ const LEAST_WEIGHT: f32 = 0.5;
 const LEAST_CONFIDENCE: f32 = 0.05;
 
 const TOGETHER_SECONDS: f64 = 0.01;
-
-const CHORD_SECONDS: f64 = 0.03;
 
 const PASSAGE: usize = 6;
 
