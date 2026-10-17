@@ -43,7 +43,7 @@ pub fn run(args: PlayArgs) -> Result<()> {
             Some(args.input),
         ),
         None => {
-            println!("space: play/pause   arrows: seek and speed   L: loop");
+            println!("space: play/pause   arrows: seek and speed   L: loop   F1: all the shortcuts");
             on_viz::run(performance, settings, Some(args.input))
         }
     }

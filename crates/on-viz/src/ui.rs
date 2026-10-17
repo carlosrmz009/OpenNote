@@ -17,11 +17,12 @@ pub struct Session {
     pub path: Option<PathBuf>,
     pub message: String,
     task: Option<Task>,
+    help: bool,
 }
 
 impl Session {
     pub fn new(settings: SessionSettings, path: Option<PathBuf>) -> Self {
-        Self { settings, path, message: String::new(), task: None }
+        Self { settings, path, message: String::new(), task: None, help: false }
     }
 
     fn busy(&self) -> bool {
@@ -224,6 +225,13 @@ fn draw_menus(
                     }
                 });
 
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard shortcuts    F1").clicked() {
+                        session.help = !session.help;
+                        ui.close();
+                    }
+                });
+
                 ui.separator();
                 let title = performance.timeline.title.clone().unwrap_or_else(|| "no score open".into());
                 ui.label(egui::RichText::new(title).strong());
@@ -305,6 +313,28 @@ fn draw_menus(
         });
     });
     inset.bottom = bottom.response.rect.height();
+
+    if ctx.input(|i| i.key_pressed(egui::Key::F1) || i.key_pressed(egui::Key::Questionmark)) {
+        session.help = !session.help;
+    }
+    if session.help {
+        let mut open = true;
+        egui::Window::new("Keyboard shortcuts")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(&ctx, |ui| {
+                egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
+                    for (keys, what) in crate::SHORTCUTS {
+                        ui.label(egui::RichText::new(*keys).monospace().strong());
+                        ui.label(*what);
+                        ui.end_row();
+                    }
+                });
+            });
+        session.help = open;
+    }
 
     if let Some(target) = jump {
         transport.seek_to(target);

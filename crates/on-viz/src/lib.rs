@@ -31,3 +31,15 @@ pub use session::SessionSettings;
 pub use timeline::{HandAnimator, KeyStates, Timeline, TimelineNote};
 #[cfg(feature = "render")]
 pub use ui::Session;
+
+/// The viewer's keyboard shortcuts, as its help window lists them.
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("Space", "play / pause"),
+    ("← →", "back / forward two seconds"),
+    ("Home", "back to the start"),
+    ("↑ ↓", "faster / slower"),
+    ("L", "loop the piece on / off"),
+    ("[ ]", "practise from here / up to here"),
+    ("\\", "play the whole piece again"),
+    ("F1  ?", "this list"),
+];
