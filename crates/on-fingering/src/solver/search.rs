@@ -295,22 +295,22 @@ impl<'a> HandSolver<'a> {
             return self.single_event(&events[0], &all[0], baselines[0]);
         }
 
-        let mut best: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut best: Vec<Vec<f64>> = Vec::with_capacity(n);
         let mut from: Vec<Vec<usize>> = Vec::with_capacity(n);
 
         let (c0, c1) = (all[0].len(), all[1].len());
-        let mut row = vec![f32::INFINITY; c0 * c1];
+        let mut row = vec![f64::INFINITY; c0 * c1];
         for a in 0..c0 {
             let pa = (&events[0], &all[0][a]);
-            let base = self.event_cost(0, &events[0], &all[0][a], baselines[0]);
+            let base = f64::from(self.event_cost(0, &events[0], &all[0][a], baselines[0]));
             for b in 0..c1 {
                 let pb = (&events[1], &all[1][b]);
                 let mut total = base;
-                total += self.event_cost(1, &events[1], &all[1][b], baselines[1]);
-                total += self.move_cost(pa, pb);
-                total += self.window_cost(None, pa, Some(pb));
-                total += self.prior_cost(None, None, pa);
-                total += self.prior_cost(None, Some(pa), pb);
+                total += f64::from(self.event_cost(1, &events[1], &all[1][b], baselines[1]));
+                total += f64::from(self.move_cost(pa, pb));
+                total += f64::from(self.window_cost(None, pa, Some(pb)));
+                total += f64::from(self.prior_cost(None, None, pa));
+                total += f64::from(self.prior_cost(None, Some(pa), pb));
                 row[a * c1 + b] = total;
             }
         }
@@ -321,7 +321,7 @@ impl<'a> HandSolver<'a> {
 
         for i in 2..n {
             let (ca, cb, cc) = (all[i - 2].len(), all[i - 1].len(), all[i].len());
-            let mut row = vec![f32::INFINITY; cb * cc];
+            let mut row = vec![f64::INFINITY; cb * cc];
             let mut back = vec![0usize; cb * cc];
             let here: Vec<f32> = all[i]
                 .iter()
@@ -331,7 +331,7 @@ impl<'a> HandSolver<'a> {
                 let pb = (&events[i - 1], &all[i - 1][b]);
                 for c in 0..cc {
                     let pc = (&events[i], &all[i][c]);
-                    let step = here[c] + self.move_cost(pb, pc);
+                    let step = f64::from(here[c] + self.move_cost(pb, pc));
                     for a in 0..ca {
                         let previous = best[i - 1][a * cb + b];
                         if !previous.is_finite() {
@@ -340,8 +340,8 @@ impl<'a> HandSolver<'a> {
                         let pa = (&events[i - 2], &all[i - 2][a]);
                         let total = previous
                             + step
-                            + self.window_cost(Some(pa), pb, Some(pc))
-                            + self.prior_cost(Some(pa), Some(pb), pc);
+                            + f64::from(self.window_cost(Some(pa), pb, Some(pc)))
+                            + f64::from(self.prior_cost(Some(pa), Some(pb), pc));
                         let slot = b * cc + c;
                         if total < row[slot] {
                             row[slot] = total;
@@ -356,7 +356,7 @@ impl<'a> HandSolver<'a> {
 
         let (cb, cc) = (all[n - 2].len(), all[n - 1].len());
         let mut best_slot = 0;
-        let mut best_cost = f32::INFINITY;
+        let mut best_cost = f64::INFINITY;
         for b in 0..cb {
             for c in 0..cc {
                 let slot = b * cc + c;
@@ -366,7 +366,7 @@ impl<'a> HandSolver<'a> {
                 }
                 let pb = (&events[n - 2], &all[n - 2][b]);
                 let pc = (&events[n - 1], &all[n - 1][c]);
-                let total = base + self.window_cost(Some(pb), pc, None);
+                let total = base + f64::from(self.window_cost(Some(pb), pc, None));
                 if total < best_cost {
                     best_cost = total;
                     best_slot = slot;
@@ -386,7 +386,7 @@ impl<'a> HandSolver<'a> {
             b = a;
         }
 
-        self.assemble(events, &all, &baselines, &chosen, best_cost)
+        self.assemble(events, &all, &baselines, &chosen, best_cost as f32)
     }
 
     pub(crate) fn single_event(&self, event: &Event, candidates: &[Candidate], baseline: f32) -> Solution {
