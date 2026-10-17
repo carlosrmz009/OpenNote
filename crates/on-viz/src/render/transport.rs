@@ -236,3 +236,34 @@ mod clock_tests {
         assert_eq!(follow(1.0, 1.2, 1.0 / 60.0, 1.0, false), 1.2);
     }
 }
+
+/// Which hands the viewer plays. A hand that is not playing is left to the pianist: its
+/// notes still fall, but its keys stay up, its sound is muted and its hand is hidden.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Playing(pub [bool; 2]);
+
+impl Default for Playing {
+    fn default() -> Self {
+        Self([true, true])
+    }
+}
+
+/// The keys down this frame, worked out once for every system that draws them.
+#[derive(Resource, Default)]
+pub(crate) struct Keys(pub(crate) crate::timeline::KeyStates);
+
+pub(crate) fn settle_keys(
+    transport: Res<Transport>,
+    performance: Res<Performance>,
+    playing: Res<Playing>,
+    mut keys: ResMut<Keys>,
+) {
+    keys.0 = performance.timeline.key_depression_for(transport.position, playing.0);
+}
+
+/// Hears only the hands that are playing, again whenever that changes.
+pub(crate) fn mute_hands(playing: Res<Playing>, performance: Res<Performance>, audio: Res<Audio>) {
+    if playing.is_changed() && !playing.is_added() {
+        audio.load(performance.timeline.audio_notes_for(playing.0));
+    }
+}

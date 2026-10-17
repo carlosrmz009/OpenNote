@@ -131,10 +131,9 @@ pub(crate) fn setup_flashes(
 pub(crate) struct FlashColours(pub(crate) [[Handle<StandardMaterial>; 2]; 2]);
 
 pub(crate) fn raise_flashes(
-    transport: Res<Transport>,
-    performance: Res<Performance>,
     colours: Res<FlashColours>,
     visuals: Res<Visuals>,
+    keys: Res<Keys>,
     flashes: Query<(&Flash, &mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     if !visuals.effects {
@@ -145,7 +144,7 @@ pub(crate) fn raise_flashes(
         }
         return;
     }
-    let states = performance.timeline.key_depression(transport.position);
+    let states = &keys.0;
     for (flash, mut transform, mut visibility, mut material) in flashes {
         let depth = states.depth_of(flash.midi);
         let Some(hand) = states.hand_on(flash.midi).filter(|_| depth > 0.0) else {
@@ -186,13 +185,13 @@ pub(crate) fn setup_note_lights(mut commands: Commands) {
 }
 
 pub(crate) fn light_struck_keys(
-    transport: Res<Transport>,
     performance: Res<Performance>,
     note_colours: Res<NoteColours>,
+    keys: Res<Keys>,
     lights: Query<(&mut PointLight, &mut Transform, &mut Visibility), With<NoteLight>>,
 ) {
     let layout = &performance.layout;
-    let states = performance.timeline.key_depression(transport.position);
+    let states = &keys.0;
     let offset = Vec3::Y * KEYBOARD_Y_MM;
 
     let mut sounding: Vec<(f32, u8, Hand)> = layout
@@ -230,6 +229,7 @@ pub(crate) fn update_sparks(
     performance: Res<Performance>,
     colours: Res<SparkColours>,
     visuals: Res<Visuals>,
+    playing: Res<Playing>,
     sparks: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial3d<StandardMaterial>), With<Spark>>,
 ) {
     if !visuals.effects {
@@ -246,6 +246,9 @@ pub(crate) fn update_sparks(
     let stagger = SPARK_LIFE / SPARKS_PER_NOTE as f32;
 
     for (index, note) in performance.timeline.notes.iter().enumerate() {
+        if !playing.0[note.hand as usize] {
+            continue;
+        }
         let done = (note.end + f64::from(SPARK_TAIL_SECONDS)).min(note.restruck.unwrap_or(f64::INFINITY));
         if now < note.start || now >= done {
             continue;

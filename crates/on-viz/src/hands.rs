@@ -643,8 +643,10 @@ fn hand_frame(
 pub fn pose_hands(
     transport: Res<Transport>,
     performance: Res<Performance>,
+    playing: Res<crate::render::Playing>,
     rigs: Query<(Entity, &HandRig)>,
     mut transforms: Query<&mut Transform>,
+    mut visibility: Query<&mut Visibility>,
 ) {
     let offset = Vec3::Y * KEYBOARD_Y_MM;
     let poses = crate::timeline::pose_both_decided(
@@ -654,7 +656,11 @@ pub fn pose_hands(
     );
 
     for (root, rig) in &rigs {
-        if rig.digits.is_empty() {
+        let shown = playing.0[rig.hand as usize];
+        if let Ok(mut visibility) = visibility.get_mut(root) {
+            visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        }
+        if rig.digits.is_empty() || !shown {
             continue;
         }
         let animator = &performance.animators[rig.hand as usize];

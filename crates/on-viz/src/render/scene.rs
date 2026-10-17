@@ -288,13 +288,12 @@ pub(crate) fn move_notes(
 }
 
 pub(crate) fn press_keys(
-    transport: Res<Transport>,
-    performance: Res<Performance>,
     note_colours: Res<NoteColours>,
+    down: Res<Keys>,
     mut materials: ResMut<Assets<Lacquered>>,
     keys: Query<(&KeyTop, &mut Transform, &MeshMaterial3d<Lacquered>)>,
 ) {
-    let states = performance.timeline.key_depression(transport.position);
+    let states = &down.0;
     for (key, mut transform, material) in keys {
         let depth = states.depth_of(key.midi);
         let black = is_black(key.midi);

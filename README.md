@@ -100,7 +100,9 @@ In the viewer:
 | [ / ] | practise from here / up to here |
 | \\ | play the whole piece again |
 
-The transport bar marks a section to practise (A and B) and sets the speed. The menus
+The transport bar marks a section to practise (A and B) and sets the speed, and
+Playback > Hands played leaves one hand to you: its notes still fall, but it is not
+played or heard. The menus
 open other scores, change the hand size, the sound and the view, and export the video or
 the fingered score.
 

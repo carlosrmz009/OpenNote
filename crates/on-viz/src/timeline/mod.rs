@@ -127,9 +127,15 @@ const REST_MARGIN_SECONDS: f64 = 0.5;
 
 impl Timeline {
     pub fn audio_notes(&self) -> Vec<on_audio::Note> {
+        self.audio_notes_for([true, true])
+    }
+
+    /// What is heard, counting only the hands that are playing.
+    pub fn audio_notes_for(&self, playing: [bool; 2]) -> Vec<on_audio::Note> {
         const RELEASE_GAP: f64 = 0.012;
         self.notes
             .iter()
+            .filter(|note| playing[note.hand as usize])
             .map(|note| on_audio::Note {
                 midi: note.midi,
                 start: note.start,
@@ -345,8 +351,13 @@ impl Timeline {
     }
 
     pub fn key_depression(&self, time: f64) -> KeyStates {
+        self.key_depression_for(time, [true, true])
+    }
+
+    /// The keys down at a moment, counting only the hands that are playing.
+    pub fn key_depression_for(&self, time: f64, playing: [bool; 2]) -> KeyStates {
         let mut states = KeyStates::default();
-        for note in &self.notes {
+        for note in self.notes.iter().filter(|note| playing[note.hand as usize]) {
             if time < note.key_moves || time > note.key_rises + KEY_RELEASE_SECONDS {
                 continue;
             }

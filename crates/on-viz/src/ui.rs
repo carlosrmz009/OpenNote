@@ -80,6 +80,7 @@ fn draw_menus(
     performance: Res<Performance>,
     audio: Res<Audio>,
     mut visuals: ResMut<crate::render::Visuals>,
+    mut playing: ResMut<crate::render::Playing>,
     diagnostics: Res<DiagnosticsStore>,
     capture: Option<Res<Capture>>,
     mut exit: MessageWriter<AppExit>,
@@ -140,6 +141,17 @@ fn draw_menus(
                         ui.close();
                     }
                     ui.checkbox(&mut transport.looping, "Loop");
+                    ui.separator();
+                    ui.label("Hands played");
+                    for (hands, label) in [
+                        ([true, true], "Both"),
+                        ([true, false], "Left only: you play the right"),
+                        ([false, true], "Right only: you play the left"),
+                    ] {
+                        if ui.radio(playing.0 == hands, label).clicked() {
+                            playing.set_if_neq(crate::render::Playing(hands));
+                        }
+                    }
                     ui.separator();
                     ui.label("Speed");
                     for (label, speed) in [("Half", 0.5), ("Three quarters", 0.75), ("Full", 1.0)] {
@@ -583,7 +595,7 @@ fn apply_reload(world: &mut World) {
         session.path = Some(path);
     }
 
-    let notes = performance.timeline.audio_notes();
+    let notes = performance.timeline.audio_notes_for(world.resource::<crate::render::Playing>().0);
     {
         let audio = world.resource::<Audio>();
         audio.load(notes);

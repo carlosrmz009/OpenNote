@@ -288,6 +288,8 @@ impl Plugin for VisualizerPlugin {
             .init_resource::<ViewportInset>()
             .init_resource::<NoteColours>()
             .init_resource::<Visuals>()
+            .init_resource::<Playing>()
+            .init_resource::<Keys>()
             .add_plugins(crate::hands::HandsPlugin)
             .add_plugins(MaterialPlugin::<NoteMaterial>::default())
             .add_plugins(MaterialPlugin::<Lacquered>::default())
@@ -300,6 +302,8 @@ impl Plugin for VisualizerPlugin {
                 (
                     advance_transport,
                     handle_input,
+                    settle_keys,
+                    mute_hands,
                     recolour_sparks,
                     apply_visuals,
                     (
