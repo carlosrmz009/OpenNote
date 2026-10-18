@@ -84,6 +84,13 @@ impl Updates {
     }
 }
 
+impl Updates {
+    /// Whether a popup about an update is on screen.
+    pub(crate) fn busy(&self) -> bool {
+        !matches!(*self.0.lock().unwrap(), Phase::Idle | Phase::Checking)
+    }
+}
+
 /// Checks once as the viewer opens, unless told not to.
 pub(crate) fn check_on_start(updates: Res<Updates>, capture: Option<Res<crate::render::Capture>>) {
     if capture.is_none() && std::env::var_os("OPENNOTE_NO_UPDATE_CHECK").is_none() {
@@ -163,7 +170,7 @@ pub(crate) fn show(ctx: &egui::Context, updates: &Updates, exit: &mut MessageWri
     }
 }
 
-fn window(ctx: &egui::Context) -> egui::Window<'static> {
+pub(crate) fn window(ctx: &egui::Context) -> egui::Window<'static> {
     // Dims everything behind it, so the popup is the one thing to answer.
     let screen = ctx.viewport_rect();
     ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("update-dim"))).rect_filled(

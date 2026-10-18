@@ -18,6 +18,8 @@ mod seekbar;
 #[cfg(feature = "render")]
 pub mod session;
 #[cfg(feature = "render")]
+mod shortcuts;
+#[cfg(feature = "render")]
 pub mod skin;
 pub mod timeline;
 #[cfg(feature = "render")]

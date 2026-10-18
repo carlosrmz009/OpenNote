@@ -53,7 +53,7 @@ by a registered developer:
 - **Windows:** "Windows protected your PC" > **More info** > **Run anyway**.
 - **Mac:** right-click (or Control-click) **OpenNote** in Applications > **Open** > **Open**.
   After that it opens normally.
-- **Linux:** if the AppImage will not start, install FUSE (`sudo apt install libfuse2`), or run
+- **Linux:** the first time you open the AppImage, OpenNote offers to add itself to your applications menu, with an optional desktop icon. If the AppImage will not start, install FUSE (`sudo apt install libfuse2`), or run
   it with `--appimage-extract-and-run`.
 
 ### Using it
