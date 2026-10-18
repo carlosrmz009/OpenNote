@@ -33,16 +33,16 @@ Six pieces played by `helios-beta1.8`, in [`showcases/`](showcases/).
 
 ### Download (recommended)
 
-Get the installer for your computer from the
-[latest release](https://github.com/carlosrmz009/OpenNote/releases/latest). Nothing else
+Get the installer for your computer. These links always give the newest version, and
+[all releases](https://github.com/carlosrmz009/OpenNote/releases) are kept. Nothing else
 needs installing.
 
 | You have | Download | Then |
 |---|---|---|
-| **Windows** 10 or 11 | `OpenNote-…-windows-setup.exe` | Double-click it and follow the steps. Open **OpenNote** from the Start menu. |
-| **Mac** with an Apple chip (M1 or later) | `OpenNote-…-macos-arm64.dmg` | Open it and drag **OpenNote** onto **Applications**. |
-| **Mac** with an Intel chip | `OpenNote-…-macos-intel.dmg` | The same. |
-| **Linux** | `OpenNote-…-linux-x86_64.AppImage` | Make it executable (right-click > Properties > "Allow executing as a program", or `chmod +x`) and double-click it. |
+| **Windows** 10 or 11 | [OpenNote-windows-setup.exe](https://github.com/carlosrmz009/OpenNote/releases/latest/download/OpenNote-windows-setup.exe) | Double-click it and follow the steps. Open **OpenNote** from the Start menu. |
+| **Mac** with an Apple chip (M1 or later) | [OpenNote-macos-arm64.dmg](https://github.com/carlosrmz009/OpenNote/releases/latest/download/OpenNote-macos-arm64.dmg) | Open it and drag **OpenNote** onto **Applications**. |
+| **Mac** with an Intel chip | [OpenNote-macos-intel.dmg](https://github.com/carlosrmz009/OpenNote/releases/latest/download/OpenNote-macos-intel.dmg) | The same. |
+| **Linux** | [OpenNote-linux-x86_64.AppImage](https://github.com/carlosrmz009/OpenNote/releases/latest/download/OpenNote-linux-x86_64.AppImage) | Make it executable (right-click > Properties > "Allow executing as a program", or `chmod +x`) and double-click it. |
 
 Not sure which Mac you have? Apple menu > About This Mac: "Chip: Apple…" is the first row
 above, "Processor: Intel…" the second.

@@ -1,12 +1,23 @@
 # Making a release
 
-1. Set `version` in the workspace `Cargo.toml`, commit, and push to `main` once CI is green.
-2. Tag it and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The **Release** workflow builds the Windows installer, a disk image for each kind of Mac, and
-   a Linux AppImage, and attaches them, with their checksums, to a new GitHub Release.
+A release is made by changing the version.
 
-To try the packaging without publishing anything, run the **Release** workflow by hand from the
-Actions tab; the installers are attached to that run instead.
+1. Set `version` in the workspace `Cargo.toml` (`[workspace.package]`), commit, and push to `main`.
+2. The **Release** workflow notices a version it has not released yet. It builds the Windows
+   installer, a disk image for each kind of Mac and a Linux AppImage, then creates the tag
+   `vX.Y.Z` and the GitHub Release with the installers and `SHA256SUMS.txt` attached, and marks
+   it **Latest**. This takes about 45 minutes.
+3. Pushing other changes to `Cargo.toml` (dependencies, say) does nothing: that version is
+   already released.
+
+The installers have no version in their names, so `releases/latest/download/OpenNote-windows-setup.exe`
+(and the other three, see the README) always points at the newest. Older releases stay under
+**Releases**.
+
+You can also create a release by hand with a tag like `v1.2.3`; the tag must match `Cargo.toml`, or
+the workflow stops, because the app compares its own version with the release's. To try the
+packaging without publishing anything, run the **Release** workflow from the Actions tab; the
+installers are attached to that run instead.
 
 ## The trained model
 
@@ -30,8 +41,9 @@ workflow as secrets.
 The viewer looks at this repository's releases when it opens, and offers an update when:
 
 - a release tagged `vX.Y.Z` is newer than the running version and has the installer for the
-  user's system plus `SHA256SUMS.txt` (the workflow attaches both; the app refuses a download
-  whose checksum does not match); or
+  user's system (its name ends in `-windows-setup.exe`, `-macos-arm64.dmg`, `-macos-intel.dmg` or
+  `-linux-x86_64.AppImage`) plus `SHA256SUMS.txt`. The app refuses a download whose checksum does
+  not match; or
 - the `models` release holds a model of the same family and a higher number than the one in
   use (`helios-beta1.9.onm` over `helios-beta1.8`). Publish those with `opennote models seal`.
 

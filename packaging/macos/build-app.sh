@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds OpenNote.app and a disk image from a release binary. Run on macOS.
 #   packaging/macos/build-app.sh VERSION ARCH   (ARCH: arm64 or intel; names the dmg)
-# Expects target/release/opennote. Writes out/OpenNote-VERSION-macos-ARCH.dmg.
+# Expects target/release/opennote. Writes out/OpenNote-macos-ARCH.dmg.
 set -euo pipefail
 version="${1:?version}"
 arch="${2:?arch}"
@@ -63,4 +63,4 @@ mkdir -p "$staging"
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname "OpenNote" -srcfolder "$staging" -ov -format UDZO \
-  "$root/out/OpenNote-${version}-macos-${arch}.dmg"
+  "$root/out/OpenNote-macos-${arch}.dmg"

@@ -2,7 +2,7 @@
 # Builds a single-file AppImage from a release binary. Run on Linux, ideally on an old
 # distribution (the workflow uses Ubuntu 22.04) so it starts on newer ones too.
 #   packaging/linux/build-appimage.sh VERSION
-# Expects target/release/opennote. Writes out/OpenNote-VERSION-linux-x86_64.AppImage.
+# Expects target/release/opennote. Writes out/OpenNote-linux-x86_64.AppImage.
 set -euo pipefail
 version="${1:?version}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -40,4 +40,4 @@ curl -fsSL -o "$tool" \
 chmod +x "$tool"
 # The runner has no FUSE, so the tool unpacks itself instead of mounting.
 ARCH=x86_64 "$tool" --appimage-extract-and-run "$appdir" \
-  "$root/out/OpenNote-${version}-linux-x86_64.AppImage"
+  "$root/out/OpenNote-linux-x86_64.AppImage"
