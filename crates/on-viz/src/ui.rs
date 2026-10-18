@@ -249,7 +249,11 @@ fn draw_menus(
                     // changed every frame, and the camera would be rebuilt every frame.
                     let mut wanted = *visuals;
                     ui.checkbox(&mut wanted.effects, "Sparks, flashes and glow");
-                    ui.checkbox(&mut wanted.high_quality, "Shadows and smooth edges (slower)");
+                    ui.checkbox(&mut wanted.high_quality, "Shadows (slower)");
+                    ui.checkbox(
+                        &mut wanted.ambient_shading,
+                        "Soft contact shading (can blur and shimmer in motion)",
+                    );
                     visuals.set_if_neq(wanted);
                     ui.separator();
                     ui.label("Hand colours");

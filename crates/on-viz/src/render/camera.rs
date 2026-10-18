@@ -26,9 +26,9 @@ pub(crate) fn setup_camera(mut commands: Commands, performance: Res<Performance>
             max_mip_dimension: 512,
             ..bevy::post_process::bloom::Bloom::NATURAL
         },
-        bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
-        bevy::anti_alias::taa::TemporalAntiAliasing::default(),
-        Msaa::Off,
+        // Sharp and steady in motion. Ambient shading (see `Visuals`) is a choice, because
+        // the temporal anti-aliasing it needs smears and shimmers whatever moves.
+        Msaa::Sample4,
     ));
 
     commands.spawn((
@@ -136,17 +136,20 @@ pub(crate) fn fit_camera_viewport(
 pub(crate) struct KeyLight;
 
 /// How much the viewer draws. Effects are the sparks, flashes and bloom, which some find
-/// too busy; low quality drops the screen-space ambient occlusion, temporal anti-aliasing
-/// and shadows that a modest graphics card struggles with.
+/// too busy; `high_quality` is the shadows, which a modest graphics card struggles with.
+/// Ambient shading adds contact darkening with screen-space ambient occlusion, which only
+/// looks clean with temporal anti-aliasing, and that blurs and shimmers whatever moves, so
+/// it is off unless asked for.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Visuals {
     pub effects: bool,
     pub high_quality: bool,
+    pub ambient_shading: bool,
 }
 
 impl Default for Visuals {
     fn default() -> Self {
-        Self { effects: true, high_quality: true }
+        Self { effects: true, high_quality: true, ambient_shading: false }
     }
 }
 
@@ -162,7 +165,7 @@ pub(crate) fn apply_visuals(
     for (camera, mut bloom) in cameras {
         bloom.intensity = if visuals.effects { BLOOM_INTENSITY } else { 0.0 };
         let mut camera = commands.entity(camera);
-        if visuals.high_quality {
+        if visuals.ambient_shading {
             camera.insert((
                 bevy::pbr::ScreenSpaceAmbientOcclusion::default(),
                 bevy::anti_alias::taa::TemporalAntiAliasing::default(),
