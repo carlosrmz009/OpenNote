@@ -24,5 +24,8 @@ rfd = { version = "0.17", optional = true }
 default = ["render"]
 render = ["dep:bevy", "dep:bevy_egui", "dep:rfd", "dep:image", "on-audio/playback"]
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

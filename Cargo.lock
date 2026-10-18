@@ -4796,6 +4796,7 @@ dependencies = [
  "on-hand",
  "on-score",
  "rfd",
+ "tempfile",
  "tracing",
 ]
 
