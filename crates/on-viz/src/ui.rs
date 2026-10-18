@@ -48,6 +48,8 @@ impl Plugin for MenuPlugin {
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .init_resource::<crate::updates::Updates>()
             .init_resource::<crate::shortcuts::Shortcuts>()
+            .init_resource::<crate::welcome::Welcome>()
+            .add_systems(Startup, crate::welcome::first_run)
             .add_systems(Startup, crate::updates::check_on_start)
             .add_systems(EguiPrimaryContextPass, draw_menus)
             .add_systems(Update, (finish_tasks, apply_reload).chain());
@@ -88,6 +90,7 @@ fn draw_menus(
     capture: Option<Res<Capture>>,
     updates: Res<crate::updates::Updates>,
     shortcuts: Res<crate::shortcuts::Shortcuts>,
+    welcome: Res<crate::welcome::Welcome>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
@@ -272,6 +275,10 @@ fn draw_menus(
                 });
 
                 ui.menu_button("Help", |ui| {
+                    if ui.button("Welcome").clicked() {
+                        welcome.reopen();
+                        ui.close();
+                    }
                     if ui.button("Check for updates…").clicked() {
                         updates.check(true);
                         ui.close();
@@ -368,10 +375,13 @@ fn draw_menus(
     });
     inset.bottom = bottom.response.rect.height();
 
-    crate::updates::show(&ctx, &updates, &mut exit);
-    crate::shortcuts::show(&ctx, &shortcuts, updates.busy());
+    crate::welcome::show(&ctx, &welcome);
+    if !welcome.open() {
+        crate::updates::show(&ctx, &updates, &mut exit);
+        crate::shortcuts::show(&ctx, &shortcuts, updates.busy());
+    }
 
-    if session.path.is_none() {
+    if session.path.is_none() && !welcome.open() {
         start_screen(&ctx, &mut session);
     }
 

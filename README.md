@@ -58,6 +58,8 @@ by a registered developer:
 
 ### Using it
 
+The first time you open OpenNote, a short welcome shows how it works. It comes back from **Help > Welcome**.
+
 1. Open OpenNote.
 2. Press **Select piece…** and choose a MusicXML (`.musicxml`, `.mxl`) or MIDI (`.mid`) file.
    Free scores can be found on [MuseScore](https://musescore.com) (download as MusicXML) and

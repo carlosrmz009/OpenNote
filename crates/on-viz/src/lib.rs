@@ -26,6 +26,8 @@ pub mod timeline;
 pub mod ui;
 #[cfg(feature = "render")]
 pub mod updates;
+#[cfg(feature = "render")]
+mod welcome;
 
 #[cfg(feature = "render")]
 pub use export::{export, VideoOptions};
