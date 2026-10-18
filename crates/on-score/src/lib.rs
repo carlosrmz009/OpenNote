@@ -287,18 +287,55 @@ pub enum Document {
     Midi(Box<MidiDocument>),
 }
 
+/// A reader for a score format this crate does not parse itself: it turns the file into a
+/// standard MIDI file, which is then read as one.
+pub type Importer = fn(&std::path::Path) -> anyhow::Result<Vec<u8>>;
+
+static IMPORTERS: std::sync::Mutex<Vec<(&'static [&'static str], Importer)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Teaches [`Document::open`] to read files with these extensions, through `import`.
+pub fn register_importer(extensions: &'static [&'static str], import: Importer) {
+    IMPORTERS.lock().unwrap().push((extensions, import));
+}
+
 impl Document {
-    pub const EXTENSIONS: [&'static str; 5] = ["musicxml", "mxl", "xml", "mid", "midi"];
+    /// The extensions this crate reads itself.
+    pub const EXTENSIONS: [&'static str; 6] = ["musicxml", "mxl", "xml", "mid", "midi", "kar"];
+
+    /// Every extension that can be opened now: the built-in ones, and those of any readers
+    /// added with [`register_importer`].
+    pub fn extensions() -> Vec<&'static str> {
+        let mut all = Self::EXTENSIONS.to_vec();
+        for (extensions, _) in IMPORTERS.lock().unwrap().iter() {
+            all.extend(extensions.iter().copied());
+        }
+        all
+    }
 
     pub fn open(path: &std::path::Path) -> anyhow::Result<Self> {
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "musicxml" | "xml" | "mxl" => Ok(Document::MusicXml(Box::new(MusicXmlDocument::read(path)?))),
-            "mid" | "midi" => Ok(Document::Midi(Box::new(MidiDocument::read(path)?))),
-            other => anyhow::bail!(
-                "do not know how to read {other:?} files; \
-                 give a .musicxml, .mxl, .xml, .mid or .midi file"
-            ),
+            "mid" | "midi" | "kar" => Ok(Document::Midi(Box::new(MidiDocument::read(path)?))),
+            other => {
+                let import = IMPORTERS
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(extensions, _)| extensions.contains(&other))
+                    .map(|(_, import)| *import);
+                match import {
+                    Some(import) => {
+                        let midi = import(path)?;
+                        Ok(Document::Midi(Box::new(MidiDocument::from_bytes(midi)?)))
+                    }
+                    None => anyhow::bail!(
+                        "do not know how to read {other:?} files; give one of: {}",
+                        Self::extensions().iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")
+                    ),
+                }
+            }
         }
     }
 

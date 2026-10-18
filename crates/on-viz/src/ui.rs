@@ -559,7 +559,7 @@ fn choose_score(session: &mut Session) {
     std::thread::spawn(move || {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open a score")
-            .add_filter("Scores", &on_score::Document::EXTENSIONS)
+            .add_filter("Scores", &on_score::Document::extensions())
             .add_filter("All files", &["*"]);
         if let Some(directory) = start {
             dialog = dialog.set_directory(directory);

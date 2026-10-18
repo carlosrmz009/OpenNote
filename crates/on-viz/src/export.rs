@@ -16,11 +16,14 @@ use crate::render::{default_plugins, Audio, Performance, Transport, VisualizerPl
 
 const TAIL_SECONDS: f64 = 2.0;
 
-/// How long the "Made with OpenNote" card is shown, fades included.
-pub const INTRO_SECONDS: f64 = 2.6;
+/// How long the "Made with OpenNote" card is on screen at full strength, from the first frame.
+pub const INTRO_HOLD_SECONDS: f64 = 2.0;
 
-/// The card's fade in and fade out.
-const INTRO_FADE_SECONDS: f64 = 0.55;
+/// How long it then takes to fade away.
+const INTRO_FADE_SECONDS: f64 = 0.5;
+
+/// The whole intro: the card, then its fade. The piece and its sound begin after this.
+pub const INTRO_SECONDS: f64 = INTRO_HOLD_SECONDS + INTRO_FADE_SECONDS;
 
 /// The colour the stage starts from, so the card fades into the piece without a flash.
 const INTRO_BACKGROUND: [u8; 3] = [0x0D, 0x0E, 0x12];
@@ -418,20 +421,17 @@ impl IntroCard {
         frame
     }
 
-    /// Every frame of the intro: the card fading in, held, and fading out.
+    /// Every frame of the intro: the card at full strength, then fading out.
     fn frames(&self, fps: u32) -> impl Iterator<Item = Vec<u8>> + '_ {
         let count = (INTRO_SECONDS * f64::from(fps)).round() as u32;
         (0..count).map(move |index| self.frame(fade(f64::from(index) / f64::from(fps))))
     }
 }
 
-/// How visible the card is `seconds` into the intro: smooth in, steady, smooth out.
+/// How visible the card is `seconds` into the intro: fully, for the hold, then smoothly less.
 fn fade(seconds: f64) -> f64 {
-    let smooth = |t: f64| {
-        let t = t.clamp(0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
-    };
-    smooth(seconds / INTRO_FADE_SECONDS).min(smooth((INTRO_SECONDS - seconds) / INTRO_FADE_SECONDS))
+    let t = ((seconds - INTRO_HOLD_SECONDS) / INTRO_FADE_SECONDS).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
 }
 
 #[cfg(test)]
@@ -439,11 +439,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_card_fades_in_holds_and_fades_out() {
-        assert!(fade(0.0) < 0.01);
-        assert!((fade(INTRO_SECONDS / 2.0) - 1.0).abs() < 1e-9);
-        assert!(fade(INTRO_SECONDS - 0.01) < 0.05);
-        assert!(fade(0.2) > fade(0.1), "rising");
+    fn the_card_is_there_from_the_first_frame_for_two_seconds_and_then_fades() {
+        assert_eq!(fade(0.0), 1.0, "no fade in: it appears with the video");
+        assert_eq!(fade(INTRO_HOLD_SECONDS - 0.01), 1.0, "solid for the whole two seconds");
+        assert!(fade(INTRO_HOLD_SECONDS + INTRO_FADE_SECONDS / 2.0) < 0.6, "fading");
+        assert!(fade(INTRO_HOLD_SECONDS + 0.1) > fade(INTRO_HOLD_SECONDS + 0.3), "ever fainter");
+        assert!(fade(INTRO_SECONDS) < 0.001, "gone when the piece starts");
     }
 
     #[test]
@@ -477,7 +478,7 @@ mod tests {
     #[test]
     fn the_soundtrack_waits_for_the_intro_only_when_there_is_one() {
         let mut options = VideoOptions::default();
-        assert_eq!(intro_delay_filter(&options), vec!["-af".to_string(), "adelay=2600:all=1".to_string()]);
+        assert_eq!(intro_delay_filter(&options), vec!["-af".to_string(), "adelay=2500:all=1".to_string()]);
         options.intro = false;
         assert!(intro_delay_filter(&options).is_empty());
     }

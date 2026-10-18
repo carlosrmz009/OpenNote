@@ -329,6 +329,7 @@ fn main() -> Result<()> {
     if std::env::args_os().len() <= 1 {
         leave_the_console_if_alone();
     }
+    on_engrave::register_importers();
     let cli = Cli::parse();
     // Debug output from OpenNote's own crates; a dependency's debug output, Bevy's above all,
     // drowns it. RUST_LOG still overrides this.

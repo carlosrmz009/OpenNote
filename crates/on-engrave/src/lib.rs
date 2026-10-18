@@ -276,3 +276,35 @@ mod tests {
         );
     }
 }
+
+/// The score formats Verovio reads that OpenNote can use through it: ABC notation, Humdrum
+/// (`**kern`), MEI and Plaine & Easie.
+pub const IMPORTED: &[&str] = &["abc", "krn", "kern", "hum", "mei", "pae"];
+
+/// Makes [`on_score::Document::open`] read [`IMPORTED`] files.
+pub fn register_importers() {
+    on_score::register_importer(IMPORTED, to_midi);
+}
+
+/// Reads a score Verovio understands and returns it as a standard MIDI file. The notes and
+/// their hands (one track for each staff) come through; fingerings written in the source do not.
+pub fn to_midi(path: &Path) -> Result<Vec<u8>> {
+    let mut toolkit = verovioxide::Toolkit::new().map_err(|error| anyhow!("starting Verovio: {error}"))?;
+    toolkit.load_file(path).map_err(|error| anyhow!("Verovio could not read {}: {error}", path.display()))?;
+    let scratch =
+        std::env::temp_dir().join(format!("opennote-import-{}-{}.mid", std::process::id(), next_scratch()));
+    let written = toolkit.render_to_midi_file(&scratch);
+    let bytes = std::fs::read(&scratch);
+    let _ = std::fs::remove_file(&scratch);
+    written.map_err(|error| anyhow!("Verovio could not turn {} into notes: {error}", path.display()))?;
+    let bytes = bytes.with_context(|| format!("reading the notes Verovio made from {}", path.display()))?;
+    if bytes.len() < 22 {
+        bail!("{} has no notes in it", path.display());
+    }
+    Ok(bytes)
+}
+
+fn next_scratch() -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
