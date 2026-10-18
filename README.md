@@ -73,6 +73,13 @@ or use the mouse wheel. To practise a passage, press **A** at its start and **B*
 end (or right-click the bar), then drag the A and B flags to fine-tune it; it repeats until
 you press **Clear**.
 
+### Updates
+
+When a newer OpenNote or a newer model has been published, a popup appears as the app
+opens. Press the yellow **Update!** button: it downloads the update, checks it, installs it
+and restarts. **Not now** keeps what you have, and **Help > Check for updates…** asks again.
+Set `OPENNOTE_NO_UPDATE_CHECK=1` to stop it looking.
+
 ### Build from source
 
 Only needed to change OpenNote, or if there is no installer for your system.

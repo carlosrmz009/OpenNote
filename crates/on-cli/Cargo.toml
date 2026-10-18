@@ -21,10 +21,14 @@ on-engrave.workspace = true
 on-viz = { workspace = true, features = ["render"] }
 anyhow.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4"
 clap_mangen = "0.2"
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

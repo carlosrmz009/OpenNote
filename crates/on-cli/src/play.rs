@@ -45,6 +45,7 @@ pub fn launch(score: Option<PathBuf>) -> Result<()> {
 }
 
 pub fn run(args: PlayArgs) -> Result<()> {
+    on_viz::updates::register(crate::update::GitHub);
     let settings = args.scene.settings(&args.model)?;
     let Some(input) = args.input else {
         let performance = on_viz::session::empty(&settings);

@@ -70,9 +70,14 @@ fn unseal(path: &Path) -> Result<String> {
         .with_context(|| format!("{} is damaged, or was sealed for another build", path.display()))
 }
 
-fn curl(args: &[&str]) -> Result<Vec<u8>> {
+pub(crate) fn curl(args: &[&str]) -> Result<Vec<u8>> {
+    curl_for(600, args)
+}
+
+/// Like [`curl`], for a download that may take longer than `seconds` allows by default.
+pub(crate) fn curl_for(seconds: u32, args: &[&str]) -> Result<Vec<u8>> {
     let out = Command::new("curl")
-        .args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "--max-time", "600"])
+        .args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "--max-time", &seconds.to_string()])
         .args(args)
         .output()
         .context("running curl")?;
@@ -95,6 +100,48 @@ fn published() -> Result<Vec<String>> {
         .collect();
     names.dedup();
     Ok(names)
+}
+
+/// Downloads a published model into the models folder and checks that this build can open it.
+pub(crate) fn fetch(name: &str) -> Result<PathBuf> {
+    ensure!(name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)), "not a model name: {name}");
+    std::fs::create_dir_all(dir())?;
+    let path = dir().join(format!("{name}.onm"));
+    let partial = dir().join(format!("{name}.onm.part"));
+    let url = format!("https://github.com/{REPO}/releases/download/{TAG}/{name}.onm");
+    let fetched = curl(&["-o", &partial.to_string_lossy(), &url])
+        .with_context(|| format!("downloading {name}"))
+        .and_then(|_| {
+            unseal(&partial).with_context(|| format!("{name} downloaded, but this build cannot open it"))
+        });
+    if let Err(error) = fetched {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
+    }
+    std::fs::rename(&partial, &path).with_context(|| format!("moving the download to {}", path.display()))?;
+    Ok(path)
+}
+
+/// Remembers which downloaded model to use when none is asked for.
+pub(crate) fn make_active(name: &str) -> Result<()> {
+    std::fs::write(dir().join("active.txt"), name).context("remembering the new model")
+}
+
+/// The downloaded model chosen by an update, if it can still be opened.
+pub(crate) fn active() -> Option<(String, String)> {
+    let name = std::fs::read_to_string(dir().join("active.txt")).ok()?.trim().to_string();
+    let text = open(&name).ok().flatten()?;
+    Some((name, text))
+}
+
+/// Whether this build can open published models at all.
+pub(crate) fn can_open_published() -> bool {
+    RELEASE_KEY.is_some()
+}
+
+/// The names of the models published on GitHub.
+pub(crate) fn published_names() -> Result<Vec<String>> {
+    published()
 }
 
 pub fn run(args: ModelsArgs) -> Result<()> {
@@ -123,26 +170,7 @@ pub fn run(args: ModelsArgs) -> Result<()> {
             println!("downloaded models are kept in {}", dir().display());
         }
         ModelsCommand::Get { name } => {
-            ensure!(
-                name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
-                "not a model name: {name}"
-            );
-            std::fs::create_dir_all(dir())?;
-            let path = dir().join(format!("{name}.onm"));
-            let partial = dir().join(format!("{name}.onm.part"));
-            let url = format!("https://github.com/{REPO}/releases/download/{TAG}/{name}.onm");
-            let fetched = curl(&["-o", &partial.to_string_lossy(), &url])
-                .with_context(|| format!("downloading {name}"))
-                .and_then(|_| {
-                    unseal(&partial)
-                        .with_context(|| format!("{name} downloaded, but this build cannot open it"))
-                });
-            if let Err(error) = fetched {
-                let _ = std::fs::remove_file(&partial);
-                return Err(error);
-            }
-            std::fs::rename(&partial, &path)
-                .with_context(|| format!("moving the download to {}", path.display()))?;
+            let path = fetch(&name)?;
             println!("{name} -> {}\nuse it with: opennote <command> --model {name}", path.display());
         }
         ModelsCommand::Seal { model, out } => {

@@ -46,6 +46,8 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .init_resource::<crate::updates::Updates>()
+            .add_systems(Startup, crate::updates::check_on_start)
             .add_systems(EguiPrimaryContextPass, draw_menus)
             .add_systems(Update, (finish_tasks, apply_reload).chain());
     }
@@ -83,6 +85,7 @@ fn draw_menus(
     mut playing: ResMut<crate::render::Playing>,
     diagnostics: Res<DiagnosticsStore>,
     capture: Option<Res<Capture>>,
+    updates: Res<crate::updates::Updates>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
@@ -263,6 +266,10 @@ fn draw_menus(
                 });
 
                 ui.menu_button("Help", |ui| {
+                    if ui.button("Check for updates…").clicked() {
+                        updates.check(true);
+                        ui.close();
+                    }
                     if ui.button("Keyboard shortcuts    F1").clicked() {
                         session.help = !session.help;
                         ui.close();
@@ -354,6 +361,8 @@ fn draw_menus(
         });
     });
     inset.bottom = bottom.response.rect.height();
+
+    crate::updates::show(&ctx, &updates, &mut exit);
 
     if session.path.is_none() {
         start_screen(&ctx, &mut session);

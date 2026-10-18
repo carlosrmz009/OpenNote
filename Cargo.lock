@@ -4715,6 +4715,8 @@ dependencies = [
  "on-train",
  "on-viz",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tracing-subscriber",
 ]
 

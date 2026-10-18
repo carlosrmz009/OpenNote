@@ -12,6 +12,7 @@ mod play;
 mod render;
 mod scene;
 mod seal;
+mod update;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -177,7 +178,7 @@ impl ModelArgs {
     pub fn prior(&self) -> Result<Option<std::sync::Arc<on_fingering::NgramPrior>>> {
         let text = match &self.model {
             Some(model) => models::resolve(model)?,
-            None => built_in()?,
+            None => update::preferred_model()?,
         };
         let Some(text) = text else { return Ok(None) };
         let mut prior = on_fingering::NgramPrior::from_json(&text).context("reading the model")?;
@@ -214,7 +215,7 @@ pub struct Fingered {
     pub options: FingeringOptions,
 }
 
-fn built_in() -> Result<Option<String>> {
+pub(crate) fn built_in() -> Result<Option<String>> {
     const SEALED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.bin"));
     if SEALED.is_empty() {
         return Ok(None);

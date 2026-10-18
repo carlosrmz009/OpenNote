@@ -22,6 +22,8 @@ pub mod skin;
 pub mod timeline;
 #[cfg(feature = "render")]
 pub mod ui;
+#[cfg(feature = "render")]
+pub mod updates;
 
 #[cfg(feature = "render")]
 pub use export::{export, VideoOptions};

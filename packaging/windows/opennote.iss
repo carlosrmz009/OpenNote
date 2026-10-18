@@ -52,4 +52,4 @@ Root: HKA; Subkey: "Software\Classes\.mid\OpenWithProgids"; ValueType: string; V
 Root: HKA; Subkey: "Software\Classes\.midi\OpenWithProgids"; ValueType: string; ValueName: "OpenNote.Score"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associate
 
 [Run]
-Filename: "{app}\opennote.exe"; Description: "Start OpenNote"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\opennote.exe"; Description: "Start OpenNote"; Flags: nowait postinstall
