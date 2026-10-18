@@ -96,9 +96,9 @@ pub fn shell(mesh: &Mesh, on_the_arm: &[bool], frame: &HandFrame) -> Option<Mesh
         .collect();
 
     let mut keep = Vec::new();
-    for triangle in indices.chunks_exact(3) {
+    for triangle in indices.as_chunks::<3>().0 {
         if triangle.iter().all(|i| covered[*i as usize]) {
-            keep.extend_from_slice(triangle);
+            keep.extend_from_slice(triangle.as_slice());
         }
     }
     if keep.is_empty() {

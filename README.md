@@ -32,7 +32,50 @@ Six pieces played by `helios-beta1.8`, in [`showcases/`](showcases/).
 
 ## Install
 
+### Download (recommended)
+
+Get the installer for your computer from the
+[latest release](https://github.com/carlosrmz009/OpenNote/releases/latest). Nothing else
+needs installing.
+
+| You have | Download | Then |
+|---|---|---|
+| **Windows** 10 or 11 | `OpenNote-…-windows-setup.exe` | Double-click it and follow the steps. Open **OpenNote** from the Start menu. |
+| **Mac** with an Apple chip (M1 or later) | `OpenNote-…-macos-arm64.dmg` | Open it and drag **OpenNote** onto **Applications**. |
+| **Mac** with an Intel chip | `OpenNote-…-macos-intel.dmg` | The same. |
+| **Linux** | `OpenNote-…-linux-x86_64.AppImage` | Make it executable (right-click > Properties > "Allow executing as a program", or `chmod +x`) and double-click it. |
+
+Not sure which Mac you have? Apple menu > About This Mac: "Chip: Apple…" is the first row
+above, "Processor: Intel…" the second.
+
+The first time you open it, your computer may warn you, because the installers are not signed
+by a registered developer:
+
+- **Windows:** "Windows protected your PC" > **More info** > **Run anyway**.
+- **Mac:** right-click (or Control-click) **OpenNote** in Applications > **Open** > **Open**.
+  After that it opens normally.
+- **Linux:** if the AppImage will not start, install FUSE (`sudo apt install libfuse2`), or run
+  it with `--appimage-extract-and-run`.
+
+### Using it
+
+1. Open OpenNote.
+2. Press **Select piece…** and choose a MusicXML (`.musicxml`, `.mxl`) or MIDI (`.mid`) file.
+   Free scores can be found on [MuseScore](https://musescore.com) (download as MusicXML) and
+   [IMSLP](https://imslp.org).
+3. Watch the hands play it, with the finger numbers on the notes.
+
+Before you choose a piece you can pick a colour for each hand's notes, and how
+**expressive** the playing should be (a beta: it shapes timing and touch rather than
+playing exactly as written). The bar along the bottom is the progress of the piece:
+click or drag anywhere on it to jump there, hold **Shift** while dragging to move slowly,
+or use the mouse wheel. To practise a passage, press **A** at its start and **B** at its
+end (or right-click the bar), then drag the A and B flags to fine-tune it; it repeats until
+you press **Clear**.
+
 ### Build from source
+
+Only needed to change OpenNote, or if there is no installer for your system.
 
 You need:
 - **Rust:** 1.95 or later for the whole program. The engine crates alone build on 1.85.
@@ -52,7 +95,8 @@ Then:
 
 ```sh
 cargo build --release
-./target/release/opennote --help
+./target/release/opennote          # the viewer, which asks for a piece
+./target/release/opennote --help   # everything it can do
 ```
 
 A build from a clone has no trained model built in, so it fingers with the rules and the
@@ -77,7 +121,8 @@ opennote annotate scores/*.musicxml
 # Why each note got its finger; only the close calls.
 opennote explain samples/fur-elise.musicxml --close-calls
 
-# Watch it played, with falling notes and 3D hands.
+# Open the viewer and choose a piece, or give it one.
+opennote
 opennote play samples/fur-elise.musicxml
 
 # The same, as a video.
@@ -100,6 +145,7 @@ In the viewer:
 | , / . | pause and step back / on a note |
 | [ / ] | practise from here / up to here |
 | \\ | play the whole piece again |
+| F1 or ? | all of these |
 
 The transport bar marks a section to practise (A and B) and sets the speed, and
 Playback > Hands played leaves one hand to you: its notes still fall, but it is not

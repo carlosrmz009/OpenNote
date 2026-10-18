@@ -11,8 +11,8 @@ use crate::ModelArgs;
 /// Play a score with falling notes and 3D hands.
 #[derive(Debug, Args)]
 pub struct PlayArgs {
-    /// The score to read.
-    pub input: PathBuf,
+    /// The score to read. Without one, the viewer opens and asks for it.
+    pub input: Option<PathBuf>,
 
     /// Instead of playing, save a single frame to this image and exit.
     #[arg(long)]
@@ -34,19 +34,41 @@ pub struct PlayArgs {
     pub model: ModelArgs,
 }
 
+/// Opens the viewer with every option at its default, on `score` if there is one. This is
+/// what starting `opennote` with no command does, as a double-click does.
+pub fn launch(score: Option<PathBuf>) -> Result<()> {
+    use clap::FromArgMatches;
+    let matches = PlayArgs::augment_args(clap::Command::new("play")).get_matches_from(["play"]);
+    let mut args = PlayArgs::from_arg_matches(&matches)?;
+    args.input = score;
+    run(args)
+}
+
 pub fn run(args: PlayArgs) -> Result<()> {
     let settings = args.scene.settings(&args.model)?;
-    let performance = scene::build(&args.input, &settings)?;
+    let Some(input) = args.input else {
+        let performance = on_viz::session::empty(&settings);
+        return match args.screenshot {
+            Some(path) => on_viz::capture(
+                performance,
+                on_viz::Capture { at: args.at, path, warmup: args.warmup },
+                settings,
+                None,
+            ),
+            None => on_viz::run(performance, settings, None),
+        };
+    };
+    let performance = scene::build(&input, &settings)?;
     match args.screenshot {
         Some(path) => on_viz::capture(
             performance,
             on_viz::Capture { at: args.at, path, warmup: args.warmup },
             settings,
-            Some(args.input),
+            Some(input),
         ),
         None => {
             println!("space: play/pause   arrows: seek and speed   L: loop   F1: all the shortcuts");
-            on_viz::run(performance, settings, Some(args.input))
+            on_viz::run(performance, settings, Some(input))
         }
     }
 }

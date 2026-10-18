@@ -1,0 +1,144 @@
+name: Release
+
+# Builds the installers for Windows, macOS and Linux.
+#   - Push a tag like v0.2.0 to build them and publish them as a GitHub Release.
+#   - Or run it by hand from the Actions tab to build them without publishing; the
+#     installers are then attached to the run.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS (Apple silicon)
+            os: macos-15
+            arch: arm64
+          - name: macOS (Intel)
+            os: macos-15-intel
+            arch: intel
+          - name: Linux
+            os: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "number=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache the compiled Verovio library
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry/src/target/verovio-cache
+          key: verovio-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+
+      # The trained model is not in the repository. Without it the installers still work,
+      # and finger with the rules and the hand model alone. To include it, store it as the
+      # secret OPENNOTE_MODEL (the JSON itself, if it is under the 48 KB a secret can hold),
+      # or put it somewhere private and set OPENNOTE_MODEL_URL (and OPENNOTE_MODEL_TOKEN, if
+      # the place needs one).
+      - name: Trained model
+        shell: bash
+        env:
+          MODEL: ${{ secrets.OPENNOTE_MODEL }}
+          MODEL_URL: ${{ secrets.OPENNOTE_MODEL_URL }}
+          MODEL_TOKEN: ${{ secrets.OPENNOTE_MODEL_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/model"
+          target="$RUNNER_TEMP/model/helios-beta1.8.json"
+          if [[ -n "$MODEL" ]]; then
+            printf '%s' "$MODEL" > "$target"
+          elif [[ -n "$MODEL_URL" ]]; then
+            auth=()
+            [[ -n "$MODEL_TOKEN" ]] && auth=(-H "Authorization: Bearer $MODEL_TOKEN")
+            curl -fsSL "${auth[@]}" -H "Accept: application/octet-stream" -o "$target" "$MODEL_URL"
+          fi
+          if [[ -s "$target" ]]; then
+            echo "OPENNOTE_MODEL=$target" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No trained model was provided, so these installers use the rules only."
+          fi
+
+      - name: Build
+        shell: bash
+        env:
+          OPENNOTE_RELEASE_KEY: ${{ secrets.OPENNOTE_RELEASE_KEY }}
+        run: cargo build --release --locked -p on-cli
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dist = "dist/opennote"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item target/release/opennote.exe $dist
+          Copy-Item -Recurse assets "$dist/assets"
+          Copy-Item LICENSE, LICENSES.md, NOTICE.md, packaging/icon.ico $dist
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue)?.Source ?? "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.version.outputs.number }}" "/DSourceDir=$PWD\$dist" "/DOutputDir=$PWD\out" packaging/windows/opennote.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Disk image (macOS)
+        if: runner.os == 'macOS'
+        run: packaging/macos/build-app.sh "${{ steps.version.outputs.number }}" "${{ matrix.arch }}"
+
+      - name: AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: packaging/linux/build-appimage.sh "${{ steps.version.outputs.number }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ runner.os }}-${{ matrix.arch || 'x64' }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: installers
+          merge-multiple: true
+      - name: Checksums
+        run: cd installers && sha256sum * > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          generate_release_notes: true

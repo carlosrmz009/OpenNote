@@ -21,10 +21,14 @@ use on_hand::{HandProfile, HandSize};
 
 /// Work out piano fingerings and write them onto the score.
 #[derive(Debug, Parser)]
-#[command(name = "opennote", version, about, long_about = None)]
+#[command(name = "opennote", version, about, long_about = None, args_conflicts_with_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+
+    /// A score to open in the viewer. With no score and no command, the viewer opens
+    /// and asks for one.
+    score: Option<std::path::PathBuf>,
 
     /// Print more about what is happening.
     #[arg(long, short, global = true, conflicts_with = "quiet")]
@@ -299,7 +303,28 @@ impl From<RuleSetArg> for RuleSet {
     }
 }
 
+/// Started by double-clicking on Windows, there is a console window nobody asked for;
+/// close it. Started from a terminal, it is shared with the shell and stays.
+#[cfg(windows)]
+fn leave_the_console_if_alone() {
+    extern "system" {
+        fn GetConsoleProcessList(list: *mut u32, count: u32) -> u32;
+        fn FreeConsole() -> i32;
+    }
+    let mut list = [0u32; 2];
+    // SAFETY: both are plain Win32 calls; `list` holds the two entries asked for.
+    unsafe {
+        if GetConsoleProcessList(list.as_mut_ptr(), 2) <= 1 {
+            FreeConsole();
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    if std::env::args_os().len() <= 1 {
+        leave_the_console_if_alone();
+    }
     let cli = Cli::parse();
     // Debug output from OpenNote's own crates; a dependency's debug output, Bevy's above all,
     // drowns it. RUST_LOG still overrides this.
@@ -316,7 +341,10 @@ fn main() -> Result<()> {
         .without_time()
         .init();
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        return play::launch(cli.score);
+    };
+    match command {
         Command::Annotate(args) => annotate::run(args),
         Command::Explain(args) => explain::run(args),
         Command::Play(args) => play::run(args),

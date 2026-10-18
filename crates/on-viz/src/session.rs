@@ -75,6 +75,19 @@ pub fn open(path: &Path, settings: &SessionSettings) -> Result<Performance> {
     Ok(Performance::new(timeline, layout, settings.fingering.profile.clone(), assets, hands, soundfont))
 }
 
+/// What the viewer shows before a piece is chosen: the keyboard and the hands, with nothing
+/// to play.
+pub fn empty(settings: &SessionSettings) -> Performance {
+    let score = on_score::Score::default();
+    let timeline = Timeline::build_for(&score, &[], &settings.fingering.profile);
+    let mut layout = Layout::for_pitches(std::iter::empty(), settings.extent);
+    layout.lookahead = settings.lookahead.max(0.5);
+    let assets = settings.assets_root.clone();
+    let hands = hands_available(&assets);
+    let soundfont = settings.soundfont.clone().or_else(|| on_audio::sampled::find(&assets));
+    Performance::new(timeline, layout, settings.fingering.profile.clone(), assets, hands, soundfont)
+}
+
 pub fn hands_available(assets: &Path) -> bool {
     ["hand-left.glb", "hand-right.glb"].iter().all(|name| assets.join("hands").join(name).exists())
 }
@@ -88,6 +101,12 @@ pub fn assets_root(candidate: Option<PathBuf>) -> Result<PathBuf> {
     let mut tried = vec![PathBuf::from("assets")];
     if let Ok(exe) = std::env::current_exe() {
         tried.extend(exe.ancestors().skip(1).take(4).map(|directory| directory.join("assets")));
+        // Installed: a macOS app keeps them in Contents/Resources, and an AppImage or a
+        // Linux package in share/opennote next to bin.
+        if let Some(directory) = exe.parent() {
+            tried.push(directory.join("../Resources/assets"));
+            tried.push(directory.join("../share/opennote/assets"));
+        }
     }
     for path in &tried {
         if let Ok(found) = std::fs::canonicalize(path) {

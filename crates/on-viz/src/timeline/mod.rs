@@ -94,6 +94,8 @@ pub struct Timeline {
     pub duration: f64,
     pub title: Option<String>,
     pub style: MotionStyle,
+    /// Where each bar starts, in seconds.
+    pub bars: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -204,7 +206,8 @@ impl Timeline {
 
         let duration = notes.iter().map(|n| n.end).fold(0.0, f64::max);
 
-        Self { notes, grips, duration, title: score.title.clone(), style: MotionStyle::default() }
+        let bars = score.marks.measures.iter().map(|tick| score.tempo.seconds_at(*tick)).collect();
+        Self { notes, grips, duration, title: score.title.clone(), style: MotionStyle::default(), bars }
     }
 
     pub fn animators(

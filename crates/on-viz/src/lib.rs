@@ -14,6 +14,8 @@ pub mod motion;
 pub mod render;
 pub mod rig;
 #[cfg(feature = "render")]
+mod seekbar;
+#[cfg(feature = "render")]
 pub mod session;
 #[cfg(feature = "render")]
 pub mod skin;

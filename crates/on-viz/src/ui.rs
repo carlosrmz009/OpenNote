@@ -200,7 +200,7 @@ fn draw_menus(
                     }
                 });
 
-                ui.menu_button("Expression", |ui| {
+                ui.menu_button("Expressiveness (BETA)", |ui| {
                     ui.label("Mood");
                     for mood in on_score::expression::Mood::ALL {
                         let picked = session.settings.mood.name == mood.name;
@@ -248,6 +248,9 @@ fn draw_menus(
                     visuals.set_if_neq(wanted);
                     ui.separator();
                     ui.label("Hand colours");
+                    if hand_colour_pickers(ui, &mut session) {
+                        reload.relayout = true;
+                    }
                     for (colours, label) in [
                         (crate::render::HAND_COLOURS, "Red and cyan"),
                         (crate::render::CLEAR_HAND_COLOURS, "Orange and blue, for colour blindness"),
@@ -293,6 +296,18 @@ fn draw_menus(
     inset.top = top.response.rect.height();
 
     let bottom = egui::Panel::bottom("transport").show(&mut root, |ui| {
+        let duration = performance.timeline.duration.max(0.001);
+        let sought = crate::seekbar::show(
+            ui,
+            transport.position.clamp(0.0, duration),
+            duration,
+            &performance.timeline.bars,
+            &mut transport.section,
+            0.0,
+        );
+        if let Some(target) = sought.seek {
+            jump = Some(target);
+        }
         ui.horizontal(|ui| {
             let label = if transport.playing { "⏸" } else { "▶" };
             if ui.button(label).clicked() {
@@ -301,14 +316,6 @@ fn draw_menus(
             }
             if ui.button("⏮").clicked() {
                 jump = Some(crate::render::LEAD_IN);
-            }
-
-            let duration = performance.timeline.duration.max(0.001);
-            let mut position = transport.position.clamp(0.0, duration);
-            ui.spacing_mut().slider_width = (ui.available_width() - 340.0).max(80.0);
-            let slider = ui.add(egui::Slider::new(&mut position, 0.0..=duration).show_value(false));
-            if slider.changed() {
-                jump = Some(position);
             }
             ui.label(format!("{} / {}", clock(transport.position.max(0.0)), clock(duration)));
 
@@ -324,7 +331,7 @@ fn draw_menus(
                 Some((start, end)) => {
                     let end = if end.is_finite() { clock(end) } else { "end".to_string() };
                     ui.label(format!("{}–{end}", clock(start.max(0.0))));
-                    if ui.button("✕").on_hover_text("Play the whole piece  \\").clicked() {
+                    if ui.button("Clear").on_hover_text("Play the whole piece  \\").clicked() {
                         transport.section = None;
                     }
                 }
@@ -347,6 +354,10 @@ fn draw_menus(
         });
     });
     inset.bottom = bottom.response.rect.height();
+
+    if session.path.is_none() {
+        start_screen(&ctx, &mut session);
+    }
 
     if ctx.input(|i| i.key_pressed(egui::Key::F1) || i.key_pressed(egui::Key::Questionmark)) {
         session.help = !session.help;
@@ -383,6 +394,91 @@ fn draw_menus(
     Ok(())
 }
 
+fn to_egui(colour: Color) -> egui::Color32 {
+    let rgba = colour.to_srgba();
+    let byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+    egui::Color32::from_rgb(byte(rgba.red), byte(rgba.green), byte(rgba.blue))
+}
+
+fn from_egui(colour: egui::Color32) -> Color {
+    Color::srgb_u8(colour.r(), colour.g(), colour.b())
+}
+
+/// One colour button for each hand's notes, left first. Returns whether either changed.
+fn hand_colour_pickers(ui: &mut egui::Ui, session: &mut Session) -> bool {
+    let mut changed = false;
+    for (index, label) in ["Left hand notes", "Right hand notes"].into_iter().enumerate() {
+        ui.horizontal(|ui| {
+            let mut colour = to_egui(session.settings.note_colours[index]);
+            if ui.color_edit_button_srgba(&mut colour).changed() {
+                session.settings.note_colours[index] = from_egui(colour);
+                changed = true;
+            }
+            ui.label(label);
+        });
+    }
+    changed
+}
+
+/// The "Expressiveness (BETA)" choice. Returns whether it changed.
+fn expressiveness_picker(ui: &mut egui::Ui, session: &mut Session) -> bool {
+    let current = EXPRESSION_STEPS
+        .iter()
+        .find(|(amount, _)| (session.settings.expression - amount).abs() < 1e-3)
+        .map_or("Custom", |(_, label)| *label);
+    let mut changed = false;
+    egui::ComboBox::from_label(egui::RichText::new("Expressiveness (BETA)"))
+        .selected_text(current)
+        .width(220.0)
+        .show_ui(ui, |ui| {
+            for (amount, label) in EXPRESSION_STEPS {
+                let picked = (session.settings.expression - amount).abs() < 1e-3;
+                if ui.selectable_label(picked, label).clicked() && !picked {
+                    session.settings.expression = amount;
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+/// The first thing seen when no piece is open: choose one, and the few settings that
+/// matter to someone who just wants to watch a piece.
+fn start_screen(ctx: &egui::Context, session: &mut Session) {
+    egui::Window::new("OpenNote")
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+        .show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.vertical_centered(|ui| {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("OpenNote").size(28.0).strong());
+                ui.label("Pick a piece to see it played, with the fingering shown on the hands.");
+                ui.add_space(14.0);
+                let pick = egui::Button::new(egui::RichText::new("Select piece…").size(20.0))
+                    .min_size(egui::vec2(280.0, 54.0));
+                if ui.add_enabled(!session.busy(), pick).clicked() {
+                    choose_score(session);
+                }
+                ui.add_space(4.0);
+                ui.weak("MusicXML (.musicxml, .mxl, .xml) or MIDI (.mid)");
+                ui.add_space(14.0);
+            });
+            ui.separator();
+            ui.add_space(6.0);
+            hand_colour_pickers(ui, session);
+            ui.add_space(6.0);
+            expressiveness_picker(ui, session);
+            ui.add_space(6.0);
+            if !session.message.is_empty() {
+                ui.separator();
+                ui.colored_label(ui.visuals().warn_fg_color, session.message.clone());
+            }
+        });
+}
+
 const EXPRESSION_STEPS: [(f32, &str); 5] = [
     (0.0, "None: exactly as written"),
     (0.5, "A little"),
@@ -390,6 +486,12 @@ const EXPRESSION_STEPS: [(f32, &str); 5] = [
     (1.5, "A lot"),
     (2.0, "As much as possible"),
 ];
+
+/// A time to a tenth of a second, for the tooltip on the progress bar.
+pub(crate) fn clock_precise(seconds: f64) -> String {
+    let tenths = (seconds.max(0.0) * 10.0).round() as u64;
+    format!("{}:{:02}.{}", tenths / 600, tenths / 10 % 60, tenths % 10)
+}
 
 fn clock(seconds: f64) -> String {
     let whole = seconds.max(0.0) as u64;

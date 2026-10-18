@@ -35,8 +35,10 @@ fn check(file: &str) {
         std::fs::write(&snapshot, &found).unwrap();
         return;
     }
+    // A Windows checkout may have turned the snapshot's newlines into CRLF.
     let expected = std::fs::read_to_string(&snapshot)
-        .unwrap_or_else(|_| panic!("no snapshot at {}; run with UPDATE_SNAPSHOTS=1", snapshot.display()));
+        .unwrap_or_else(|_| panic!("no snapshot at {}; run with UPDATE_SNAPSHOTS=1", snapshot.display()))
+        .replace("\r\n", "\n");
     if found != expected {
         let changed: Vec<String> = expected
             .lines()

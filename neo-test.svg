@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="230" fill="#0e1018"/>
+  <rect x="250" y="150" width="120" height="370" rx="30" fill="#d90303"/>
+  <rect x="560" y="90" width="120" height="310" rx="30" fill="#0ce0ff"/>
+  <rect x="405" y="260" width="120" height="300" rx="30" fill="#d90303"/>
+  <g fill="#f6f2e6">
+    <rect x="116" y="600" width="116" height="300" rx="26"/>
+    <rect x="248" y="600" width="116" height="300" rx="26"/>
+    <rect x="380" y="600" width="116" height="300" rx="26"/>
+    <rect x="512" y="600" width="116" height="300" rx="26"/>
+    <rect x="644" y="600" width="116" height="300" rx="26"/>
+    <rect x="776" y="600" width="116" height="300" rx="26"/>
+    <rect x="908" y="600" width="0" height="300" rx="26"/>
+  </g>
+  <g fill="#18181e">
+    <rect x="206" y="600" width="84" height="180" rx="20"/>
+    <rect x="338" y="600" width="84" height="180" rx="20"/>
+    <rect x="602" y="600" width="84" height="180" rx="20"/>
+    <rect x="734" y="600" width="84" height="180" rx="20"/>
+  </g>
+</svg>

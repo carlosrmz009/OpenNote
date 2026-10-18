@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png binary
+*.glb binary
+*.mp4 binary
+*.onm binary
+*.sf2 binary
+*.ttf binary
