@@ -8,7 +8,6 @@ OpenNote works out piano fingerings for a score and writes them back onto it. It
 also play the piece with falling notes and two animated 3D hands, render that as a video,
 and engrave the fingered score as a PDF.
 
-A fun project that aims to test out the capabilities of opus 5 ;)
 
 ## How it fingers a piece
 
