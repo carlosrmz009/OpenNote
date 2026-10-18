@@ -40,9 +40,22 @@ pub struct RenderArgs {
     #[arg(long, default_value_t = 18, value_parser = clap::value_parser!(u8).range(0..=51))]
     pub crf: u8,
 
-    /// The ffmpeg executable, if it is not on PATH.
+    /// The ffmpeg executable, if it is not on PATH. Without it, OpenNote looks for one
+    /// in the usual places and in the folder `opennote ffmpeg install` fills.
     #[arg(long, default_value = "ffmpeg")]
     pub ffmpeg: PathBuf,
+
+    /// Leave out the "Made with OpenNote" card at the start.
+    #[arg(long)]
+    pub no_intro: bool,
+
+    /// Start the video this many seconds into the piece.
+    #[arg(long, value_parser = crate::between(0.0, 36_000.0))]
+    pub from: Option<f64>,
+
+    /// End the video this many seconds into the piece.
+    #[arg(long, value_parser = crate::between(0.0, 36_000.0))]
+    pub to: Option<f64>,
 
     #[command(flatten)]
     pub scene: SceneArgs,
@@ -52,6 +65,9 @@ pub struct RenderArgs {
 }
 
 pub fn run(args: RenderArgs) -> Result<()> {
+    let Some(ffmpeg) = crate::ffmpeg::find(&args.ffmpeg) else {
+        anyhow::bail!("{}", crate::ffmpeg::missing_help());
+    };
     let settings = args.scene.settings(&args.model)?;
     let performance = scene::build(&args.input, &settings)?;
     on_viz::export(
@@ -62,9 +78,12 @@ pub fn run(args: RenderArgs) -> Result<()> {
             height: args.height,
             fps: args.fps,
             speed: args.speed,
-            ffmpeg: args.ffmpeg,
+            ffmpeg,
             crf: args.crf,
             note_colours: settings.note_colours,
+            intro: !args.no_intro,
+            from: args.from,
+            to: args.to,
         },
     )
 }

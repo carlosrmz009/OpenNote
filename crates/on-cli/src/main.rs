@@ -6,6 +6,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod annotate;
 mod explain;
+mod ffmpeg;
 mod learn;
 mod models;
 mod play;
@@ -64,6 +65,8 @@ enum Command {
     Benchmark(learn::BenchmarkArgs),
     /// Older models published on GitHub: list them, download one.
     Models(models::ModelsArgs),
+    /// The helper that makes videos: check for it, or download it.
+    Ffmpeg(ffmpeg::FfmpegArgs),
     /// Teach the search to finger like the pianists in the corpus: the rules propose,
     /// what is learned decides between them.
     Rerank(learn::RerankArgs),
@@ -357,6 +360,7 @@ fn main() -> Result<()> {
         Command::Bench(args) => learn::bench(args),
         Command::Benchmark(args) => learn::benchmark(args),
         Command::Models(args) => models::run(args),
+        Command::Ffmpeg(args) => ffmpeg::run(args),
         Command::Rerank(args) => learn::rerank(args),
         Command::Completions { shell } => {
             use clap::CommandFactory;

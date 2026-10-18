@@ -27,6 +27,8 @@ pub mod ui;
 #[cfg(feature = "render")]
 pub mod updates;
 #[cfg(feature = "render")]
+mod videos;
+#[cfg(feature = "render")]
 mod welcome;
 
 #[cfg(feature = "render")]

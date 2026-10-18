@@ -47,6 +47,7 @@ impl Plugin for MenuPlugin {
         app.add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .init_resource::<crate::updates::Updates>()
+            .init_resource::<crate::videos::Videos>()
             .init_resource::<crate::shortcuts::Shortcuts>()
             .init_resource::<crate::welcome::Welcome>()
             .add_systems(Startup, crate::welcome::first_run)
@@ -90,6 +91,7 @@ fn draw_menus(
     capture: Option<Res<Capture>>,
     updates: Res<crate::updates::Updates>,
     shortcuts: Res<crate::shortcuts::Shortcuts>,
+    videos: Res<crate::videos::Videos>,
     welcome: Res<crate::welcome::Welcome>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
@@ -119,9 +121,8 @@ fn draw_menus(
                         ui.close();
                     }
                     ui.separator();
-                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Export video…")).clicked()
-                    {
-                        export_video(&mut session);
+                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Make video…")).clicked() {
+                        start_video(&videos, &session, &transport, &performance);
                         ui.close();
                     }
                     if ui
@@ -371,6 +372,15 @@ fn draw_menus(
                 transport.speed = speed;
                 speed_changed = true;
             }
+
+            ui.separator();
+            if ui
+                .add_enabled(session.path.is_some(), egui::Button::new("Make video…"))
+                .on_hover_text("Turn this piece into a video you can share")
+                .clicked()
+            {
+                start_video(&videos, &session, &transport, &performance);
+            }
         });
     });
     inset.bottom = bottom.response.rect.height();
@@ -378,6 +388,7 @@ fn draw_menus(
     crate::welcome::show(&ctx, &welcome);
     if !welcome.open() {
         crate::updates::show(&ctx, &updates, &mut exit);
+        crate::videos::show(&ctx, &videos);
         crate::shortcuts::show(&ctx, &shortcuts, updates.busy());
     }
 
@@ -562,30 +573,18 @@ fn choose_score(session: &mut Session) {
     session.task = Some(Task { what: "opening", done, chosen, outcome });
 }
 
-fn export_video(session: &mut Session) {
+/// Opens the "Make a video" dialog for the piece that is open.
+fn start_video(
+    videos: &crate::videos::Videos,
+    session: &Session,
+    transport: &Transport,
+    performance: &Performance,
+) {
     let Some(input) = session.path.clone() else {
         return;
     };
-    let done = Arc::new(AtomicBool::new(false));
-    let outcome = Arc::new(Mutex::new(String::new()));
-    let (finished, report) = (Arc::clone(&done), Arc::clone(&outcome));
-    let suggestion = input.with_extension("mp4");
-    let arguments = command_line("render", &session.settings);
-
-    std::thread::spawn(move || {
-        let chosen = rfd::FileDialog::new()
-            .set_title("Export video")
-            .set_file_name(suggestion.file_name().and_then(|n| n.to_str()).unwrap_or("opennote.mp4"))
-            .add_filter("MP4 video", &["mp4"])
-            .save_file();
-        if let Some(output) = chosen {
-            *report.lock().unwrap() =
-                run_self(&arguments, &input, &output, &format!("exported {}", output.display()));
-        }
-        finished.store(true, Ordering::Release);
-    });
-
-    session.task = Some(Task { what: "exporting", done, chosen: Arc::new(Mutex::new(None)), outcome });
+    let title = performance.timeline.title.clone().unwrap_or_else(|| "this piece".into());
+    videos.start(command_line("render", &session.settings), input, title, transport.section, transport.speed);
 }
 
 fn annotate_score(session: &mut Session) {
