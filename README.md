@@ -11,8 +11,9 @@ and engrave the fingered score as a PDF.
 
 ## How it fingers a piece
 
-1. **Read the score.** MusicXML (`.musicxml`, `.mxl`, `.xml`) or MIDI (`.mid`, `.midi`).
-   Fingerings already written in the score are kept.
+1. **Read the score.** MusicXML (`.musicxml`, `.mxl`, `.xml`), MIDI (`.mid`, `.midi`, `.kar`), or
+   ABC (`.abc`), Humdrum (`.krn`, `.hum`), MEI (`.mei`) and Plaine & Easie (`.pae`) through Verovio.
+   Fingerings already written in a MusicXML score are kept.
 2. **Split it between the hands.** It uses the staves, or two MIDI tracks; failing both,
    it searches for where to split each moment of the piece.
 3. **Search each hand's fingering.** A Viterbi search weighs:
@@ -61,7 +62,8 @@ by a registered developer:
 The first time you open OpenNote, a short welcome shows how it works. It comes back from **Help > Welcome**.
 
 1. Open OpenNote.
-2. Press **Select piece…** and choose a MusicXML (`.musicxml`, `.mxl`) or MIDI (`.mid`) file.
+2. Press **Select piece…** and choose a score: MusicXML (`.musicxml`, `.mxl`), MIDI (`.mid`), ABC (`.abc`),
+   Humdrum (`.krn`) or MEI (`.mei`).
    Free scores can be found on [MuseScore](https://musescore.com) (download as MusicXML) and
    [IMSLP](https://imslp.org).
 3. Watch the hands play it, with the finger numbers on the notes.
@@ -80,6 +82,17 @@ When a newer OpenNote or a newer model has been published, a popup appears as th
 opens. Press the yellow **Update!** button: it downloads the update, checks it, installs it
 and restarts. **Not now** keeps what you have, and **Help > Check for updates…** asks again.
 Set `OPENNOTE_NO_UPDATE_CHECK=1` to stop it looking.
+
+### Making a video
+
+Press **Make video…** on the bar at the bottom (or File > Make video…). Choose the whole piece or
+just your practice section, a quality, and a speed, and press **Make video**. Each video starts with
+a two-second "Made with OpenNote" card, which you can switch off in the same window. When it is
+done, **Play it** or **Show in folder**.
+
+Videos are put together by a free helper, ffmpeg. If your computer does not have it, OpenNote offers
+to download it for you on Windows and Linux. On a Mac, install it once with
+[Homebrew](https://brew.sh): `brew install ffmpeg`.
 
 ### Build from source
 
@@ -133,7 +146,8 @@ opennote explain samples/fur-elise.musicxml --close-calls
 opennote
 opennote play samples/fur-elise.musicxml
 
-# The same, as a video.
+# The same, as a video: add --no-intro to leave out the card at the start, or
+# --from 10 --to 25 for just those seconds.
 opennote render samples/fur-elise.musicxml -o fur-elise.mp4
 ```
 
