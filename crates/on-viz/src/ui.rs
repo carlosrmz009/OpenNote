@@ -264,8 +264,8 @@ fn draw_menus(
                         reload.relayout = true;
                     }
                     for (colours, label) in [
-                        (crate::render::HAND_COLOURS, "Red and cyan"),
-                        (crate::render::CLEAR_HAND_COLOURS, "Orange and blue, for colour blindness"),
+                        (crate::render::HAND_COLOURS, "Blue and yellow"),
+                        (crate::render::CLEAR_HAND_COLOURS, "Orange and sky blue, for colour blindness"),
                     ] {
                         if ui.radio(session.settings.note_colours == colours, label).clicked() {
                             session.settings.note_colours = colours;

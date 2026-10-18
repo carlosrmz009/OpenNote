@@ -50,10 +50,12 @@ pub const LEAD_IN: f64 = -1.0;
 
 pub(crate) const KEYBOARD_Y_MM: f32 = -WHITE_KEY_LENGTH;
 
-pub(crate) const HAND_COLOURS: [Color; 2] = [Color::srgb(0.85, 0.012, 0.012), Color::srgb(0.045, 0.88, 1.0)];
+/// Blue for the left hand and yellow for the right. They stay apart for most kinds of colour
+/// blindness and against the black stage.
+pub(crate) const HAND_COLOURS: [Color; 2] = [Color::srgb(0.10, 0.35, 1.0), Color::srgb(0.96, 0.83, 0.05)];
 
 /// Orange and sky blue from Okabe and Ito's palette, which stay apart for the common kinds
-/// of colour blindness, as red and cyan may not.
+/// of colour blindness, for those who want a warmer pair than the default.
 pub(crate) const CLEAR_HAND_COLOURS: [Color; 2] =
     [Color::srgb(0.90, 0.45, 0.0), Color::srgb(0.34, 0.71, 0.91)];
 
