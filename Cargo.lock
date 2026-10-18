@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "on-audio"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4701,7 +4701,7 @@ dependencies = [
 
 [[package]]
 name = "on-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4722,7 +4722,7 @@ dependencies = [
 
 [[package]]
 name = "on-engrave"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "musicxml",
@@ -4737,7 +4737,7 @@ dependencies = [
 
 [[package]]
 name = "on-fingering"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "glam",
@@ -4751,7 +4751,7 @@ dependencies = [
 
 [[package]]
 name = "on-hand"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "glam",
  "serde",
@@ -4759,7 +4759,7 @@ dependencies = [
 
 [[package]]
 name = "on-score"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "midly",
@@ -4770,7 +4770,7 @@ dependencies = [
 
 [[package]]
 name = "on-train"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "on-fingering",
@@ -4784,7 +4784,7 @@ dependencies = [
 
 [[package]]
 name = "on-viz"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bevy",
