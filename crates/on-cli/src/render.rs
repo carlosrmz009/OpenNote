@@ -40,6 +40,16 @@ pub struct RenderArgs {
     #[arg(long, default_value_t = 18, value_parser = clap::value_parser!(u8).range(0..=51))]
     pub crf: u8,
 
+    /// The ffmpeg video encoder: libx264 on the CPU, or a hardware encoder such as
+    /// h264_nvenc or hevc_nvenc on an NVIDIA card, where --crf is the constant quality level.
+    #[arg(long, default_value = "libx264")]
+    pub codec: String,
+
+    /// An ffmpeg filter for the picture, applied as it is encoded: burnt-in subtitles, say,
+    /// with `subtitles=lines.ass`.
+    #[arg(long)]
+    pub video_filter: Option<String>,
+
     /// The ffmpeg executable, if it is not on PATH. Without it, OpenNote looks for one
     /// in the usual places and in the folder `opennote ffmpeg install` fills.
     #[arg(long, default_value = "ffmpeg")]
@@ -80,6 +90,8 @@ pub fn run(args: RenderArgs) -> Result<()> {
             speed: args.speed,
             ffmpeg,
             crf: args.crf,
+            codec: args.codec,
+            video_filter: args.video_filter,
             note_colours: settings.note_colours,
             intro: !args.no_intro,
             from: args.from,
