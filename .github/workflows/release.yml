@@ -176,6 +176,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      # What is new in this version, if docs/releases/<version>.md says; GitHub adds the changelog.
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          file="docs/releases/${{ needs.plan.outputs.version }}.md"
+          if [[ -f "$file" ]]; then echo "path=$file" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/download-artifact@v4
         with:
           pattern: installer-*
@@ -190,5 +198,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: OpenNote ${{ needs.plan.outputs.version }}
           files: installers/*
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true
           make_latest: true

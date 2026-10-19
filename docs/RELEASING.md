@@ -7,6 +7,8 @@ A release is made by changing the version.
    installer, a disk image for each kind of Mac and a Linux AppImage, then creates the tag
    `vX.Y.Z` and the GitHub Release with the installers and `SHA256SUMS.txt` attached, and marks
    it **Latest**. This takes about 45 minutes.
+2a. To say what is new, write `docs/releases/X.Y.Z.md` first: it becomes the top of the release page, and
+   GitHub adds its changelog below.
 3. Pushing other changes to `Cargo.toml` (dependencies, say) does nothing: that version is
    already released.
 
