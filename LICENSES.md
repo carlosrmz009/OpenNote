@@ -76,6 +76,9 @@ rendered from a sampled instrument is a derivative work is a question for a lawy
 file. `on-audio`'s modelled piano uses no samples and avoids it entirely.
 `assets/soundfont/*.sf2` is gitignored, so a downloaded instrument stays in your working copy.
 
+The interface is set in **Nunito**, under the SIL Open Font License 1.1, whose text is in
+`assets/fonts/OFL-Nunito.txt`. The font files are embedded in the program.
+
 The full dependency tree and its licences: `cargo tree` and `cargo about`.
 
 ## The hand model

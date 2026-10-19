@@ -216,7 +216,10 @@ pub(crate) fn show(ctx: &egui::Context, shortcuts: &Shortcuts, other_popup_open:
         Phase::Offer { desktop } => {
             crate::updates::window(ctx).show(ctx, |ui| {
                 ui.set_width(340.0);
-                ui.label(egui::RichText::new("Add OpenNote to your applications?").size(20.0).strong());
+                ui.label(
+                    egui::RichText::new("Add OpenNote to your applications?")
+                        .font(egui::FontId::new(22.0, crate::theme::display())),
+                );
                 ui.add_space(6.0);
                 ui.label("So you can open it from your applications menu instead of finding this file.");
                 if targets.desktop.is_some() {
@@ -239,7 +242,7 @@ pub(crate) fn show(ctx: &egui::Context, shortcuts: &Shortcuts, other_popup_open:
                             Err(error) => Phase::Message(format!("Could not add it: {error}")),
                         });
                     }
-                    if ui.button("No thanks").clicked() {
+                    if crate::theme::quiet(ui, "No thanks").clicked() {
                         targets.decline();
                         next = Some(Phase::Idle);
                     }

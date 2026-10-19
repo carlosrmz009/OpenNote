@@ -167,19 +167,25 @@ fn paint(
 ) {
     let painter = ui.painter_at(frame);
     let visuals = ui.visuals();
-    let accent = visuals.selection.bg_fill;
+    let accent = crate::theme::GLOVER;
     let text = visuals.text_color();
     let weak = visuals.weak_text_color();
 
-    painter.rect_filled(track, 4.0, visuals.widgets.inactive.bg_fill);
+    painter.rect_filled(track, 6.0, Color32::from_rgb(0x1A, 0x1C, 0x24));
 
     let played = Rect::from_min_max(track.min, Pos2::new(x_of(position), track.bottom()));
-    painter.rect_filled(played, 4.0, accent.gamma_multiply(0.8));
+    painter.rect_filled(played, 6.0, Color32::from_rgba_unmultiplied(0xEF, 0xEB, 0xDD, 56));
 
     if let Some((start, end)) = ends {
         let region =
             Rect::from_min_max(Pos2::new(x_of(start), track.top()), Pos2::new(x_of(end), track.bottom()));
-        painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 40));
+        painter.rect_filled(region, 4.0, accent.gamma_multiply(0.30));
+        for y in [region.top(), region.bottom()] {
+            painter.line_segment(
+                [Pos2::new(region.left(), y), Pos2::new(region.right(), y)],
+                Stroke::new(2.0, accent),
+            );
+        }
     }
 
     let every = stride(bars.len(), track.width(), 7.0);
@@ -219,14 +225,14 @@ fn paint(
                 [Pos2::new(x, frame.top() + 11.0), Pos2::new(x, track.bottom() + 3.0)],
                 Stroke::new(2.0, accent),
             );
-            let tag = Rect::from_center_size(Pos2::new(x, frame.top() + 8.0), Vec2::new(16.0, 14.0));
-            painter.rect_filled(tag, 3.0, accent);
+            let tag = Rect::from_center_size(Pos2::new(x, frame.top() + 8.0), Vec2::new(18.0, 16.0));
+            painter.rect_filled(tag, 4.0, accent);
             painter.text(
                 tag.center(),
                 Align2::CENTER_CENTER,
                 letter,
-                FontId::proportional(11.0),
-                Color32::WHITE,
+                FontId::new(12.0, crate::theme::display()),
+                crate::theme::LACQUER,
             );
         }
     }
@@ -236,7 +242,8 @@ fn paint(
         [Pos2::new(x, track.top() - 3.0), Pos2::new(x, track.bottom() + 2.0)],
         Stroke::new(2.5, text),
     );
-    painter.circle_filled(Pos2::new(x, track.center().y), 5.5, text);
+    painter.circle_filled(Pos2::new(x, track.center().y), 7.0, text);
+    painter.circle_filled(Pos2::new(x, track.center().y), 2.5, Color32::from_rgb(0x0D, 0x0E, 0x12));
 }
 
 #[cfg(test)]

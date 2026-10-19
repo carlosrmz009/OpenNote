@@ -21,6 +21,8 @@ pub mod session;
 mod shortcuts;
 #[cfg(feature = "render")]
 pub mod skin;
+#[cfg(feature = "render")]
+mod theme;
 pub mod timeline;
 #[cfg(feature = "render")]
 pub mod ui;

@@ -302,11 +302,11 @@ fn clock(seconds: f64) -> String {
 }
 
 fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).strong().size(16.0).color(egui::Color32::BLACK))
-            .fill(egui::Color32::from_rgb(255, 205, 0))
-            .min_size(egui::vec2(150.0, 38.0)),
-    )
+    crate::theme::primary(ui, text, egui::vec2(150.0, 40.0))
+}
+
+fn heading(text: &str, size: f32) -> egui::RichText {
+    egui::RichText::new(text).font(egui::FontId::new(size, crate::theme::display()))
 }
 
 /// Draws whichever step the video dialog is on, and moves on when a step finishes.
@@ -328,7 +328,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     }
                     setup.picking = None;
                 }
-                ui.label(egui::RichText::new("Make a video").size(24.0).strong());
+                ui.label(heading("Make a video", 24.0));
                 ui.label(egui::RichText::new(&setup.title).weak());
                 ui.add_space(10.0);
 
@@ -370,7 +370,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     ui.label("Save as");
                     let name = setup.output.file_name().and_then(|n| n.to_str()).unwrap_or("video.mp4");
                     ui.label(egui::RichText::new(name).strong());
-                    if setup.picking.is_none() && ui.button("Choose…").clicked() {
+                    if setup.picking.is_none() && crate::theme::quiet(ui, "Choose…").clicked() {
                         let slot = Arc::new(Mutex::new(None));
                         setup.picking = Some(Arc::clone(&slot));
                         let start = setup.output.clone();
@@ -396,7 +396,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     if primary(ui, "Make video").clicked() {
                         pressed = Some(Press::Go);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if crate::theme::quiet(ui, "Cancel").clicked() {
                         pressed = Some(Press::Cancel);
                     }
                 });
@@ -409,7 +409,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                 let _ = answer;
             }
             Phase::Offer(_) => {
-                ui.label(egui::RichText::new("One thing first").size(22.0).strong());
+                ui.label(heading("One thing first", 22.0));
                 ui.add_space(6.0);
                 ui.label("Videos need a free helper called ffmpeg, and this computer does not have it yet.");
                 ui.label(
@@ -420,7 +420,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     if primary(ui, "Download it").clicked() {
                         pressed = Some(Press::Go);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if crate::theme::quiet(ui, "Cancel").clicked() {
                         pressed = Some(Press::Cancel);
                     }
                 });
@@ -432,7 +432,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                 });
             }
             Phase::ByHand => {
-                ui.label(egui::RichText::new("One thing first").size(22.0).strong());
+                ui.label(heading("One thing first", 22.0));
                 ui.add_space(6.0);
                 ui.label("Videos need a free helper called ffmpeg, and this computer does not have it yet.");
                 if cfg!(target_os = "macos") {
@@ -442,7 +442,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     ui.label("Install ffmpeg with your system's package manager, then try again.");
                 }
                 ui.add_space(12.0);
-                if ui.button("Close").clicked() {
+                if crate::theme::quiet(ui, "Close").clicked() {
                     pressed = Some(Press::Cancel);
                 }
             }
@@ -451,7 +451,7 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     let run = run.lock().unwrap();
                     (run.done, run.total)
                 };
-                ui.label(egui::RichText::new("Making your video").size(22.0).strong());
+                ui.label(heading("Making your video", 22.0));
                 ui.add_space(8.0);
                 let fraction = if total > 0 { done as f32 / total as f32 } else { 0.0 };
                 ui.add(
@@ -468,32 +468,32 @@ pub(crate) fn show(ctx: &egui::Context, videos: &Videos) {
                     .weak(),
                 );
                 ui.add_space(10.0);
-                if ui.button("Cancel").clicked() {
+                if crate::theme::quiet(ui, "Cancel").clicked() {
                     cancel.store(true, Ordering::Relaxed);
                 }
             }
             Phase::Done(path) => {
-                ui.label(egui::RichText::new("Your video is ready").size(24.0).strong());
+                ui.label(heading("Your video is ready", 24.0));
                 ui.label(egui::RichText::new(path.display().to_string()).small().weak());
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Play it").clicked() {
                         open_file(path);
                     }
-                    if ui.button("Show in folder").clicked() {
+                    if crate::theme::quiet(ui, "Show in folder").clicked() {
                         show_in_folder(path);
                     }
-                    if ui.button("Done").clicked() {
+                    if crate::theme::quiet(ui, "Done").clicked() {
                         pressed = Some(Press::Cancel);
                     }
                 });
             }
             Phase::Failed(message) => {
-                ui.label(egui::RichText::new("The video could not be made").size(22.0).strong());
+                ui.label(heading("The video could not be made", 22.0));
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(message.as_str()).weak());
                 ui.add_space(12.0);
-                if ui.button("Close").clicked() {
+                if crate::theme::quiet(ui, "Close").clicked() {
                     pressed = Some(Press::Cancel);
                 }
             }

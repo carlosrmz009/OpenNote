@@ -7,8 +7,6 @@ use std::sync::Mutex;
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-const GLOVER: &[u8] = include_bytes!("../../../assets/branding/glover.png");
-
 /// Where OpenNote keeps what it remembers between runs.
 pub(crate) fn data_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
@@ -33,7 +31,6 @@ const PAGES: usize = 2;
 struct State {
     open: bool,
     page: usize,
-    glover: Option<egui::TextureHandle>,
 }
 
 #[derive(Resource)]
@@ -41,7 +38,7 @@ pub struct Welcome(Mutex<State>);
 
 impl Default for Welcome {
     fn default() -> Self {
-        Self(Mutex::new(State { open: false, page: 0, glover: None }))
+        Self(Mutex::new(State { open: false, page: 0 }))
     }
 }
 
@@ -86,22 +83,11 @@ fn finish(state: &mut State) {
     }
 }
 
-fn glover(ctx: &egui::Context, state: &mut State) -> Option<egui::TextureHandle> {
-    if state.glover.is_none() {
-        let image = image::load_from_memory(GLOVER).ok()?.to_rgba8();
-        let size = [image.width() as usize, image.height() as usize];
-        let colour = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-        state.glover = Some(ctx.load_texture("glover", colour, egui::TextureOptions::LINEAR));
-    }
-    state.glover.clone()
-}
-
 pub(crate) fn show(ctx: &egui::Context, welcome: &Welcome) {
     let mut state = welcome.0.lock().unwrap();
     if !state.open {
         return;
     }
-    let picture = glover(ctx, &mut state);
     let mut finished = false;
     crate::updates::window(ctx).show(ctx, |ui| {
         ui.set_width(400.0);
@@ -109,21 +95,16 @@ pub(crate) fn show(ctx: &egui::Context, welcome: &Welcome) {
             0 => {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
-                    if let Some(picture) = &picture {
-                        let width = 190.0;
-                        let size = picture.size_vec2();
-                        ui.image((picture.id(), egui::vec2(width, width * size.y / size.x)));
-                    }
+                    crate::theme::show_glover(ui, 190.0);
                     ui.add_space(10.0);
-                    ui.label(egui::RichText::new("Welcome!").size(36.0).strong());
+                    ui.label(egui::RichText::new("Welcome!").font(egui::FontId::new(40.0, crate::theme::display())));
                     ui.add_space(6.0);
-                    ui.label("OpenNote works out which finger plays each note,");
-                    ui.label("and shows it on two 3D hands you can watch play.");
+                    ui.label("OpenNote works out which finger plays each note,\nand shows it on two 3D hands you can watch play.");
                     ui.add_space(14.0);
                 });
             }
             _ => {
-                ui.label(egui::RichText::new("How it works").size(24.0).strong());
+                ui.label(egui::RichText::new("How it works").font(egui::FontId::new(26.0, crate::theme::display())));
                 ui.add_space(8.0);
                 for (number, text) in [
                     ("1", "Press Select piece… and choose a score (MusicXML or MIDI)."),
@@ -149,27 +130,17 @@ pub(crate) fn show(ctx: &egui::Context, welcome: &Welcome) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if state.page + 1 < PAGES {
-                    let next = egui::Button::new(
-                        egui::RichText::new("Next").size(16.0).strong().color(egui::Color32::BLACK),
-                    )
-                    .fill(egui::Color32::from_rgb(255, 205, 0))
-                    .min_size(egui::vec2(110.0, 34.0));
-                    if ui.add(next).clicked() {
+                    if crate::theme::primary(ui, "Next", egui::vec2(120.0, 40.0)).clicked() {
                         state.page += 1;
                     }
-                    if ui.button("Skip").clicked() {
+                    if crate::theme::quiet(ui, "Skip").clicked() {
                         finished = true;
                     }
                 } else {
-                    let go = egui::Button::new(
-                        egui::RichText::new("Let's go!").size(16.0).strong().color(egui::Color32::BLACK),
-                    )
-                    .fill(egui::Color32::from_rgb(255, 205, 0))
-                    .min_size(egui::vec2(110.0, 34.0));
-                    if ui.add(go).clicked() {
+                    if crate::theme::primary(ui, "Let's go!", egui::vec2(120.0, 40.0)).clicked() {
                         finished = true;
                     }
-                    if ui.button("Back").clicked() {
+                    if crate::theme::quiet(ui, "Back").clicked() {
                         state.page -= 1;
                     }
                 }
@@ -178,14 +149,5 @@ pub(crate) fn show(ctx: &egui::Context, welcome: &Welcome) {
     });
     if finished {
         finish(&mut state);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn glover_is_a_real_picture() {
-        let image = image::load_from_memory(super::GLOVER).expect("glover.png decodes");
-        assert!(image.width() > 100 && image.height() > 100);
     }
 }

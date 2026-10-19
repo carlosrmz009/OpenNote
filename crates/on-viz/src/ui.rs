@@ -77,6 +77,15 @@ impl Reload {
     }
 }
 
+/// The popups that can cover the viewer, as one parameter, because a system may take only so many.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Popups<'w> {
+    updates: Res<'w, crate::updates::Updates>,
+    shortcuts: Res<'w, crate::shortcuts::Shortcuts>,
+    videos: Res<'w, crate::videos::Videos>,
+    welcome: Res<'w, crate::welcome::Welcome>,
+}
+
 fn draw_menus(
     mut contexts: EguiContexts,
     mut session: ResMut<Session>,
@@ -89,13 +98,15 @@ fn draw_menus(
     mut playing: ResMut<crate::render::Playing>,
     diagnostics: Res<DiagnosticsStore>,
     capture: Option<Res<Capture>>,
-    updates: Res<crate::updates::Updates>,
-    shortcuts: Res<crate::shortcuts::Shortcuts>,
-    videos: Res<crate::videos::Videos>,
-    welcome: Res<crate::welcome::Welcome>,
+    popups: Popups,
+    mut themed: Local<bool>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
+    let Popups { updates, shortcuts, videos, welcome } = popups;
     let ctx = contexts.ctx_mut()?.clone();
+    if !*themed {
+        *themed = crate::theme::apply(&ctx);
+    }
     let mut root = egui::Ui::new(
         ctx.clone(),
         "opennote-chrome".into(),
@@ -107,283 +118,330 @@ fn draw_menus(
     let mut playing_changed = false;
     let mut speed_changed = false;
 
-    let top = egui::Panel::top("menu").show(&mut root, |ui| {
-        ui.add_enabled_ui(!busy, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open score…").clicked() {
-                        choose_score(&mut session);
-                        ui.close();
-                    }
-                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Reload from disk")).clicked()
-                    {
-                        reload.resolve();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.add_enabled(session.path.is_some(), egui::Button::new("Make video…")).clicked() {
-                        start_video(&videos, &session, &transport, &performance);
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(session.path.is_some(), egui::Button::new("Save fingered score…"))
-                        .clicked()
-                    {
-                        annotate_score(&mut session);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Quit").clicked() {
-                        exit.write(AppExit::Success);
-                    }
-                });
-
-                ui.menu_button("Playback", |ui| {
-                    let label = if transport.playing { "Pause" } else { "Play" };
-                    if ui.button(label).clicked() {
-                        transport.playing = !transport.playing;
-                        playing_changed = true;
-                        ui.close();
-                    }
-                    if ui.button("Back to the start").clicked() {
-                        jump = Some(crate::render::LEAD_IN);
-                        ui.close();
-                    }
-                    ui.checkbox(&mut transport.looping, "Loop");
-                    ui.separator();
-                    ui.label("Hands played");
-                    for (hands, label) in [
-                        ([true, true], "Both"),
-                        ([true, false], "Left only: you play the right"),
-                        ([false, true], "Right only: you play the left"),
-                    ] {
-                        if ui.radio(playing.0 == hands, label).clicked() {
-                            playing.set_if_neq(crate::render::Playing(hands));
+    let top = egui::Panel::top("menu")
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::LACQUER)
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .stroke(egui::Stroke::new(1.0, crate::theme::EDGE)),
+        )
+        .show(&mut root, |ui| {
+            ui.add_enabled_ui(!busy, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("Open score…").clicked() {
+                            choose_score(&mut session);
+                            ui.close();
                         }
-                    }
-                    ui.separator();
-                    ui.label("Speed");
-                    for (label, speed) in [("Half", 0.5), ("Three quarters", 0.75), ("Full", 1.0)] {
                         if ui
-                            .radio((transport.speed - speed).abs() < 1e-6, format!("{label} ({speed:.2}×)"))
+                            .add_enabled(session.path.is_some(), egui::Button::new("Reload from disk"))
                             .clicked()
                         {
-                            transport.speed = speed;
-                            speed_changed = true;
+                            reload.resolve();
+                            ui.close();
                         }
-                    }
-                });
+                        ui.separator();
+                        if ui.add_enabled(session.path.is_some(), egui::Button::new("Make video…")).clicked()
+                        {
+                            start_video(&videos, &session, &transport, &performance);
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(session.path.is_some(), egui::Button::new("Save fingered score…"))
+                            .clicked()
+                        {
+                            annotate_score(&mut session);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Quit").clicked() {
+                            exit.write(AppExit::Success);
+                        }
+                    });
 
-                ui.menu_button("Fingering", |ui| {
-                    ui.label("Hand size");
-                    let current = session.settings.fingering.profile.size();
-                    for size in [
-                        HandSize::ExtraSmall,
-                        HandSize::Small,
-                        HandSize::Medium,
-                        HandSize::Large,
-                        HandSize::ExtraLarge,
-                    ] {
-                        if ui.radio(current == size, hand_size_label(size)).clicked() {
-                            session.settings.fingering =
-                                on_fingering::FingeringOptions::for_hand(HandProfile::from_size(size));
+                    ui.menu_button("Playback", |ui| {
+                        let label = if transport.playing { "Pause" } else { "Play" };
+                        if ui.button(label).clicked() {
+                            transport.playing = !transport.playing;
+                            playing_changed = true;
+                            ui.close();
+                        }
+                        if ui.button("Back to the start").clicked() {
+                            jump = Some(crate::render::LEAD_IN);
+                            ui.close();
+                        }
+                        ui.checkbox(&mut transport.looping, "Loop");
+                        ui.separator();
+                        ui.label("Hands played");
+                        for (hands, label) in [
+                            ([true, true], "Both"),
+                            ([true, false], "Left only: you play the right"),
+                            ([false, true], "Right only: you play the left"),
+                        ] {
+                            if ui.radio(playing.0 == hands, label).clicked() {
+                                playing.set_if_neq(crate::render::Playing(hands));
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Speed");
+                        for (label, speed) in [("Half", 0.5), ("Three quarters", 0.75), ("Full", 1.0)] {
+                            if ui
+                                .radio(
+                                    (transport.speed - speed).abs() < 1e-6,
+                                    format!("{label} ({speed:.2}×)"),
+                                )
+                                .clicked()
+                            {
+                                transport.speed = speed;
+                                speed_changed = true;
+                            }
+                        }
+                    });
+
+                    ui.menu_button("Fingering", |ui| {
+                        ui.label("Hand size");
+                        let current = session.settings.fingering.profile.size();
+                        for size in [
+                            HandSize::ExtraSmall,
+                            HandSize::Small,
+                            HandSize::Medium,
+                            HandSize::Large,
+                            HandSize::ExtraLarge,
+                        ] {
+                            if ui.radio(current == size, hand_size_label(size)).clicked() {
+                                session.settings.fingering =
+                                    on_fingering::FingeringOptions::for_hand(HandProfile::from_size(size));
+                                reload.resolve();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Fingered with every published rule set at once");
+                    });
+
+                    ui.menu_button("Sound", |ui| {
+                        let sounds = on_audio::sampled::available(&session.settings.assets_root);
+                        if sounds.is_empty() {
+                            ui.label("No SoundFonts in assets/soundfont");
+                        }
+                        let chosen = session.settings.soundfont.clone().or_else(|| sounds.first().cloned());
+                        for sound in sounds {
+                            let picked = chosen.as_deref() == Some(sound.as_path());
+                            if ui.radio(picked, soundfont_label(&sound)).clicked() && !picked {
+                                session.settings.soundfont = Some(sound);
+                                reload.resolve();
+                            }
+                        }
+                    });
+
+                    ui.menu_button("Expressiveness (BETA)", |ui| {
+                        ui.label("Mood");
+                        for mood in on_score::expression::Mood::ALL {
+                            let picked = session.settings.mood.name == mood.name;
+                            if ui.radio(picked, mood.name).clicked() && !picked {
+                                session.settings.mood = mood;
+                                reload.resolve();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("How much");
+                        for (amount, label) in EXPRESSION_STEPS {
+                            let picked = (session.settings.expression - amount).abs() < 1e-3;
+                            if ui.radio(picked, label).clicked() && !picked {
+                                session.settings.expression = amount;
+                                reload.resolve();
+                            }
+                        }
+                    });
+
+                    ui.menu_button("View", |ui| {
+                        let full = session.settings.extent == Extent::FullKeyboard;
+                        if ui.radio(full, "All eighty-eight keys").clicked() && !full {
+                            session.settings.extent = Extent::FullKeyboard;
                             reload.resolve();
                         }
-                    }
-                    ui.separator();
-                    ui.label("Fingered with every published rule set at once");
-                });
-
-                ui.menu_button("Sound", |ui| {
-                    let sounds = on_audio::sampled::available(&session.settings.assets_root);
-                    if sounds.is_empty() {
-                        ui.label("No SoundFonts in assets/soundfont");
-                    }
-                    let chosen = session.settings.soundfont.clone().or_else(|| sounds.first().cloned());
-                    for sound in sounds {
-                        let picked = chosen.as_deref() == Some(sound.as_path());
-                        if ui.radio(picked, soundfont_label(&sound)).clicked() && !picked {
-                            session.settings.soundfont = Some(sound);
+                        if ui.radio(!full, "Only the keys this piece uses").clicked() && full {
+                            session.settings.extent = Extent::MusicRange;
                             reload.resolve();
                         }
-                    }
-                });
-
-                ui.menu_button("Expressiveness (BETA)", |ui| {
-                    ui.label("Mood");
-                    for mood in on_score::expression::Mood::ALL {
-                        let picked = session.settings.mood.name == mood.name;
-                        if ui.radio(picked, mood.name).clicked() && !picked {
-                            session.settings.mood = mood;
-                            reload.resolve();
-                        }
-                    }
-                    ui.separator();
-                    ui.label("How much");
-                    for (amount, label) in EXPRESSION_STEPS {
-                        let picked = (session.settings.expression - amount).abs() < 1e-3;
-                        if ui.radio(picked, label).clicked() && !picked {
-                            session.settings.expression = amount;
-                            reload.resolve();
-                        }
-                    }
-                });
-
-                ui.menu_button("View", |ui| {
-                    let full = session.settings.extent == Extent::FullKeyboard;
-                    if ui.radio(full, "All eighty-eight keys").clicked() && !full {
-                        session.settings.extent = Extent::FullKeyboard;
-                        reload.resolve();
-                    }
-                    if ui.radio(!full, "Only the keys this piece uses").clicked() && full {
-                        session.settings.extent = Extent::MusicRange;
-                        reload.resolve();
-                    }
-                    ui.separator();
-                    let mut lookahead = session.settings.lookahead as f32;
-                    if ui
-                        .add(egui::Slider::new(&mut lookahead, 1.0..=8.0).text("Seconds of notes ahead"))
-                        .changed()
-                    {
-                        session.settings.lookahead = f64::from(lookahead);
-                        reload.relayout = true;
-                    }
-                    ui.separator();
-                    // Edited as a copy: taking the resource mutably every frame would mark it
-                    // changed every frame, and the camera would be rebuilt every frame.
-                    let mut wanted = *visuals;
-                    ui.checkbox(&mut wanted.effects, "Sparks, flashes and glow");
-                    ui.checkbox(&mut wanted.high_quality, "Shadows (slower)");
-                    ui.checkbox(
-                        &mut wanted.ambient_shading,
-                        "Soft contact shading (can blur and shimmer in motion)",
-                    );
-                    visuals.set_if_neq(wanted);
-                    ui.separator();
-                    ui.label("Hand colours");
-                    if hand_colour_pickers(ui, &mut session) {
-                        reload.relayout = true;
-                    }
-                    for (colours, label) in [
-                        (crate::render::HAND_COLOURS, "Blue and yellow"),
-                        (crate::render::CLEAR_HAND_COLOURS, "Orange and sky blue, for colour blindness"),
-                    ] {
-                        if ui.radio(session.settings.note_colours == colours, label).clicked() {
-                            session.settings.note_colours = colours;
+                        ui.separator();
+                        let mut lookahead = session.settings.lookahead as f32;
+                        if ui
+                            .add(egui::Slider::new(&mut lookahead, 1.0..=8.0).text("Seconds of notes ahead"))
+                            .changed()
+                        {
+                            session.settings.lookahead = f64::from(lookahead);
                             reload.relayout = true;
                         }
-                    }
-                });
+                        ui.separator();
+                        // Edited as a copy: taking the resource mutably every frame would mark it
+                        // changed every frame, and the camera would be rebuilt every frame.
+                        let mut wanted = *visuals;
+                        ui.checkbox(&mut wanted.effects, "Sparks, flashes and glow");
+                        ui.checkbox(&mut wanted.high_quality, "Shadows (slower)");
+                        ui.checkbox(
+                            &mut wanted.ambient_shading,
+                            "Soft contact shading (can blur and shimmer in motion)",
+                        );
+                        visuals.set_if_neq(wanted);
+                        ui.separator();
+                        ui.label("Hand colours");
+                        if hand_colour_pickers(ui, &mut session) {
+                            reload.relayout = true;
+                        }
+                        for (colours, label) in [
+                            (crate::render::HAND_COLOURS, "Blue and yellow"),
+                            (crate::render::CLEAR_HAND_COLOURS, "Orange and sky blue, for colour blindness"),
+                        ] {
+                            if ui.radio(session.settings.note_colours == colours, label).clicked() {
+                                session.settings.note_colours = colours;
+                                reload.relayout = true;
+                            }
+                        }
+                    });
 
-                ui.menu_button("Help", |ui| {
-                    if ui.button("Welcome").clicked() {
-                        welcome.reopen();
-                        ui.close();
-                    }
-                    if ui.button("Check for updates…").clicked() {
-                        updates.check(true);
-                        ui.close();
-                    }
-                    if ui.button("Keyboard shortcuts    F1").clicked() {
-                        session.help = !session.help;
-                        ui.close();
-                    }
-                });
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("Welcome").clicked() {
+                            welcome.reopen();
+                            ui.close();
+                        }
+                        if ui.button("Check for updates…").clicked() {
+                            updates.check(true);
+                            ui.close();
+                        }
+                        if ui.button("Keyboard shortcuts    F1").clicked() {
+                            session.help = !session.help;
+                            ui.close();
+                        }
+                    });
 
-                ui.separator();
-                let title = performance.timeline.title.clone().unwrap_or_else(|| "no score open".into());
-                ui.label(egui::RichText::new(title).strong());
-                let note = match &session.task {
-                    Some(task) => format!("{}…", task.what),
-                    None => session.message.clone(),
-                };
-                if !note.is_empty() {
                     ui.separator();
-                    ui.label(note);
-                }
-
-                if capture.is_none() {
-                    if let Some(fps) =
-                        diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|fps| fps.smoothed())
-                    {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new(format!("{fps:.0} fps")).monospace().weak());
-                        });
+                    let title = performance.timeline.title.clone().unwrap_or_else(|| "no score open".into());
+                    ui.label(
+                        egui::RichText::new(title).font(egui::FontId::new(15.0, crate::theme::medium())),
+                    );
+                    let note = match &session.task {
+                        Some(task) => format!("{}…", task.what),
+                        None => session.message.clone(),
+                    };
+                    if !note.is_empty() {
+                        ui.separator();
+                        ui.label(note);
                     }
-                }
+
+                    if capture.is_none() {
+                        if let Some(fps) =
+                            diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|fps| fps.smoothed())
+                        {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(format!("{fps:.0} fps")).monospace().weak());
+                            });
+                        }
+                    }
+                });
             });
         });
-    });
     inset.top = top.response.rect.height();
 
-    let bottom = egui::Panel::bottom("transport").show(&mut root, |ui| {
-        let duration = performance.timeline.duration.max(0.001);
-        let sought = crate::seekbar::show(
-            ui,
-            transport.position.clamp(0.0, duration),
-            duration,
-            &performance.timeline.bars,
-            &mut transport.section,
-            0.0,
-        );
-        if let Some(target) = sought.seek {
-            jump = Some(target);
-        }
-        ui.horizontal(|ui| {
-            let label = if transport.playing { "⏸" } else { "▶" };
-            if ui.button(label).clicked() {
-                transport.playing = !transport.playing;
-                playing_changed = true;
+    let bottom = egui::Panel::bottom("transport")
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::LACQUER)
+                .inner_margin(egui::Margin { left: 18, right: 18, top: 8, bottom: 12 })
+                .stroke(egui::Stroke::new(1.0, crate::theme::EDGE)),
+        )
+        .show(&mut root, |ui| {
+            let duration = performance.timeline.duration.max(0.001);
+            let sought = crate::seekbar::show(
+                ui,
+                transport.position.clamp(0.0, duration),
+                duration,
+                &performance.timeline.bars,
+                &mut transport.section,
+                0.0,
+            );
+            if let Some(target) = sought.seek {
+                jump = Some(target);
             }
-            if ui.button("⏮").clicked() {
-                jump = Some(crate::render::LEAD_IN);
-            }
-            ui.label(format!("{} / {}", clock(transport.position.max(0.0)), clock(duration)));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if crate::theme::play_button(ui, transport.playing).clicked() {
+                    transport.playing = !transport.playing;
+                    playing_changed = true;
+                }
+                if crate::theme::restart_button(ui).clicked() {
+                    jump = Some(crate::render::LEAD_IN);
+                }
+                let medium = egui::FontId::new(16.0, crate::theme::medium());
+                ui.label(egui::RichText::new(clock(transport.position.max(0.0))).font(medium.clone()));
+                ui.label(egui::RichText::new(format!("of {}", clock(duration))).color(crate::theme::DIM));
 
-            ui.separator();
-            let here = transport.position.max(0.0);
-            if ui.button("A").on_hover_text("Practise from here  [").clicked() {
-                transport.mark_start(here);
-            }
-            if ui.button("B").on_hover_text("Practise up to here  ]").clicked() {
-                transport.mark_end(here);
-            }
-            match transport.section {
-                Some((start, end)) => {
-                    let end = if end.is_finite() { clock(end) } else { "end".to_string() };
-                    ui.label(format!("{}–{end}", clock(start.max(0.0))));
-                    if ui.button("Clear").on_hover_text("Play the whole piece  \\").clicked() {
-                        transport.section = None;
+                ui.add_space(14.0);
+                let here = transport.position.max(0.0);
+                let (start_set, end_set) = match transport.section {
+                    Some((_, end)) => (true, end.is_finite()),
+                    None => (false, false),
+                };
+                if crate::theme::toggle_pill(ui, "A", start_set)
+                    .on_hover_text("Practise from here  [")
+                    .clicked()
+                {
+                    transport.mark_start(here);
+                }
+                if crate::theme::toggle_pill(ui, "B", end_set)
+                    .on_hover_text("Practise up to here  ]")
+                    .clicked()
+                {
+                    transport.mark_end(here);
+                }
+                match transport.section {
+                    Some((start, end)) => {
+                        let end = if end.is_finite() { clock(end) } else { "the end".to_string() };
+                        ui.label(
+                            egui::RichText::new(format!("{} to {end}", clock(start.max(0.0))))
+                                .color(crate::theme::GLOVER),
+                        );
+                        if crate::theme::quiet(ui, "Clear")
+                            .on_hover_text("Play the whole piece  \\")
+                            .clicked()
+                        {
+                            transport.section = None;
+                        }
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("whole piece").color(crate::theme::DIM));
                     }
                 }
-                None => {
-                    ui.weak("whole piece");
-                }
-            }
 
-            ui.separator();
-            let mut speed = transport.speed;
-            let dragged = ui
-                .add(
-                    egui::DragValue::new(&mut speed).range(0.1..=4.0).speed(0.01).max_decimals(2).suffix("×"),
-                )
-                .on_hover_text("Speed  ↑ ↓");
-            if dragged.changed() {
-                transport.speed = speed;
-                speed_changed = true;
-            }
-
-            ui.separator();
-            if ui
-                .add_enabled(session.path.is_some(), egui::Button::new("Make video…"))
-                .on_hover_text("Turn this piece into a video you can share")
-                .clicked()
-            {
-                start_video(&videos, &session, &transport, &performance);
-            }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut speed = transport.speed;
+                    let dragged = ui
+                        .add(
+                            egui::DragValue::new(&mut speed)
+                                .range(0.1..=4.0)
+                                .speed(0.01)
+                                .max_decimals(2)
+                                .suffix("×"),
+                        )
+                        .on_hover_text("Drag to change the speed  ↑ ↓");
+                    ui.label(egui::RichText::new("Speed").color(crate::theme::DIM));
+                    if dragged.changed() {
+                        transport.speed = speed;
+                        speed_changed = true;
+                    }
+                    ui.add_space(10.0);
+                    if ui
+                        .add_enabled(session.path.is_some(), egui::Button::new("Make video…"))
+                        .on_hover_text("Turn this piece into a video you can share")
+                        .clicked()
+                    {
+                        start_video(&videos, &session, &transport, &performance);
+                    }
+                });
+            });
         });
-    });
     inset.bottom = bottom.response.rect.height();
+    // Popups centre on the stage, the space between the two bars.
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("stage-offset"), (inset.top - inset.bottom) / 2.0));
 
     crate::welcome::show(&ctx, &welcome);
     if !welcome.open() {
@@ -445,14 +503,13 @@ fn from_egui(colour: egui::Color32) -> Color {
 fn hand_colour_pickers(ui: &mut egui::Ui, session: &mut Session) -> bool {
     let mut changed = false;
     for (index, label) in ["Left hand notes", "Right hand notes"].into_iter().enumerate() {
-        ui.horizontal(|ui| {
-            let mut colour = to_egui(session.settings.note_colours[index]);
-            if ui.color_edit_button_srgba(&mut colour).changed() {
-                session.settings.note_colours[index] = from_egui(colour);
-                changed = true;
-            }
-            ui.label(label);
-        });
+        ui.label(label);
+        let mut colour = to_egui(session.settings.note_colours[index]);
+        if ui.color_edit_button_srgba(&mut colour).changed() {
+            session.settings.note_colours[index] = from_egui(colour);
+            changed = true;
+        }
+        ui.end_row();
     }
     changed
 }
@@ -464,18 +521,15 @@ fn expressiveness_picker(ui: &mut egui::Ui, session: &mut Session) -> bool {
         .find(|(amount, _)| (session.settings.expression - amount).abs() < 1e-3)
         .map_or("Custom", |(_, label)| *label);
     let mut changed = false;
-    egui::ComboBox::from_label(egui::RichText::new("Expressiveness (BETA)"))
-        .selected_text(current)
-        .width(220.0)
-        .show_ui(ui, |ui| {
-            for (amount, label) in EXPRESSION_STEPS {
-                let picked = (session.settings.expression - amount).abs() < 1e-3;
-                if ui.selectable_label(picked, label).clicked() && !picked {
-                    session.settings.expression = amount;
-                    changed = true;
-                }
+    egui::ComboBox::from_id_salt("expressiveness").selected_text(current).width(170.0).show_ui(ui, |ui| {
+        for (amount, label) in EXPRESSION_STEPS {
+            let picked = (session.settings.expression - amount).abs() < 1e-3;
+            if ui.selectable_label(picked, label).clicked() && !picked {
+                session.settings.expression = amount;
+                changed = true;
             }
-        });
+        }
+    });
     changed
 }
 
@@ -486,31 +540,48 @@ fn start_screen(ctx: &egui::Context, session: &mut Session) {
         .title_bar(false)
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, crate::updates::stage_offset(ctx)])
         .show(ctx, |ui| {
-            ui.set_width(320.0);
+            ui.set_width(380.0);
             ui.vertical_centered(|ui| {
+                crate::theme::show_glover(ui, 120.0);
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("OpenNote").font(egui::FontId::new(34.0, crate::theme::display())),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Pick a piece and watch it played,\nwith the fingering shown on the hands.",
+                    )
+                    .color(crate::theme::DIM),
+                );
+                ui.add_space(18.0);
+                ui.add_enabled_ui(!session.busy(), |ui| {
+                    if crate::theme::primary(ui, "Select piece…", egui::vec2(280.0, 54.0)).clicked() {
+                        choose_score(session);
+                    }
+                });
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("OpenNote").size(28.0).strong());
-                ui.label("Pick a piece to see it played, with the fingering shown on the hands.");
-                ui.add_space(14.0);
-                let pick = egui::Button::new(egui::RichText::new("Select piece…").size(20.0))
-                    .min_size(egui::vec2(280.0, 54.0));
-                if ui.add_enabled(!session.busy(), pick).clicked() {
-                    choose_score(session);
-                }
-                ui.add_space(4.0);
-                ui.weak("MusicXML (.musicxml, .mxl, .xml) or MIDI (.mid)");
-                ui.add_space(14.0);
+                ui.label(
+                    egui::RichText::new("MusicXML (.musicxml, .mxl, .xml) or MIDI (.mid)")
+                        .small()
+                        .color(crate::theme::DIM),
+                );
             });
+            ui.add_space(18.0);
             ui.separator();
-            ui.add_space(6.0);
-            hand_colour_pickers(ui, session);
-            ui.add_space(6.0);
-            expressiveness_picker(ui, session);
-            ui.add_space(6.0);
+            ui.add_space(10.0);
+            ui.vertical_centered(|ui| {
+                egui::Grid::new("start-settings").num_columns(2).spacing([16.0, 10.0]).show(ui, |ui| {
+                    hand_colour_pickers(ui, session);
+                    ui.label("Expressiveness (BETA)");
+                    expressiveness_picker(ui, session);
+                    ui.end_row();
+                });
+            });
             if !session.message.is_empty() {
-                ui.separator();
+                ui.add_space(10.0);
                 ui.colored_label(ui.visuals().warn_fg_color, session.message.clone());
             }
         });

@@ -130,20 +130,18 @@ pub(crate) fn show(ctx: &egui::Context, updates: &Updates, exit: &mut MessageWri
             let mut update = false;
             window(ctx).show(ctx, |ui| {
                 ui.set_width(340.0);
-                ui.label(egui::RichText::new("An update is available").size(20.0).strong());
+                ui.label(
+                    egui::RichText::new("An update is available")
+                        .font(egui::FontId::new(24.0, crate::theme::display())),
+                );
                 ui.add_space(6.0);
                 for change in &offer.changes {
                     ui.label(format!("•  {change}"));
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    let button = egui::Button::new(
-                        egui::RichText::new("Update!").size(18.0).strong().color(egui::Color32::BLACK),
-                    )
-                    .fill(egui::Color32::from_rgb(255, 205, 0))
-                    .min_size(egui::vec2(140.0, 38.0));
-                    update = ui.add(button).clicked();
-                    if ui.button("Not now").clicked() {
+                    update = crate::theme::primary(ui, "Update!", egui::vec2(150.0, 42.0)).clicked();
+                    if crate::theme::quiet(ui, "Not now").clicked() {
                         next = Some(Phase::Idle);
                     }
                 });
@@ -170,6 +168,12 @@ pub(crate) fn show(ctx: &egui::Context, updates: &Updates, exit: &mut MessageWri
     }
 }
 
+/// How far below the middle of the window the middle of the stage is, which is where popups
+/// belong: the menu bar above and the transport bar below are not the same height.
+pub(crate) fn stage_offset(ctx: &egui::Context) -> f32 {
+    ctx.data(|data| data.get_temp::<f32>(egui::Id::new("stage-offset"))).unwrap_or(0.0)
+}
+
 pub(crate) fn window(ctx: &egui::Context) -> egui::Window<'static> {
     // Dims everything behind it, so the popup is the one thing to answer.
     let screen = ctx.viewport_rect();
@@ -183,5 +187,5 @@ pub(crate) fn window(ctx: &egui::Context) -> egui::Window<'static> {
         .collapsible(false)
         .resizable(false)
         .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, stage_offset(ctx)])
 }
