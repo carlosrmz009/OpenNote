@@ -125,14 +125,10 @@ hand model alone; `opennote models list` says which model a build carries.
 
 ### Sound
 
-The installers include a sampled grand piano, the Yamaha Disklavier Pro "YDP Grand Piano" from the
-[FreePats](https://freepats.zenvoid.org/) project, so the viewer and your videos sound like a real
-piano. It is licensed CC BY 3.0 (Zenph Studios; the licence is in
-[`assets/soundfont`](assets/soundfont/LICENCE-YDP-GrandPiano.txt)): credit it when you publish what you
-make with it.
+The installers include a sampled grand piano, **Studio Yamaha C7**, so the viewer and your videos
+sound like a real piano. It is included with its owner's permission.
 
-A build from source does not have it, because the file is 118 MB, more than GitHub allows in a
-repository. Get it once with:
+A build from source does not carry it, so get it once with:
 
 ```sh
 opennote soundfont install

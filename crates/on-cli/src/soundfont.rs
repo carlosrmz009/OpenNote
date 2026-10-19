@@ -1,8 +1,7 @@
-//! The sampled piano OpenNote plays when it can: the YDP Grand Piano from FreePats, which
-//! the installers carry and source builds download with `opennote soundfont install`.
+//! The sampled piano OpenNote plays by default: Studio Yamaha C7. The installers carry it, and
+//! source builds download it with `opennote soundfont install`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
 use clap::{Args, Subcommand};
@@ -10,13 +9,15 @@ use sha2::{Digest, Sha256};
 
 use crate::models;
 
-/// Where FreePats publishes it (CC BY 3.0; the licence is in `assets/soundfont`).
-const URL: &str = "https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2";
+/// Where it is published.
+const URL: &str = "https://www.dropbox.com/scl/fi/22nztj1tc81pa1x91lp4r/Studio_Yamaha_C7.7z?rlkey=0w3hsg3b9dd6os35j3hus78ol&st=5aeobxbk&dl=1";
 
-/// The SHA-256 of that download, so that only exactly this file is ever used.
-const SHA256: &str = "d243dc3e182a60df2a16e92828c1821cf3eb5748b45e2e2bdcfa9cf7af056026";
+/// The SHA-256 of that download, so that only exactly this file is ever used. If the file at the
+/// link is replaced, installing stops until this is updated.
+const SHA256: &str = "b375467baf88baf632b32a45d245030b0feeb4f99a01341a091f90c175888864";
 
-const FILE: &str = "YDP-GrandPiano-20160804.sf2";
+/// The name of the soundfont inside the download.
+const FILE: &str = "Studio Yamaha C7.sf2";
 
 /// `opennote soundfont`: get the sampled piano.
 #[derive(Debug, Args)]
@@ -27,7 +28,7 @@ pub struct SoundfontArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SoundfontCommand {
-    /// Download the YDP Grand Piano (about 37 MB; 118 MB once unpacked) into the assets folder.
+    /// Download the Studio Yamaha C7 piano (about 30 MB; 52 MB once unpacked) into the assets folder.
     Install {
         /// The assets folder, if it is not where OpenNote would look.
         #[arg(long)]
@@ -60,7 +61,7 @@ pub fn install(assets: &Path) -> Result<PathBuf> {
     let work = std::env::temp_dir().join("opennote-soundfont");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work)?;
-    let archive = work.join("ydp.tar.bz2");
+    let archive = work.join("piano.7z");
     models::curl_for(1800, &["-o", &archive.to_string_lossy(), URL]).context("downloading the soundfont")?;
     let found = sha256_of(&archive)?;
     ensure!(
@@ -70,14 +71,7 @@ pub fn install(assets: &Path) -> Result<PathBuf> {
 
     let unpacked = work.join("unpacked");
     std::fs::create_dir_all(&unpacked)?;
-    let status = Command::new("tar")
-        .arg("-xjf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&unpacked)
-        .status()
-        .context("running tar")?;
-    ensure!(status.success(), "could not unpack the soundfont");
+    sevenz_rust2::decompress_file(&archive, &unpacked).context("unpacking the soundfont")?;
     let Some(file) = find_file(&unpacked, FILE) else {
         bail!("the download did not contain {FILE}");
     };
@@ -95,10 +89,7 @@ pub fn run(args: SoundfontArgs) -> Result<()> {
         SoundfontCommand::Install { assets } => {
             let assets = on_viz::session::assets_root(assets)?;
             let target = install(&assets)?;
-            println!(
-                "Installed {}.\nIt is licensed CC BY 3.0 (Zenph Studios, FreePats): credit it when you publish what you make with it.",
-                target.display()
-            );
+            println!("Installed {}.", target.display());
             Ok(())
         }
     }

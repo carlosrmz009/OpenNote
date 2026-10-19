@@ -68,7 +68,7 @@ enum Command {
     Models(models::ModelsArgs),
     /// The helper that makes videos: check for it, or download it.
     Ffmpeg(ffmpeg::FfmpegArgs),
-    /// The sampled piano: download the YDP Grand Piano.
+    /// The default sampled piano, Studio Yamaha C7: download it.
     Soundfont(soundfont::SoundfontArgs),
     /// Teach the search to finger like the pianists in the corpus: the rules propose,
     /// what is learned decides between them.

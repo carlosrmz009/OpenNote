@@ -127,39 +127,18 @@ jobs:
             echo "::warning::No trained model was provided, so these installers use the rules only."
           fi
 
-      # The sampled piano is too big to keep in git (GitHub refuses files over 100 MB), so it is
-      # fetched here from its publisher, checked against its known checksum, and packed into every
-      # installer. It is CC BY 3.0; its licence is already in assets/soundfont.
-      - name: SoundFont (YDP Grand Piano)
-        shell: bash
-        run: |
-          PYTHON=$(command -v python3 || command -v python)
-          "$PYTHON" - <<'PY'
-          import hashlib, tarfile, urllib.request, pathlib, shutil, sys
-          URL = "https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2"
-          SHA256 = "d243dc3e182a60df2a16e92828c1821cf3eb5748b45e2e2bdcfa9cf7af056026"
-          data = urllib.request.urlopen(URL, timeout=300).read()
-          found = hashlib.sha256(data).hexdigest()
-          if found != SHA256:
-              sys.exit(f"the soundfont download has checksum {found}, not the expected one")
-          work = pathlib.Path("soundfont-download"); work.mkdir(exist_ok=True)
-          archive = work / "ydp.tar.bz2"; archive.write_bytes(data)
-          with tarfile.open(archive) as tar:
-              try:
-                  tar.extractall(work, filter="data")
-              except TypeError:  # an older Python, which has no filters
-                  tar.extractall(work)
-          sf2 = next(work.rglob("YDP-GrandPiano-20160804.sf2"))
-          shutil.copy(sf2, "assets/soundfont/YDP-GrandPiano-20160804.sf2")
-          shutil.rmtree(work)
-          print("soundfont in place")
-          PY
-
       - name: Build
         shell: bash
         env:
           OPENNOTE_RELEASE_KEY: ${{ secrets.OPENNOTE_RELEASE_KEY }}
         run: cargo build --release --locked -p on-cli
+
+      # The default piano sound, Studio Yamaha C7, is not kept in git. The program just built
+      # downloads it, checks its checksum, and it is packed into the installer with the rest of
+      # assets/.
+      - name: SoundFont (Studio Yamaha C7)
+        shell: bash
+        run: ./target/release/opennote soundfont install --assets assets
 
       - name: Installer (Windows)
         if: runner.os == 'Windows'

@@ -65,20 +65,16 @@ ffmpeg is on the machine as a separate process, so its licence — LGPL or GPL d
 on how that copy was built — applies to that copy, not to this program. Nothing here
 downloads it.
 
-No sound font is bundled either. The piano in `on-audio` is synthesised from a model
-of a struck string, so out of the box there are no samples and no sample licence.
+The installers include the **Studio Yamaha C7** SoundFont, which OpenNote plays by default,
+with its owner's permission. It is not in the repository: `opennote soundfont install` downloads it
+and checks its checksum, and the release workflow does the same before packaging. A build without
+it plays a model of a struck string, so there are no samples and no sample licence.
 
-A SoundFont you supply is played instead, through `rustysynth` (MIT). What that asks
-of you depends on which one you chose. The openly licensed grands from FreePats are
-CC-BY, which wants the author credited on anything you publish with that piano on it.
-The concert grand used for this project's own renders is under the **Free Art License
-1.3**, which is copyleft: it permits commercial use, and asks for attribution, a
-pointer to the original, and that a *subsequent work* be released under the same or a
-compatible licence. Whether audio rendered from a sampled instrument is a subsequent
-work is a question for a lawyer and not for this file; `on-audio`'s modelled piano
-uses no samples and avoids it entirely.
-`assets/soundfont/README.md` names them and their authors; `assets/soundfont/*.sf2` is
-gitignored, so a downloaded instrument stays in your working copy.
+Any other SoundFont you supply is played through `rustysynth` (MIT). What that asks of you depends
+on which one you chose. Check its licence before you publish audio made with it; whether audio
+rendered from a sampled instrument is a derivative work is a question for a lawyer and not for this
+file. `on-audio`'s modelled piano uses no samples and avoids it entirely.
+`assets/soundfont/*.sf2` is gitignored, so a downloaded instrument stays in your working copy.
 
 The full dependency tree and its licences: `cargo tree` and `cargo about`.
 
