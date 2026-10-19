@@ -13,6 +13,7 @@ mod play;
 mod render;
 mod scene;
 mod seal;
+mod soundfont;
 mod update;
 
 use anyhow::{bail, Context, Result};
@@ -67,6 +68,8 @@ enum Command {
     Models(models::ModelsArgs),
     /// The helper that makes videos: check for it, or download it.
     Ffmpeg(ffmpeg::FfmpegArgs),
+    /// The sampled piano: download the YDP Grand Piano.
+    Soundfont(soundfont::SoundfontArgs),
     /// Teach the search to finger like the pianists in the corpus: the rules propose,
     /// what is learned decides between them.
     Rerank(learn::RerankArgs),
@@ -362,6 +365,7 @@ fn main() -> Result<()> {
         Command::Benchmark(args) => learn::benchmark(args),
         Command::Models(args) => models::run(args),
         Command::Ffmpeg(args) => ffmpeg::run(args),
+        Command::Soundfont(args) => soundfont::run(args),
         Command::Rerank(args) => learn::rerank(args),
         Command::Completions { shell } => {
             use clap::CommandFactory;

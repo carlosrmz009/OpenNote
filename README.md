@@ -125,9 +125,21 @@ hand model alone; `opennote models list` says which model a build carries.
 
 ### Sound
 
-The viewer and the videos use a modelled piano by default. For a sampled piano, put a
-SoundFont (`.sf2`) in `assets/soundfont/`, or pass `--soundfont`. The YDP Grand Piano,
-whose licence is in that folder, works well.
+The installers include a sampled grand piano, the Yamaha Disklavier Pro "YDP Grand Piano" from the
+[FreePats](https://freepats.zenvoid.org/) project, so the viewer and your videos sound like a real
+piano. It is licensed CC BY 3.0 (Zenph Studios; the licence is in
+[`assets/soundfont`](assets/soundfont/LICENCE-YDP-GrandPiano.txt)): credit it when you publish what you
+make with it.
+
+A build from source does not have it, because the file is 118 MB, more than GitHub allows in a
+repository. Get it once with:
+
+```sh
+opennote soundfont install
+```
+
+Or put any other SoundFont (`.sf2`) in `assets/soundfont/`, or pass `--soundfont`. Without one,
+OpenNote plays a modelled piano that uses no samples.
 
 ## Use
 

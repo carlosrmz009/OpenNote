@@ -13,7 +13,9 @@ project, built from Zenph Studios' samples for OLPC, works well. It is licensed
 **CC-BY 3.0**: anything you publish with it, such as a rendered video, must credit it.
 The full licence and credits are in [`LICENCE-YDP-GrandPiano.txt`](LICENCE-YDP-GrandPiano.txt).
 
-Download the SF2 release from the FreePats piano page and put the `.sf2` file here.
+The installers include it. In a build from source, run `opennote soundfont install`. The file
+is 118 MB, which is more than GitHub allows in a repository, so it is never committed; the
+release workflow downloads it from FreePats, checks its checksum, and packs it into each installer.
 
 ## Others
 
