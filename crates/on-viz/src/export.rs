@@ -42,6 +42,10 @@ pub struct VideoOptions {
     pub speed: f64,
     pub ffmpeg: PathBuf,
     pub crf: u8,
+    /// The ffmpeg video encoder: libx264 on the CPU, or a hardware one such as h264_nvenc.
+    pub codec: String,
+    /// An ffmpeg filter for the picture, applied as it is encoded: burnt-in subtitles, say.
+    pub video_filter: Option<String>,
     pub note_colours: [bevy::color::Color; 2],
     /// Starts with a "Made with OpenNote" card.
     pub intro: bool,
@@ -61,6 +65,8 @@ impl Default for VideoOptions {
             speed: 1.0,
             ffmpeg: PathBuf::from("ffmpeg"),
             crf: 18,
+            codec: "libx264".into(),
+            video_filter: None,
             note_colours: crate::render::NoteColours::default().0,
             intro: true,
             from: None,
@@ -393,8 +399,7 @@ fn start_ffmpeg(ffmpeg: &Path, options: &VideoOptions, audio: &Path, frames: u32
         .args(["-i", "-"])
         .arg("-i")
         .arg(audio)
-        .args(["-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p"])
-        .args(["-crf", &options.crf.to_string()])
+        .args(video_encoder_args(options))
         .args(["-c:a", "aac", "-b:a", "192k"])
         .args(intro_delay_filter(options))
         // The exact length rather than -shortest, which makes ffmpeg hold seconds of raw
@@ -415,6 +420,35 @@ fn video_range(options: &VideoOptions, last: f64) -> Result<(f64, f64)> {
         bail!("the video would be empty: it would run from {from:.2}s to {to:.2}s");
     }
     Ok((from, to))
+}
+
+/// The encoder, its quality, and the picture filter, as ffmpeg arguments.
+///
+/// x264 and x265 keep their medium preset and take --crf as it is. NVIDIA's encoders take it as
+/// their constant quality level, and take the RGBA frames as they are, converting them to 4:2:0
+/// on the GPU, unless a filter needs them converted first. Any other encoder gets the quality
+/// and the pixel format only, since presets differ from one encoder to the next.
+fn video_encoder_args(options: &VideoOptions) -> Vec<String> {
+    let codec = options.codec.as_str();
+    let crf = options.crf.to_string();
+    let nvenc = codec.ends_with("_nvenc");
+    let mut args: Vec<String> = vec!["-c:v".into(), codec.into()];
+    if !nvenc || options.video_filter.is_some() {
+        args.extend(["-pix_fmt".into(), "yuv420p".into()]);
+    }
+    if nvenc {
+        args.extend(
+            ["-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", &crf, "-b:v", "0"].map(String::from),
+        );
+    } else if matches!(codec, "libx264" | "libx265") {
+        args.extend(["-preset", "medium", "-crf", &crf].map(String::from));
+    } else {
+        args.extend(["-crf".into(), crf]);
+    }
+    if let Some(filter) = &options.video_filter {
+        args.extend(["-vf".into(), filter.clone()]);
+    }
+    args
 }
 
 /// How long `frames` frames last, as ffmpeg's `-t` takes it.
@@ -527,6 +561,34 @@ mod tests {
         let card = IntroCard::new(64, 36);
         assert_eq!(card.frames(10).count(), (INTRO_SECONDS * 10.0).round() as usize);
         assert_eq!(card.frame_count(10) as usize, card.frames(10).count());
+    }
+
+    #[test]
+    fn x264_is_still_the_encoder_unless_another_is_asked_for() {
+        let options = VideoOptions::default();
+        assert_eq!(
+            video_encoder_args(&options),
+            ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "18"]
+        );
+    }
+
+    #[test]
+    fn nvenc_takes_the_frames_as_they_are_unless_a_filter_needs_them_converted() {
+        let mut options = VideoOptions { codec: "h264_nvenc".into(), crf: 23, ..VideoOptions::default() };
+        let args = video_encoder_args(&options);
+        assert!(!args.contains(&"-pix_fmt".to_string()), "the GPU converts RGBA itself");
+        assert!(args.windows(2).any(|pair| pair == ["-cq", "23"]), "--crf is the constant quality");
+        assert!(!args.contains(&"-crf".to_string()));
+        options.video_filter = Some("subtitles=lines.ass".into());
+        let args = video_encoder_args(&options);
+        assert!(args.windows(2).any(|pair| pair == ["-pix_fmt", "yuv420p"]));
+        assert!(args.ends_with(&["-vf".to_string(), "subtitles=lines.ass".to_string()]));
+    }
+
+    #[test]
+    fn another_encoder_gets_no_preset_it_might_not_have() {
+        let options = VideoOptions { codec: "h264_qsv".into(), ..VideoOptions::default() };
+        assert_eq!(video_encoder_args(&options), ["-c:v", "h264_qsv", "-pix_fmt", "yuv420p", "-crf", "18"]);
     }
 
     #[test]
