@@ -1,6 +1,7 @@
 //! Renders the performance offscreen, frame by frame, and pipes it to ffmpeg with the
 //! soundtrack.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -12,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 
-use crate::render::{default_plugins, Audio, Performance, Transport, VisualizerPlugin, LEAD_IN};
+use crate::render::{Audio, Performance, Transport, VisualizerPlugin, LEAD_IN};
 
 const TAIL_SECONDS: f64 = 2.0;
 
@@ -26,7 +27,7 @@ const INTRO_FADE_SECONDS: f64 = 0.5;
 pub const INTRO_SECONDS: f64 = INTRO_HOLD_SECONDS + INTRO_FADE_SECONDS;
 
 /// The colour the stage starts from, so the card fades into the piece without a flash.
-const INTRO_BACKGROUND: [u8; 3] = [0x0D, 0x0E, 0x12];
+const INTRO_BACKGROUND: [u8; 4] = [0x0D, 0x0E, 0x12, 0xFF];
 
 const INTRO_LOCKUP: &[u8] = include_bytes!("../../../assets/branding/made-with-opennote.png");
 
@@ -72,10 +73,15 @@ impl Default for VideoOptions {
 struct Export {
     options: VideoOptions,
     target: Handle<Image>,
+    /// The next frame to ask for.
     frame: u32,
+    /// The next frame to hand to the encoder; frames read back early wait in `ready`.
+    sent: u32,
     total: u32,
     warmup: u32,
-    in_flight: bool,
+    /// Screenshots asked for and not yet read back.
+    in_flight: u32,
+    ready: BTreeMap<u32, Vec<u8>>,
     frames: SyncSender<Vec<u8>>,
     trouble: Arc<AtomicBool>,
     start: f64,
@@ -108,8 +114,10 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
 
     let seconds = (to - from) / options.speed.max(1e-6);
     let total = (seconds * f64::from(options.fps)).ceil() as u32;
+    let card = options.intro.then(|| IntroCard::new(options.width, options.height));
+    let intro_frames = card.as_ref().map_or(0, |card| card.frame_count(options.fps));
 
-    let mut encoder = start_ffmpeg(&ffmpeg, &options, &audio_path)?;
+    let mut encoder = start_ffmpeg(&ffmpeg, &options, &audio_path, intro_frames + total)?;
     let stdin = encoder.stdin.take().context("ffmpeg did not give us anywhere to write frames")?;
 
     // Bounded, so that rendering waits for the encoder rather than holding every frame
@@ -135,8 +143,7 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
         })
         .context("starting the encoder thread")?;
 
-    if options.intro {
-        let card = IntroCard::new(options.width, options.height);
+    if let Some(card) = &card {
         for frame in card.frames(options.fps) {
             if frames.send(frame).is_err() {
                 bail!("the encoder stopped before the video began");
@@ -149,7 +156,7 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
     let width = options.width;
     let height = options.height;
     let mut app = App::new();
-    app.add_plugins(default_plugins("OpenNote — exporting", &assets))
+    app.add_plugins(headless_plugins(&assets))
         .insert_resource(crate::render::NoteColours(options.note_colours))
         .insert_resource(performance)
         .init_resource::<Audio>()
@@ -187,10 +194,36 @@ pub fn export(performance: Performance, options: VideoOptions) -> Result<()> {
     Ok(())
 }
 
+/// The export draws only into an offscreen image, so it needs no window, and is faster
+/// without one: a window that never has focus is held to 60 updates a second, and each
+/// screenshot took about three of them, so a 60 fps video was made at about 20 frames a
+/// second. Without a window, the app updates as fast as the frames are drawn.
+fn headless_plugins(assets: &Path) -> impl PluginGroup {
+    let mut plugins = DefaultPlugins
+        .build()
+        .disable::<bevy::log::LogPlugin>()
+        .disable::<bevy::winit::WinitPlugin>()
+        .set(WindowPlugin {
+            primary_window: None,
+            exit_condition: bevy::window::ExitCondition::DontExit,
+            ..default()
+        })
+        .add(bevy::app::ScheduleRunnerPlugin::run_loop(std::time::Duration::ZERO));
+    if let Some(path) = assets.to_str() {
+        plugins = plugins.set(AssetPlugin { file_path: path.to_string(), ..default() });
+    }
+    plugins
+}
+
 #[derive(Resource, Deref)]
 struct ExportTarget(Handle<Image>);
 
 const FRAMES_IN_FLIGHT: usize = 8;
+
+/// How many frames are being drawn and read back from the GPU at once. With one, the GPU
+/// and the CPU take turns; with several, the read-back of one frame overlaps the drawing
+/// of the next.
+const SCREENSHOTS_IN_FLIGHT: u32 = 8;
 
 /// A temporary file, removed however the export ends.
 struct Scratch(std::path::PathBuf);
@@ -222,9 +255,11 @@ fn build_export_resource(mut commands: Commands) {
             options: pending.options,
             target: target.0,
             frame: 0,
+            sent: 0,
             total: pending.total,
             warmup: WARMUP_FRAMES,
-            in_flight: false,
+            in_flight: 0,
+            ready: BTreeMap::new(),
             frames: pending.frames,
             trouble: pending.trouble,
             start: pending.start,
@@ -280,39 +315,55 @@ fn drive_export(
         transport.playing = false;
         return;
     }
-    if export.in_flight {
+    if export.sent >= export.total {
+        exit.write(AppExit::Success);
         return;
     }
-    if export.frame >= export.total {
-        exit.write(AppExit::Success);
+    if export.in_flight >= SCREENSHOTS_IN_FLIGHT || export.frame >= export.total {
         return;
     }
 
     transport.position = export.moment(export.frame);
     transport.playing = false;
-    export.in_flight = true;
+    export.in_flight += 1;
 
-    let frames = export.frames.clone();
     let index = export.frame;
-    let total = export.total;
+    export.frame += 1;
     let handle = export.target.clone();
     commands.spawn(Screenshot::image(handle)).observe(
         move |captured: On<ScreenshotCaptured>, mut export: ResMut<Export>| {
-            match captured.image.clone().try_into_dynamic() {
-                Ok(image) => {
-                    if frames.send(image.to_rgb8().into_raw()).is_err() {
-                        error!("the encoder went away partway through the export");
-                    }
-                }
-                Err(error) => error!("could not read frame {index} back: {error}"),
+            let pixels = frame_bytes(&captured.image, export.options.width, export.options.height);
+            if pixels.is_none() {
+                error!("could not read frame {index} back");
+                export.trouble.store(true, Ordering::Relaxed);
             }
-            export.frame += 1;
-            export.in_flight = false;
-            if index % 10 == 0 {
-                println!("  frame {index} of {total}");
-            }
+            export.in_flight -= 1;
+            export.ready.insert(index, pixels.unwrap_or_default());
+            hand_over_ready_frames(&mut export);
         },
     );
+}
+
+/// Screenshots can come back out of order; the encoder takes them strictly in order.
+fn hand_over_ready_frames(export: &mut Export) {
+    while let Some(frame) = export.ready.remove(&export.sent) {
+        if export.frames.send(frame).is_err() {
+            error!("the encoder went away partway through the export");
+            export.trouble.store(true, Ordering::Relaxed);
+        }
+        if export.sent.is_multiple_of(10) {
+            println!("  frame {} of {}", export.sent, export.total);
+        }
+        export.sent += 1;
+    }
+}
+
+/// The frame's pixels as ffmpeg's `rgba`. The target is 8-bit RGBA with no padding between
+/// rows, so its bytes go over as they are, which keeps a per-pixel conversion off the thread
+/// that draws.
+fn frame_bytes(image: &Image, width: u32, height: u32) -> Option<Vec<u8>> {
+    let expected = width as usize * height as usize * 4;
+    image.data.as_ref().filter(|data| data.len() == expected).cloned()
 }
 
 fn check_ffmpeg(path: &Path) -> Result<PathBuf> {
@@ -331,12 +382,12 @@ fn check_ffmpeg(path: &Path) -> Result<PathBuf> {
     }
 }
 
-fn start_ffmpeg(ffmpeg: &Path, options: &VideoOptions, audio: &Path) -> Result<Child> {
+fn start_ffmpeg(ffmpeg: &Path, options: &VideoOptions, audio: &Path, frames: u32) -> Result<Child> {
     let mut command = Command::new(ffmpeg);
     command
         .arg("-y")
         .args(["-loglevel", "error"])
-        .args(["-f", "rawvideo", "-pixel_format", "rgb24"])
+        .args(["-f", "rawvideo", "-pixel_format", "rgba"])
         .args(["-video_size", &format!("{}x{}", options.width, options.height)])
         .args(["-framerate", &options.fps.to_string()])
         .args(["-i", "-"])
@@ -346,7 +397,10 @@ fn start_ffmpeg(ffmpeg: &Path, options: &VideoOptions, audio: &Path) -> Result<C
         .args(["-crf", &options.crf.to_string()])
         .args(["-c:a", "aac", "-b:a", "192k"])
         .args(intro_delay_filter(options))
-        .arg("-shortest")
+        // The exact length rather than -shortest, which makes ffmpeg hold seconds of raw
+        // frames in its queue while it waits to see which stream ends first: about 2 GB of
+        // memory at 1080p.
+        .args(["-t", &video_length(frames, options.fps)])
         .arg(&options.path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
@@ -361,6 +415,11 @@ fn video_range(options: &VideoOptions, last: f64) -> Result<(f64, f64)> {
         bail!("the video would be empty: it would run from {from:.2}s to {to:.2}s");
     }
     Ok((from, to))
+}
+
+/// How long `frames` frames last, as ffmpeg's `-t` takes it.
+fn video_length(frames: u32, fps: u32) -> String {
+    format!("{:.6}", f64::from(frames) / f64::from(fps))
 }
 
 /// Holds the soundtrack back until the intro card is over.
@@ -398,7 +457,7 @@ impl IntroCard {
 
     /// The card with the picture `visible` strong, from 0 (only the background) to 1.
     fn frame(&self, visible: f64) -> Vec<u8> {
-        let mut frame = Vec::with_capacity(self.width as usize * self.height as usize * 3);
+        let mut frame = Vec::with_capacity(self.width as usize * self.height as usize * 4);
         for _ in 0..(self.width as usize * self.height as usize) {
             frame.extend_from_slice(&INTRO_BACKGROUND);
         }
@@ -412,7 +471,7 @@ impl IntroCard {
             if px >= self.width || py >= self.height {
                 continue;
             }
-            let at = (py as usize * self.width as usize + px as usize) * 3;
+            let at = (py as usize * self.width as usize + px as usize) * 4;
             for channel in 0..3 {
                 let behind = f64::from(frame[at + channel]);
                 frame[at + channel] = (behind + (f64::from(pixel[channel]) - behind) * alpha).round() as u8;
@@ -421,10 +480,14 @@ impl IntroCard {
         frame
     }
 
+    /// How many frames the intro takes.
+    fn frame_count(&self, fps: u32) -> u32 {
+        (INTRO_SECONDS * f64::from(fps)).round() as u32
+    }
+
     /// Every frame of the intro: the card at full strength, then fading out.
     fn frames(&self, fps: u32) -> impl Iterator<Item = Vec<u8>> + '_ {
-        let count = (INTRO_SECONDS * f64::from(fps)).round() as u32;
-        (0..count).map(move |index| self.frame(fade(f64::from(index) / f64::from(fps))))
+        (0..self.frame_count(fps)).map(move |index| self.frame(fade(f64::from(index) / f64::from(fps))))
     }
 }
 
@@ -452,16 +515,64 @@ mod tests {
         let card = IntroCard::new(320, 180);
         let hidden = card.frame(0.0);
         let shown = card.frame(1.0);
-        assert_eq!(hidden.len(), 320 * 180 * 3);
+        assert_eq!(hidden.len(), 320 * 180 * 4, "rgba, like the frames read back from the GPU");
         assert_eq!(shown.len(), hidden.len());
-        assert!(hidden.chunks(3).all(|pixel| pixel == INTRO_BACKGROUND), "nothing but the background");
-        assert!(shown.chunks(3).any(|pixel| pixel != INTRO_BACKGROUND), "the picture appears");
+        assert!(hidden.chunks(4).all(|pixel| pixel == INTRO_BACKGROUND), "nothing but the background");
+        assert!(shown.chunks(4).any(|pixel| pixel != INTRO_BACKGROUND), "the picture appears");
+        assert!(shown.chunks(4).all(|pixel| pixel[3] == 0xFF), "the card itself is opaque");
     }
 
     #[test]
     fn the_intro_has_a_frame_for_every_tick_of_its_length() {
         let card = IntroCard::new(64, 36);
         assert_eq!(card.frames(10).count(), (INTRO_SECONDS * 10.0).round() as usize);
+        assert_eq!(card.frame_count(10) as usize, card.frames(10).count());
+    }
+
+    #[test]
+    fn the_video_is_cut_to_the_frames_it_was_given() {
+        assert_eq!(video_length(150 + 3600, 60), "62.500000");
+        assert_eq!(video_length(1, 30), "0.033333");
+    }
+
+    #[test]
+    fn a_read_back_frame_is_taken_only_at_the_size_of_the_video() {
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        let image = Image::new_fill(
+            Extent3d { width: 4, height: 2, depth_or_array_layers: 1 },
+            TextureDimension::D2,
+            &[1, 2, 3, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        assert_eq!(frame_bytes(&image, 4, 2).map(|bytes| bytes.len()), Some(4 * 2 * 4));
+        assert_eq!(frame_bytes(&image, 4, 2).unwrap()[..4], [1, 2, 3, 255]);
+        assert!(frame_bytes(&image, 8, 2).is_none(), "a frame of the wrong size is not passed on");
+    }
+
+    #[test]
+    fn frames_read_back_out_of_order_reach_the_encoder_in_order() {
+        let (frames, incoming) = mpsc::sync_channel::<Vec<u8>>(16);
+        let mut export = Export {
+            options: VideoOptions::default(),
+            target: Handle::default(),
+            frame: 4,
+            sent: 0,
+            total: 4,
+            warmup: 0,
+            in_flight: 0,
+            ready: BTreeMap::new(),
+            frames,
+            trouble: Arc::new(AtomicBool::new(false)),
+            start: 0.0,
+        };
+        for index in [2u8, 0, 3, 1] {
+            export.ready.insert(u32::from(index), vec![index]);
+            hand_over_ready_frames(&mut export);
+        }
+        drop(export);
+        let order: Vec<u8> = incoming.iter().map(|frame| frame[0]).collect();
+        assert_eq!(order, vec![0, 1, 2, 3]);
     }
 
     #[test]
