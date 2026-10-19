@@ -4,8 +4,9 @@ OpenNote plays **Studio Yamaha C7** by default: the viewer and `opennote render`
 `.sf2` in this folder, and `--soundfont <file>` chooses another one. The Sound menu in the viewer
 switches between them. Without any SoundFont, OpenNote plays a modelled piano that uses no samples.
 
-Studio Yamaha C7 is licensed under the
-[Free Art License 1.3](LICENCE-Free-Art-1.3.txt) (official text: <https://artlibre.org/licence/lal/en/>). The installers include it. A build from source gets it
+**[JH]Studio Yamaha C7 by 陈俊豪**, licensed under the [Free Art License 1.3](LICENCE-Free-Art-1.3.txt)
+(official text: <https://artlibre.org/licence/lal/en/>). The installers include it, with this
+credit and the licence. A build from source gets it
 with:
 
 ```sh

@@ -65,7 +65,7 @@ ffmpeg is on the machine as a separate process, so its licence — LGPL or GPL d
 on how that copy was built — applies to that copy, not to this program. Nothing here
 downloads it.
 
-The installers include the **Studio Yamaha C7** SoundFont, which OpenNote plays by default. It is
+The installers include the SoundFont **[JH]Studio Yamaha C7 by 陈俊豪**, which OpenNote plays by default. It is
 licensed under the **Free Art License 1.3**, whose text is in
 `assets/soundfont/LICENCE-Free-Art-1.3.txt` (official: <https://artlibre.org/licence/lal/en/>). It is not in the
 repository: `opennote soundfont install` downloads it and checks its checksum, and the release

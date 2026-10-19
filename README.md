@@ -125,9 +125,9 @@ hand model alone; `opennote models list` says which model a build carries.
 
 ### Sound
 
-The installers include a sampled grand piano, **Studio Yamaha C7**, so the viewer and your videos
-sound like a real piano. It is licensed under the
-[Free Art License 1.3](https://artlibre.org/licence/lal/en/).
+The installers include a sampled grand piano, **[JH]Studio Yamaha C7 by 陈俊豪**, so the viewer and your
+videos sound like a real piano. It is licensed under the
+[Free Art License 1.3](assets/soundfont/LICENCE-Free-Art-1.3.txt).
 
 A build from source does not carry it, so get it once with:
 

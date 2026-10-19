@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-# Changing this version and pushing to main makes a release (docs/RELEASING.md).
+# Changing this version and pushing to main makes a release; see docs/RELEASING.md.
 version = "1.0.2"
 edition = "2021"
 rust-version = "1.85"
