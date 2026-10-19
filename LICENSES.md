@@ -66,7 +66,8 @@ on how that copy was built — applies to that copy, not to this program. Nothin
 downloads it.
 
 The installers include the **Studio Yamaha C7** SoundFont, which OpenNote plays by default. It is
-licensed under the **Free Art License 1.3** (<https://artlibre.org/licence/lal/en/>). It is not in the
+licensed under the **Free Art License 1.3**, whose text is in
+`assets/soundfont/LICENCE-Free-Art-1.3.txt` (official: <https://artlibre.org/licence/lal/en/>). It is not in the
 repository: `opennote soundfont install` downloads it and checks its checksum, and the release
 workflow does the same before packaging. A build without it plays a model of a struck string, so
 there are no samples and no sample licence.
